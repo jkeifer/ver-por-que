@@ -1181,18 +1181,18 @@ class SvgByteVisualizer {
         const viewportWidth = window.innerWidth;
         const viewportHeight = window.innerHeight;
 
-        let left = event.clientX + config.OFFSET_X;
-        let top = event.clientY + config.OFFSET_Y;
+        let left = event.pageX + config.OFFSET_X;
+        let top = event.pageY + config.OFFSET_Y;
 
-        // Check boundaries and adjust
-        if (left + tooltipRect.width > viewportWidth - config.BOUNDARY_PADDING) {
-            left = event.clientX - tooltipRect.width - config.OFFSET_X;
+        // Check boundaries and adjust (using viewport-relative clientX/Y for boundary checks)
+        if (event.clientX + config.OFFSET_X + tooltipRect.width > viewportWidth - config.BOUNDARY_PADDING) {
+            left = event.pageX - tooltipRect.width - config.OFFSET_X;
         }
-        if (top + tooltipRect.height > viewportHeight - config.BOUNDARY_PADDING) {
-            top = event.clientY - tooltipRect.height - config.OFFSET_Y;
+        if (event.clientY + config.OFFSET_Y + tooltipRect.height > viewportHeight - config.BOUNDARY_PADDING) {
+            top = event.pageY - tooltipRect.height - config.OFFSET_Y;
         }
-        if (left < config.BOUNDARY_PADDING) {left = config.BOUNDARY_PADDING;}
-        if (top < config.BOUNDARY_PADDING) {top = config.BOUNDARY_PADDING;}
+        if (left < window.pageXOffset + config.BOUNDARY_PADDING) {left = window.pageXOffset + config.BOUNDARY_PADDING;}
+        if (top < window.pageYOffset + config.BOUNDARY_PADDING) {top = window.pageYOffset + config.BOUNDARY_PADDING;}
 
         this.tooltip.style.left = left + 'px';
         this.tooltip.style.top = top + 'px';
