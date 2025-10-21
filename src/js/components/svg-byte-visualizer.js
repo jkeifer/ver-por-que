@@ -419,8 +419,7 @@ class SvgByteVisualizer {
         // Create funnel element
         const funnel = this.createSvgElement('polygon', {
             points: points,
-            fill: this.getCSSVariable('--border-dark'),
-            opacity: '0.5',
+            fill: this.getCSSVariable('--funnel-fill'),
             class: 'funnel-connection',
             'data-parent-segment': childLevel.parentSegmentId,
             'data-child-level': childLevelIndex,
@@ -583,8 +582,7 @@ class SvgByteVisualizer {
         // Create funnel element with initial coordinates
         const funnel = this.createSvgElement('polygon', {
             points: initialPoints,
-            fill: this.getCSSVariable('--border-dark'),
-            opacity: '0.5',
+            fill: this.getCSSVariable('--funnel-fill'),
             class: 'funnel-connection animated-funnel',
             'data-parent-segment': childLevel.parentSegmentId,
             'data-child-level': childLevelIndex,

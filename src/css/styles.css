@@ -110,7 +110,7 @@
     /* Paper-like backgrounds */
     --bg-primary: #ffffff;
     --bg-secondary: #fefefe;
-    --bg-tertiary: #f8f9fa;
+    --bg-tertiary: #f0f0f0;
     --bg-code: #f7f7f7;
 
     /* Borders and dividers */
@@ -138,6 +138,9 @@
 
     --border-radius: 4px;
     --border-radius-lg: 8px;
+
+    /* Viz Funnel */
+    --funnel-fill: #d5d5d5;
 }
 
 /* Source Management Section */
