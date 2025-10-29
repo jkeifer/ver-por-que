@@ -122,7 +122,7 @@ class InfoPanelManager {
         let html = '<h3>File Overview</h3><div class="info-sections">';
 
         const data = this.data;
-        const metadata = this.data?.metadata?.metadata;
+        const metadata = this.data?.metadata;
 
         if (!data || !metadata) {
             html += this.generateInfoSection('Information', [
@@ -199,8 +199,8 @@ class InfoPanelManager {
      */
     generateBasicInfoPanel(segment) {
         // For row groups container segment, add aggregate statistics split into two sections
-        if (segment.id === 'rowgroups' && this.data?.metadata?.metadata?.row_groups) {
-            const rowGroups = this.data.metadata.metadata.row_groups;
+        if (segment.id === 'rowgroups' && this.data?.metadata?.row_groups) {
+            const rowGroups = this.data.metadata.row_groups;
             const totalRows = rowGroups.reduce((sum, rg) => sum + (rg.row_count || 0), 0);
             const avgRowsPerGroup = rowGroups.length > 0 ? Math.round(totalRows / rowGroups.length) : 0;
 
@@ -519,7 +519,7 @@ class InfoPanelManager {
         ]);
 
         // Check if we have metadata available through the analyzer
-        const metadata = this.data?.metadata?.metadata;
+        const metadata = this.data?.metadata;
         if (!metadata) {
             html += this.generateInfoSection('Debug Info', [
                 ['Analyzer Available', this.data ? 'Yes' : 'No'],

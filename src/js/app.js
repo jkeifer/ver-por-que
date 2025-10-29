@@ -226,11 +226,11 @@ class ParquetExplorer {
         }
 
         // Check metadata structure
-        if (!data.metadata || !data.metadata.metadata) {
+        if (!data.metadata) {
             throw new Error('Invalid metadata structure');
         }
 
-        const metadata = data.metadata.metadata;
+        const metadata = data.metadata;
         if (!metadata.schema_root) {
             throw new Error('Missing schema in metadata');
         }

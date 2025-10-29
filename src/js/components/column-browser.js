@@ -70,7 +70,7 @@ class ColumnBrowser {
 
                             // Get column type from schema
                             let columnType = 'UNKNOWN';
-                            const schemaColumn = this.app.findColumnInSchema(this.data.metadata.metadata.schema_root, columnPath);
+                            const schemaColumn = this.app.findColumnInSchema(this.data.metadata.schema_root, columnPath);
                             if (schemaColumn) {
                                 columnType = this.app.getTypeDisplay(schemaColumn);
                             }
