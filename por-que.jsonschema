@@ -10,6 +10,83 @@
       "title": "BoundaryOrder",
       "type": "integer"
     },
+    "BoundingBox": {
+      "description": "Bounding box for GEOMETRY or GEOGRAPHY types.",
+      "properties": {
+        "mmax": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mmax"
+        },
+        "mmin": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Mmin"
+        },
+        "xmax": {
+          "title": "Xmax",
+          "type": "number"
+        },
+        "xmin": {
+          "title": "Xmin",
+          "type": "number"
+        },
+        "ymax": {
+          "title": "Ymax",
+          "type": "number"
+        },
+        "ymin": {
+          "title": "Ymin",
+          "type": "number"
+        },
+        "zmax": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zmax"
+        },
+        "zmin": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Zmin"
+        }
+      },
+      "required": [
+        "xmin",
+        "xmax",
+        "ymin",
+        "ymax"
+      ],
+      "title": "BoundingBox",
+      "type": "object"
+    },
     "BsonTypeInfo": {
       "description": "BSON logical type.",
       "properties": {
@@ -26,6 +103,30 @@
     "ColumnChunk": {
       "description": "File-level organization of column chunk.",
       "properties": {
+        "column_index_length": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Column Index Length"
+        },
+        "column_index_offset": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Column Index Offset"
+        },
         "file_offset": {
           "title": "File Offset",
           "type": "integer"
@@ -39,16 +140,40 @@
               "type": "null"
             }
           ],
+          "default": null,
           "title": "File Path"
         },
         "metadata": {
           "$ref": "#/$defs/ColumnMetadata"
+        },
+        "offset_index_length": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Offset Index Length"
+        },
+        "offset_index_offset": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Offset Index Offset"
         }
       },
       "required": [
         "file_offset",
-        "metadata",
-        "file_path"
+        "metadata"
       ],
       "title": "ColumnChunk",
       "type": "object"
@@ -58,6 +183,10 @@
       "properties": {
         "boundary_order": {
           "$ref": "#/$defs/BoundaryOrder"
+        },
+        "byte_length": {
+          "title": "Byte Length",
+          "type": "integer"
         },
         "definition_level_histograms": {
           "anyOf": [
@@ -76,7 +205,7 @@
         },
         "max_values": {
           "items": {
-            "format": "binary",
+            "format": "base64url",
             "type": "string"
           },
           "title": "Max Values",
@@ -84,7 +213,7 @@
         },
         "min_values": {
           "items": {
-            "format": "binary",
+            "format": "base64url",
             "type": "string"
           },
           "title": "Min Values",
@@ -126,13 +255,23 @@
           ],
           "default": null,
           "title": "Repetition Level Histograms"
+        },
+        "schema_element": {
+          "$ref": "#/$defs/SchemaLeaf"
+        },
+        "start_offset": {
+          "title": "Start Offset",
+          "type": "integer"
         }
       },
       "required": [
+        "start_offset",
+        "byte_length",
         "null_pages",
         "min_values",
         "max_values",
-        "boundary_order"
+        "boundary_order",
+        "schema_element"
       ],
       "title": "ColumnIndex",
       "type": "object"
@@ -140,47 +279,36 @@
     "ColumnMetadata": {
       "description": "Detailed metadata about column chunk content and encoding.",
       "properties": {
+        "bloom_filter_length": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bloom Filter Length"
+        },
+        "bloom_filter_offset": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Bloom Filter Offset"
+        },
         "byte_length": {
           "title": "Byte Length",
           "type": "integer"
         },
         "codec": {
           "$ref": "#/$defs/Compression"
-        },
-        "column_index": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/ColumnIndex"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
-        "column_index_length": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Column Index Length"
-        },
-        "column_index_offset": {
-          "anyOf": [
-            {
-              "type": "integer"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Column Index Offset"
         },
         "data_page_offset": {
           "title": "Data Page Offset",
@@ -198,12 +326,38 @@
           "default": null,
           "title": "Dictionary Page Offset"
         },
+        "encoding_stats": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/PageEncodingStats"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Encoding Stats"
+        },
         "encodings": {
           "items": {
             "$ref": "#/$defs/Encoding"
           },
           "title": "Encodings",
           "type": "array"
+        },
+        "geospatial_statistics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GeospatialStatistics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "index_page_offset": {
           "anyOf": [
@@ -221,23 +375,23 @@
           "title": "Num Values",
           "type": "integer"
         },
-        "offset_index": {
-          "anyOf": [
-            {
-              "$ref": "#/$defs/OffsetIndex"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null
-        },
         "path_in_schema": {
           "title": "Path In Schema",
           "type": "string"
         },
         "schema_element": {
           "$ref": "#/$defs/SchemaLeaf"
+        },
+        "size_statistics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/SizeStatistics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "start_offset": {
           "title": "Start Offset",
@@ -267,6 +421,8 @@
         }
       },
       "required": [
+        "start_offset",
+        "byte_length",
         "type",
         "encodings",
         "path_in_schema",
@@ -275,9 +431,7 @@
         "num_values",
         "total_uncompressed_size",
         "total_compressed_size",
-        "data_page_offset",
-        "start_offset",
-        "byte_length"
+        "data_page_offset"
       ],
       "title": "ColumnMetadata",
       "type": "object"
@@ -296,17 +450,8 @@
           "default": null,
           "title": "Distinct Count"
         },
-        "max_value": {
+        "is_max_value_exact": {
           "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "integer"
-            },
-            {
-              "type": "number"
-            },
             {
               "type": "boolean"
             },
@@ -315,21 +460,64 @@
             }
           ],
           "default": null,
+          "title": "Is Max Value Exact"
+        },
+        "is_min_value_exact": {
+          "anyOf": [
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Is Min Value Exact"
+        },
+        "max": {
+          "anyOf": [
+            {
+              "format": "base64url",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Max"
+        },
+        "max_value": {
+          "anyOf": [
+            {
+              "format": "base64url",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
           "title": "Max Value"
+        },
+        "min": {
+          "anyOf": [
+            {
+              "format": "base64url",
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Min"
         },
         "min_value": {
           "anyOf": [
             {
+              "format": "base64url",
               "type": "string"
-            },
-            {
-              "type": "integer"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "boolean"
             },
             {
               "type": "null"
@@ -349,8 +537,14 @@
           ],
           "default": null,
           "title": "Null Count"
+        },
+        "schema_element": {
+          "$ref": "#/$defs/SchemaLeaf"
         }
       },
+      "required": [
+        "schema_element"
+      ],
       "title": "ColumnStatistics",
       "type": "object"
     },
@@ -413,6 +607,7 @@
               "type": "null"
             }
           ],
+          "default": null,
           "title": "Crc"
         },
         "definition_level_encoding": {
@@ -438,6 +633,9 @@
         "repetition_level_encoding": {
           "$ref": "#/$defs/Encoding"
         },
+        "schema_element": {
+          "$ref": "#/$defs/SchemaLeaf"
+        },
         "start_offset": {
           "title": "Start Offset",
           "type": "integer"
@@ -463,11 +661,11 @@
         "header_size",
         "compressed_page_size",
         "uncompressed_page_size",
-        "crc",
         "num_values",
         "encoding",
         "definition_level_encoding",
-        "repetition_level_encoding"
+        "repetition_level_encoding",
+        "schema_element"
       ],
       "title": "DataPageV1",
       "type": "object"
@@ -488,6 +686,7 @@
               "type": "null"
             }
           ],
+          "default": null,
           "title": "Crc"
         },
         "definition_levels_byte_length": {
@@ -502,6 +701,7 @@
           "type": "integer"
         },
         "is_compressed": {
+          "default": true,
           "title": "Is Compressed",
           "type": "boolean"
         },
@@ -527,6 +727,9 @@
           "title": "Repetition Levels Byte Length",
           "type": "integer"
         },
+        "schema_element": {
+          "$ref": "#/$defs/SchemaLeaf"
+        },
         "start_offset": {
           "title": "Start Offset",
           "type": "integer"
@@ -552,14 +755,13 @@
         "header_size",
         "compressed_page_size",
         "uncompressed_page_size",
-        "crc",
         "num_values",
         "num_nulls",
         "num_rows",
         "encoding",
         "definition_levels_byte_length",
         "repetition_levels_byte_length",
-        "is_compressed"
+        "schema_element"
       ],
       "title": "DataPageV2",
       "type": "object"
@@ -616,6 +818,7 @@
               "type": "null"
             }
           ],
+          "default": null,
           "title": "Crc"
         },
         "encoding": {
@@ -654,7 +857,6 @@
         "header_size",
         "compressed_page_size",
         "uncompressed_page_size",
-        "crc",
         "num_values",
         "encoding"
       ],
@@ -718,6 +920,14 @@
         "schema_root": {
           "$ref": "#/$defs/SchemaRoot"
         },
+        "start_offset": {
+          "title": "Start Offset",
+          "type": "integer"
+        },
+        "total_byte_size": {
+          "title": "Total Byte Size",
+          "type": "integer"
+        },
         "version": {
           "title": "Version",
           "type": "integer"
@@ -726,7 +936,9 @@
       "required": [
         "version",
         "schema_root",
-        "row_groups"
+        "row_groups",
+        "start_offset",
+        "total_byte_size"
       ],
       "title": "FileMetadata",
       "type": "object"
@@ -770,6 +982,114 @@
       "title": "GeometryTypeInfo",
       "type": "object"
     },
+    "GeospatialStatistics": {
+      "description": "Statistics specific to Geometry and Geography logical types.",
+      "properties": {
+        "bbox": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BoundingBox"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "geospatial_types": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/GeospatialType"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Geospatial Types"
+        }
+      },
+      "title": "GeospatialStatistics",
+      "type": "object"
+    },
+    "GeospatialType": {
+      "description": "WKB (Well-Known Binary) type integer IDs for geospatial data.",
+      "enum": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8,
+        9,
+        10,
+        11,
+        12,
+        13,
+        14,
+        15,
+        16,
+        1000,
+        1001,
+        1002,
+        1003,
+        1004,
+        1005,
+        1006,
+        1007,
+        1008,
+        1009,
+        1010,
+        1011,
+        1012,
+        1013,
+        1014,
+        1015,
+        1016,
+        2000,
+        2001,
+        2002,
+        2003,
+        2004,
+        2005,
+        2006,
+        2007,
+        2008,
+        2009,
+        2010,
+        2011,
+        2012,
+        2013,
+        2014,
+        2015,
+        2016,
+        3000,
+        3001,
+        3002,
+        3003,
+        3004,
+        3005,
+        3006,
+        3007,
+        3008,
+        3009,
+        3010,
+        3011,
+        3012,
+        3013,
+        3014,
+        3015,
+        3016
+      ],
+      "title": "GeospatialType",
+      "type": "integer"
+    },
     "IndexPage": {
       "description": "A page containing row group and offset statistics.",
       "properties": {
@@ -786,21 +1106,12 @@
               "type": "null"
             }
           ],
+          "default": null,
           "title": "Crc"
         },
         "header_size": {
           "title": "Header Size",
           "type": "integer"
-        },
-        "page_locations": {
-          "anyOf": [
-            {},
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Page Locations"
         },
         "page_type": {
           "const": 1,
@@ -821,8 +1132,7 @@
         "start_offset",
         "header_size",
         "compressed_page_size",
-        "uncompressed_page_size",
-        "crc"
+        "uncompressed_page_size"
       ],
       "title": "IndexPage",
       "type": "object"
@@ -892,6 +1202,15 @@
       "title": "KeyValueMetadata",
       "type": "object"
     },
+    "ListSemantics": {
+      "description": "Semantic interpretation for repeated field handling.",
+      "enum": [
+        "modern_list",
+        "legacy_repeated"
+      ],
+      "title": "ListSemantics",
+      "type": "string"
+    },
     "ListTypeInfo": {
       "description": "List logical type.",
       "properties": {
@@ -921,12 +1240,20 @@
     "OffsetIndex": {
       "description": "Index containing page locations and sizes for efficient seeking.",
       "properties": {
+        "byte_length": {
+          "title": "Byte Length",
+          "type": "integer"
+        },
         "page_locations": {
           "items": {
             "$ref": "#/$defs/PageLocation"
           },
           "title": "Page Locations",
           "type": "array"
+        },
+        "start_offset": {
+          "title": "Start Offset",
+          "type": "integer"
         },
         "unencoded_byte_array_data_bytes": {
           "anyOf": [
@@ -945,9 +1272,33 @@
         }
       },
       "required": [
+        "start_offset",
+        "byte_length",
         "page_locations"
       ],
       "title": "OffsetIndex",
+      "type": "object"
+    },
+    "PageEncodingStats": {
+      "description": "Statistics of a given page type and encoding.",
+      "properties": {
+        "count": {
+          "title": "Count",
+          "type": "integer"
+        },
+        "encoding": {
+          "$ref": "#/$defs/Encoding"
+        },
+        "page_type": {
+          "$ref": "#/$defs/PageType"
+        }
+      },
+      "required": [
+        "page_type",
+        "encoding",
+        "count"
+      ],
+      "title": "PageEncodingStats",
       "type": "object"
     },
     "PageLocation": {
@@ -974,11 +1325,33 @@
       "title": "PageLocation",
       "type": "object"
     },
+    "PageType": {
+      "description": "Parquet page types.",
+      "enum": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "title": "PageType",
+      "type": "integer"
+    },
     "PhysicalColumnChunk": {
       "description": "A container for all the data for a single column within a row group.",
       "properties": {
         "codec": {
           "$ref": "#/$defs/Compression"
+        },
+        "column_index": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ColumnIndex"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "data_pages": {
           "items": {
@@ -1018,10 +1391,10 @@
           "title": "Num Values",
           "type": "integer"
         },
-        "page_index": {
+        "offset_index": {
           "anyOf": [
             {
-              "$ref": "#/$defs/PhysicalPageIndex"
+              "$ref": "#/$defs/OffsetIndex"
             },
             {
               "type": "null"
@@ -1061,56 +1434,6 @@
       "title": "PhysicalColumnChunk",
       "type": "object"
     },
-    "PhysicalMetadata": {
-      "description": "The physical layout of the file metadata within the file.",
-      "properties": {
-        "metadata": {
-          "$ref": "#/$defs/FileMetadata"
-        },
-        "start_offset": {
-          "title": "Start Offset",
-          "type": "integer"
-        },
-        "total_byte_size": {
-          "title": "Total Byte Size",
-          "type": "integer"
-        }
-      },
-      "required": [
-        "start_offset",
-        "total_byte_size",
-        "metadata"
-      ],
-      "title": "PhysicalMetadata",
-      "type": "object"
-    },
-    "PhysicalPageIndex": {
-      "description": "Physical location and parsed content of Page Index data.",
-      "properties": {
-        "column_index": {
-          "$ref": "#/$defs/ColumnIndex"
-        },
-        "column_index_length": {
-          "title": "Column Index Length",
-          "type": "integer"
-        },
-        "column_index_offset": {
-          "title": "Column Index Offset",
-          "type": "integer"
-        },
-        "offset_index": {
-          "$ref": "#/$defs/OffsetIndex"
-        }
-      },
-      "required": [
-        "column_index_offset",
-        "column_index_length",
-        "column_index",
-        "offset_index"
-      ],
-      "title": "PhysicalPageIndex",
-      "type": "object"
-    },
     "PorQueMeta": {
       "properties": {
         "format_version": {
@@ -1120,7 +1443,7 @@
           "type": "integer"
         },
         "por_que_version": {
-          "default": "0.0.5.dev6+gecb8c1f46.d19800101",
+          "default": "0.2.1.dev3+g7d17dfc9b.d19800101",
           "title": "Por Que Version",
           "type": "string"
         }
@@ -1152,9 +1475,48 @@
           "title": "Column Chunks",
           "type": "object"
         },
+        "file_offset": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "File Offset"
+        },
+        "ordinal": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ordinal"
+        },
         "row_count": {
           "title": "Row Count",
           "type": "integer"
+        },
+        "sorting_columns": {
+          "anyOf": [
+            {
+              "items": {
+                "$ref": "#/$defs/SortingColumn"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sorting Columns"
         },
         "start_offset": {
           "title": "Start Offset",
@@ -1163,14 +1525,26 @@
         "total_byte_size": {
           "title": "Total Byte Size",
           "type": "integer"
+        },
+        "total_compressed_size": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Total Compressed Size"
         }
       },
       "required": [
+        "start_offset",
+        "byte_length",
         "column_chunks",
         "total_byte_size",
-        "row_count",
-        "start_offset",
-        "byte_length"
+        "row_count"
       ],
       "title": "RowGroup",
       "type": "object"
@@ -1221,6 +1595,11 @@
             }
           ]
         },
+        "definition_level": {
+          "default": 0,
+          "title": "Definition Level",
+          "type": "integer"
+        },
         "element_type": {
           "$ref": "#/$defs/SchemaElementType",
           "default": "group"
@@ -1236,6 +1615,10 @@
           ],
           "default": null,
           "title": "Field Id"
+        },
+        "full_path": {
+          "title": "Full Path",
+          "type": "string"
         },
         "logical_type": {
           "anyOf": [
@@ -1308,6 +1691,11 @@
         "repetition": {
           "$ref": "#/$defs/Repetition"
         },
+        "repetition_level": {
+          "default": 0,
+          "title": "Repetition Level",
+          "type": "integer"
+        },
         "start_offset": {
           "title": "Start Offset",
           "type": "integer"
@@ -1315,6 +1703,7 @@
       },
       "required": [
         "name",
+        "full_path",
         "start_offset",
         "byte_length",
         "num_children",
@@ -1340,6 +1729,11 @@
             }
           ]
         },
+        "definition_level": {
+          "default": 0,
+          "title": "Definition Level",
+          "type": "integer"
+        },
         "element_type": {
           "$ref": "#/$defs/SchemaElementType",
           "default": "column"
@@ -1355,6 +1749,21 @@
           ],
           "default": null,
           "title": "Field Id"
+        },
+        "full_path": {
+          "title": "Full Path",
+          "type": "string"
+        },
+        "list_semantics": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ListSemantics"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "logical_type": {
           "anyOf": [
@@ -1435,6 +1844,11 @@
         "repetition": {
           "$ref": "#/$defs/Repetition"
         },
+        "repetition_level": {
+          "default": 0,
+          "title": "Repetition Level",
+          "type": "integer"
+        },
         "scale": {
           "anyOf": [
             {
@@ -1469,6 +1883,7 @@
       },
       "required": [
         "name",
+        "full_path",
         "start_offset",
         "byte_length",
         "type",
@@ -1498,9 +1913,18 @@
           "title": "Children",
           "type": "object"
         },
+        "definition_level": {
+          "default": 0,
+          "title": "Definition Level",
+          "type": "integer"
+        },
         "element_type": {
           "$ref": "#/$defs/SchemaElementType",
           "default": "root"
+        },
+        "full_path": {
+          "title": "Full Path",
+          "type": "string"
         },
         "name": {
           "title": "Name",
@@ -1510,6 +1934,15 @@
           "title": "Num Children",
           "type": "integer"
         },
+        "repetition": {
+          "$ref": "#/$defs/Repetition",
+          "default": 0
+        },
+        "repetition_level": {
+          "default": 0,
+          "title": "Repetition Level",
+          "type": "integer"
+        },
         "start_offset": {
           "title": "Start Offset",
           "type": "integer"
@@ -1517,11 +1950,84 @@
       },
       "required": [
         "name",
+        "full_path",
         "start_offset",
         "byte_length",
         "num_children"
       ],
       "title": "SchemaRoot",
+      "type": "object"
+    },
+    "SizeStatistics": {
+      "description": "Size statistics for BYTE_ARRAY columns.",
+      "properties": {
+        "definition_level_histogram": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Definition Level Histogram"
+        },
+        "repetition_level_histogram": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "integer"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Repetition Level Histogram"
+        },
+        "unencoded_byte_array_data_bytes": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Unencoded Byte Array Data Bytes"
+        }
+      },
+      "title": "SizeStatistics",
+      "type": "object"
+    },
+    "SortingColumn": {
+      "properties": {
+        "column_idx": {
+          "title": "Column Idx",
+          "type": "integer"
+        },
+        "descending": {
+          "title": "Descending",
+          "type": "boolean"
+        },
+        "nulls_first": {
+          "title": "Nulls First",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "column_idx",
+        "descending",
+        "nulls_first"
+      ],
+      "title": "SortingColumn",
       "type": "object"
     },
     "StringTypeInfo": {
@@ -1541,7 +2047,7 @@
       "description": "Time logical type with unit and UTC adjustment.",
       "properties": {
         "is_adjusted_to_utc": {
-          "default": false,
+          "default": true,
           "title": "Is Adjusted To Utc",
           "type": "boolean"
         },
@@ -1573,7 +2079,7 @@
       "description": "Timestamp logical type with unit and UTC adjustment.",
       "properties": {
         "is_adjusted_to_utc": {
-          "default": false,
+          "default": true,
           "title": "Is Adjusted To Utc",
           "type": "boolean"
         },
@@ -1674,7 +2180,7 @@
       "type": "string"
     },
     "metadata": {
-      "$ref": "#/$defs/PhysicalMetadata"
+      "$ref": "#/$defs/FileMetadata"
     },
     "source": {
       "title": "Source",
