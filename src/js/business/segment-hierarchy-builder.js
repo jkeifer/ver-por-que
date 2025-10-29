@@ -42,7 +42,7 @@ class SegmentHierarchyBuilder {
         cache.columnchunkmetadata = this.buildColumnChunkMetadataSegments(fileData);
 
         // Build column chunks for each row group
-        const metadata = fileData.metadata?.metadata;
+        const metadata = fileData.metadata;
         if (metadata?.row_groups) {
             metadata.row_groups.forEach((_, index) => {
                 cache.columnchunks[index] = this.buildColumnChunkSegments(fileData, index);
@@ -131,7 +131,7 @@ class SegmentHierarchyBuilder {
      * @returns {ParquetSegment[]} Array of row group segments
      */
     static buildRowGroupSegments(fileData) {
-        const metadata = fileData.metadata?.metadata;
+        const metadata = fileData.metadata;
         if (!metadata?.row_groups) {
             return [];
         }
@@ -277,12 +277,11 @@ class SegmentHierarchyBuilder {
      */
     static buildMetadataStructureSegments(fileData) {
         const segments = [];
-        const metadata = fileData.metadata?.metadata;
-        const physicalMetadata = fileData.metadata;
+        const metadata = fileData.metadata;
 
         if (!metadata) {return segments;}
 
-        let currentOffset = physicalMetadata?.start_offset || 0;
+        let currentOffset = metadata?.start_offset || 0;
 
         // Schema segment (using physical metadata offsets if available)
         if (metadata.schema_root) {
@@ -375,7 +374,7 @@ class SegmentHierarchyBuilder {
      */
     static buildRowGroupMetadataSegments(fileData) {
         const cache = {};
-        const metadata = fileData.metadata?.metadata;
+        const metadata = fileData.metadata;
         if (!metadata?.row_groups) {return cache;}
 
         const segments = [];
@@ -479,7 +478,7 @@ class SegmentHierarchyBuilder {
      */
     static buildColumnChunkMetadataSegments(fileData) {
         const cache = {};
-        const metadata = fileData.metadata?.metadata;
+        const metadata = fileData.metadata;
 
         if (!metadata?.row_groups) {
             return cache;
@@ -523,7 +522,7 @@ class SegmentHierarchyBuilder {
      */
     static buildAllSchemaElementSegments(fileData) {
         const cache = {};
-        const metadata = fileData.metadata?.metadata;
+        const metadata = fileData.metadata;
         if (!metadata?.schema_root) {return cache;}
 
         // Build elements for the root schema
@@ -737,7 +736,7 @@ class SegmentHierarchyBuilder {
      */
     static _extractColumnIndicesInfo(fileData) {
         const indicesInfo = [];
-        const metadata = fileData.metadata?.metadata;
+        const metadata = fileData.metadata;
 
         if (!metadata?.row_groups) {return indicesInfo;}
 
@@ -779,7 +778,7 @@ class SegmentHierarchyBuilder {
      * @private
      */
     static _getChunksForRowGroup(fileData, rowGroupIndex) {
-        const metadata = fileData.metadata?.metadata;
+        const metadata = fileData.metadata;
         const numRowGroups = metadata?.row_groups?.length || 1;
         const chunksPerRowGroup = Math.ceil((fileData.column_chunks?.length || 0) / numRowGroups);
         const startIndex = rowGroupIndex * chunksPerRowGroup;
@@ -802,7 +801,7 @@ class SegmentHierarchyBuilder {
      * @private
      */
     static _findColumnMetadata(fileData, rowGroupIndex, columnPath) {
-        const metadata = fileData.metadata?.metadata;
+        const metadata = fileData.metadata;
         if (!metadata?.row_groups?.[rowGroupIndex]) {
             return null;
         }
