@@ -96,7 +96,7 @@ class SegmentHierarchyBuilder {
 
         segments.push(new ParquetSegment({
             id: 'rowgroups',
-            name: 'ROWGROUPS',
+            name: 'DATA PAGES',
             start: rowGroupsStart,
             end: rowGroupsEnd
         }));

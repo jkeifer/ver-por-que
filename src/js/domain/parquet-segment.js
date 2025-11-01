@@ -337,7 +337,7 @@ class ParquetSegment {
             return 'File metadata';
         }
         if (this.id === 'rowgroups') {
-            return 'File Row Groups';
+            return 'Data pages (by row group)';
         }
         if (this.id === 'schema_root') {
             return 'Schema Root';
