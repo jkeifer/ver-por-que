@@ -1,0 +1,11 @@
+pre-commit:
+  parallel: true
+  commands:
+    eslint:
+      glob: "*.{js,mjs,ts}"
+      run: npm run lint:fix
+      stage_fixed: true
+    prettier:
+      glob: "*.{js,mjs,ts,json,md,html,css}"
+      run: npm run format
+      stage_fixed: true

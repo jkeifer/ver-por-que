@@ -1,0 +1,204 @@
+{
+  "source": "https://raw.githubusercontent.com/apache/parquet-testing/1a2a75127be06fc0123f03ebd36c966f7beda27d/data/data_index_bloom_encoding_stats.parquet",
+  "filesize": 1643,
+  "column_chunks": [
+    {
+      "path_in_schema": "String",
+      "start_offset": 4,
+      "total_byte_size": 152,
+      "codec": "GZIP",
+      "num_values": 14,
+      "data_pages": [
+        {
+          "page_type": "DATA_PAGE",
+          "start_offset": 4,
+          "header_size": 25,
+          "compressed_page_size": 127,
+          "uncompressed_page_size": 138,
+          "crc": -779741599,
+          "num_values": 14,
+          "encoding": "PLAIN",
+          "definition_level_encoding": "RLE",
+          "repetition_level_encoding": "BIT_PACKED",
+          "statistics": null,
+          "schema_path": "String"
+        }
+      ],
+      "index_pages": [],
+      "dictionary_page": null,
+      "column_index": {
+        "start_offset": 156,
+        "byte_length": 25,
+        "null_pages": [
+          false
+        ],
+        "min_values": [
+          "SGVsbG8="
+        ],
+        "max_values": [
+          "dG9kYXk="
+        ],
+        "boundary_order": "ASCENDING",
+        "null_counts": [
+          0
+        ],
+        "repetition_level_histograms": null,
+        "definition_level_histograms": null,
+        "schema_path": "String"
+      },
+      "offset_index": {
+        "start_offset": 181,
+        "byte_length": 11,
+        "page_locations": [
+          {
+            "offset": 4,
+            "compressed_page_size": 152,
+            "first_row_index": 0
+          }
+        ],
+        "unencoded_byte_array_data_bytes": null
+      },
+      "row_group": 0
+    }
+  ],
+  "metadata": {
+    "version": 1,
+    "schema_root": {
+      "element_type": "root",
+      "name": "data",
+      "full_path": "",
+      "start_offset": 1236,
+      "byte_length": 9,
+      "definition_level": 0,
+      "repetition_level": 0,
+      "num_children": 1,
+      "children": {
+        "String": {
+          "element_type": "column",
+          "name": "String",
+          "full_path": "String",
+          "start_offset": 1245,
+          "byte_length": 19,
+          "definition_level": 1,
+          "repetition_level": 0,
+          "type": "BYTE_ARRAY",
+          "repetition": "OPTIONAL",
+          "converted_type": "UTF8",
+          "type_length": null,
+          "scale": null,
+          "precision": null,
+          "field_id": null,
+          "logical_type": {
+            "logical_type": "STRING"
+          },
+          "list_semantics": null
+        }
+      },
+      "repetition": "REQUIRED"
+    },
+    "row_groups": [
+      {
+        "start_offset": 1268,
+        "byte_length": 88,
+        "column_chunks": {
+          "String": {
+            "file_offset": 4,
+            "metadata": {
+              "start_offset": 1273,
+              "byte_length": 59,
+              "type": "BYTE_ARRAY",
+              "encodings": [
+                "BIT_PACKED",
+                "RLE",
+                "PLAIN"
+              ],
+              "path_in_schema": "String",
+              "codec": "GZIP",
+              "num_values": 14,
+              "total_uncompressed_size": 163,
+              "total_compressed_size": 152,
+              "data_page_offset": 4,
+              "index_page_offset": null,
+              "dictionary_page_offset": null,
+              "statistics": {
+                "min": null,
+                "max": null,
+                "null_count": 0,
+                "distinct_count": null,
+                "min_value": "SGVsbG8=",
+                "max_value": "dG9kYXk=",
+                "is_min_value_exact": null,
+                "is_max_value_exact": null,
+                "schema_path": "String"
+              },
+              "encoding_stats": [
+                {
+                  "page_type": "DATA_PAGE",
+                  "encoding": "PLAIN",
+                  "count": 1
+                }
+              ],
+              "bloom_filter_offset": 192,
+              "bloom_filter_length": null,
+              "size_statistics": null,
+              "geospatial_statistics": null
+            },
+            "file_path": null,
+            "offset_index_offset": 181,
+            "offset_index_length": 11,
+            "column_index_offset": 156,
+            "column_index_length": 25
+          }
+        },
+        "total_byte_size": 163,
+        "row_count": 14,
+        "sorting_columns": null,
+        "file_offset": 4,
+        "total_compressed_size": 152,
+        "ordinal": 0,
+        "compression_stats": {
+          "total_compressed": 152,
+          "total_uncompressed": 163,
+          "ratio": 0.9325153374233128,
+          "space_saved_percent": 6.748466257668717,
+          "compressed_mb": 0.00014495849609375,
+          "uncompressed_mb": 0.00015544891357421875
+        }
+      }
+    ],
+    "created_by": "parquet-mr version 1.13.0-SNAPSHOT (build 7398d9b522733c669d497c25495c9efa1c860994)",
+    "key_value_metadata": [
+      {
+        "start_offset": 1358,
+        "byte_length": 160,
+        "key": "parquet.avro.schema",
+        "value": "{\"type\":\"record\",\"name\":\"data\",\"fields\":[{\"name\":\"String\",\"type\":[\"null\",\"string\"],\"doc\":\"Type inferred from 'Hello'\",\"default\":null}]}"
+      },
+      {
+        "start_offset": 1518,
+        "byte_length": 26,
+        "key": "writer.model.name",
+        "value": "avro"
+      }
+    ],
+    "start_offset": 1232,
+    "total_byte_size": 403,
+    "compression_stats": {
+      "total_compressed": 152,
+      "total_uncompressed": 163,
+      "ratio": 0.9325153374233128,
+      "space_saved_percent": 6.748466257668717,
+      "compressed_mb": 0.00014495849609375,
+      "uncompressed_mb": 0.00015544891357421875
+    },
+    "column_count": 1,
+    "row_count": 14,
+    "row_group_count": 1
+  },
+  "magic_header": "PAR1",
+  "magic_footer": "PAR1",
+  "_meta": {
+    "model": "file",
+    "format_version": 2
+  }
+}

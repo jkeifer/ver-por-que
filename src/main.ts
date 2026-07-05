@@ -3,22 +3,27 @@
  */
 import { InfoPanelManager } from './components/info-panel-manager';
 import { SvgByteVisualizer } from './components/svg-byte-visualizer';
-import validate from './generated/validate';
-import type { Dump } from './types';
+import { isParquet } from './detect';
+import { validateFile, validateMetadata, type ValidationError } from './generated/validate';
+import { ParquetWorkerClient } from './js/worker/client';
+import type { AnyDump } from './types';
 
 const DB_NAME = 'ParquetExplorerDB';
 
 interface StoredFile {
     id: string;
-    data: Dump;
+    data: AnyDump;
     source: string;
     timestamp: number;
 }
 
 class ParquetExplorer {
-    private parquetData: Dump | null = null;
+    private parquetData: AnyDump | null = null;
     private infoPanelManager: InfoPanelManager | null = null;
     private fileStructureViz: SvgByteVisualizer | null = null;
+    // Lazily created on the first raw-parquet load so the JSON path never boots
+    // pyodide.
+    private workerClient: ParquetWorkerClient | null = null;
 
     /** Initialize the application (event listeners are bound exactly once). */
     async init(): Promise<void> {
@@ -129,29 +134,22 @@ class ParquetExplorer {
         }
     }
 
-    /** Load a file into the existing app instance. */
+    /** Load a file (por-que dump JSON or a raw .parquet) into the app. */
     async loadFile(file: File): Promise<void> {
-        if (!file.name.toLowerCase().endsWith('.json')) {
-            this.showError('Please select a .json file');
-            return;
-        }
-
         this.showLoadingScreen();
-        this.updateLoadingStatus('Reading JSON file...');
+        this.updateLoadingStatus('Reading file...');
 
         try {
-            const text = await file.text();
-            this.updateLoadingStatus('Parsing JSON data...');
-            await this.parseJSON(text, file.name);
+            await this.ingest(await file.arrayBuffer(), file.name);
         } catch (error) {
             this.showError(`Failed to parse file: ${(error as Error).message}`);
         }
     }
 
-    /** Load a remote JSON file into the existing app instance. */
+    /** Load a remote dump JSON or raw .parquet into the app. */
     async loadURL(url: string): Promise<void> {
         this.showLoadingScreen();
-        this.updateLoadingStatus('Fetching remote JSON...');
+        this.updateLoadingStatus('Fetching remote file...');
 
         try {
             const response = await fetch(url);
@@ -159,29 +157,69 @@ class ParquetExplorer {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
             }
 
-            this.updateLoadingStatus('Parsing JSON data...');
-            const text = await response.text();
-            await this.parseJSON(text, url);
+            await this.ingest(await response.arrayBuffer(), url);
         } catch (error) {
             this.showError(`Failed to load URL: ${(error as Error).message}`);
         }
     }
 
+    /**
+     * Route bytes to the right parser: raw parquet goes through the pyodide
+     * worker (producing a dump JSON string), everything else is treated as a
+     * dump JSON document directly. Both converge on the same schema-validated
+     * boundary in parseJSON.
+     */
+    private async ingest(buffer: ArrayBuffer, source: string): Promise<void> {
+        const head = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
+        if (isParquet(head, source)) {
+            const dump = await this.parseParquet(buffer, source);
+            await this.parseJSON(dump, source);
+        } else {
+            this.updateLoadingStatus('Parsing JSON data...');
+            await this.parseJSON(new TextDecoder().decode(buffer), source);
+        }
+    }
+
+    /** Parse raw parquet bytes in the browser via the pyodide worker. */
+    private parseParquet(buffer: ArrayBuffer, source: string): Promise<string> {
+        if (!this.workerClient) {
+            this.workerClient = new ParquetWorkerClient(status => this.updateLoadingStatus(status));
+        }
+        // First parse downloads the ~12MB python runtime; the worker emits
+        // status events that updateLoadingStatus surfaces.
+        this.updateLoadingStatus('Loading Python runtime...');
+        return this.workerClient.parse(buffer, source);
+    }
+
     private async parseJSON(jsonText: string, source: string): Promise<void> {
         const parsed: unknown = JSON.parse(jsonText);
 
-        // Boundary validation against the canonical JSON Schema. After this
-        // gate, downstream code trusts the shape and does not re-check it.
-        if (!validate(parsed)) {
-            const details = (validate.errors ?? [])
-                .slice(0, 5)
-                .map(e => `${e.instancePath || '(root)'}: ${e.message}`)
-                .join('; ');
-            this.showError(`Not a valid por-que dump: ${details || 'schema validation failed'}`);
+        // Dispatch on the self-identifying envelope, then validate against that
+        // root's schema. After this gate, downstream code trusts the shape.
+        const model = (parsed as { _meta?: { model?: unknown } } | null)?._meta?.model;
+        let data: AnyDump;
+        if (model === 'file') {
+            if (!validateFile(parsed)) {
+                this.showError(this.validationMessage('file', validateFile.errors));
+                return;
+            }
+            data = parsed;
+        } else if (model === 'metadata') {
+            if (!validateMetadata(parsed)) {
+                this.showError(this.validationMessage('metadata', validateMetadata.errors));
+                return;
+            }
+            data = parsed;
+        } else {
+            const got = typeof model === 'string' ? `"${model}"` : 'no _meta.model';
+            this.showError(
+                'Not a por-que dump / unsupported format — this build understands full ' +
+                    'dumps (_meta.model "file") and metadata-only exports (_meta.model ' +
+                    `"metadata"), got ${got}.`
+            );
             return;
         }
 
-        const data = parsed;
         if (!data.source) {
             data.source = source;
         }
@@ -192,6 +230,15 @@ class ParquetExplorer {
         this.showExplorer();
         this.populateUI();
         this.hideLoadingScreen();
+    }
+
+    /** First ~5 validation errors, as a single human-readable line. */
+    private validationMessage(kind: string, errors?: ValidationError[] | null): string {
+        const details = (errors ?? [])
+            .slice(0, 5)
+            .map(e => `${e.instancePath || '(root)'}: ${e.message}`)
+            .join('; ');
+        return `Not a valid por-que ${kind} dump: ${details || 'schema validation failed'}`;
     }
 
     private populateUI(): void {
@@ -207,9 +254,9 @@ class ParquetExplorer {
         }
     }
 
-    private initializeFileStructureViz(data: Dump): void {
+    private initializeFileStructureViz(data: AnyDump): void {
         const container = document.getElementById('rowgroup-chart');
-        if (!container || !data.column_chunks) {
+        if (!container) {
             return;
         }
 
@@ -290,7 +337,9 @@ class ParquetExplorer {
 
         const sourceElement = document.getElementById('loaded-file-source');
         if (sourceElement && this.parquetData?.source) {
-            sourceElement.textContent = this.parquetData.source;
+            const metadataOnly = !('column_chunks' in this.parquetData);
+            sourceElement.textContent =
+                this.parquetData.source + (metadataOnly ? '  (metadata-only export)' : '');
         }
     }
 
@@ -374,7 +423,7 @@ class ParquetExplorer {
         });
     }
 
-    private async saveToStorage(data: Dump, source: string): Promise<void> {
+    private async saveToStorage(data: AnyDump, source: string): Promise<void> {
         try {
             await this.saveToIndexedDB(data, source);
         } catch (error) {
@@ -382,7 +431,7 @@ class ParquetExplorer {
         }
     }
 
-    private saveToIndexedDB(data: Dump, source: string): Promise<void> {
+    private saveToIndexedDB(data: AnyDump, source: string): Promise<void> {
         return new Promise((resolve, reject) => {
             const request = indexedDB.open(DB_NAME, 1);
 
