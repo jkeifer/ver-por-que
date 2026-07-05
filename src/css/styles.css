@@ -192,7 +192,7 @@ body.global-drag-over {
 }
 
 body.global-drag-over::before {
-    content: "Drop file anywhere to replace current file";
+    content: 'Drop file anywhere to replace current file';
     position: fixed;
     top: 50%;
     left: 50%;
@@ -231,7 +231,12 @@ body {
 }
 
 /* Typography */
-h1, h2, h3, h4, h5, h6 {
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
     font-family: var(--font-serif);
     font-weight: 600;
     line-height: 1.2;
@@ -239,10 +244,18 @@ h1, h2, h3, h4, h5, h6 {
     color: var(--text-primary);
 }
 
-h1 { font-size: 2.5rem; }
-h2 { font-size: 2rem; }
-h3 { font-size: 1.5rem; }
-h4 { font-size: 1.25rem; }
+h1 {
+    font-size: 2.5rem;
+}
+h2 {
+    font-size: 2rem;
+}
+h3 {
+    font-size: 1.5rem;
+}
+h4 {
+    font-size: 1.25rem;
+}
 
 p {
     margin-bottom: var(--spacing-md);
@@ -284,7 +297,6 @@ code {
     text-align: center;
     position: relative;
 }
-
 
 .app-header h1 {
     font-size: 3rem;
@@ -335,8 +347,12 @@ code {
 }
 
 @keyframes spin {
-    0% { transform: rotate(0deg); }
-    100% { transform: rotate(360deg); }
+    0% {
+        transform: rotate(0deg);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
 }
 
 #loading-status {
@@ -423,7 +439,9 @@ code {
     border-radius: var(--border-radius);
     font-size: 1rem;
     font-family: var(--font-mono);
-    transition: border-color 0.3s ease, box-shadow 0.3s ease;
+    transition:
+        border-color 0.3s ease,
+        box-shadow 0.3s ease;
 }
 
 #url-input:focus {
@@ -638,7 +656,7 @@ code {
 
 .schema-node {
     padding: var(--spacing-xs) 0;
-    border-bottom: 1px solid rgba(0,0,0,0.05);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
 }
 
 .schema-name {
@@ -802,7 +820,7 @@ code {
     justify-content: space-between;
     align-items: flex-start;
     padding: var(--spacing-xs) 0;
-    border-bottom: 1px solid rgba(0,0,0,0.05);
+    border-bottom: 1px solid rgba(0, 0, 0, 0.05);
 }
 
 .info-item:last-child {
@@ -1167,7 +1185,7 @@ code {
 .segment-on-light .segment:hover {
     outline: 2px solid var(--outline-on-light);
     outline-offset: -2px;
-    fill-opacity: .80;
+    fill-opacity: 0.8;
 }
 
 .segment-on-light .segment.segment-selected {
@@ -1183,7 +1201,7 @@ code {
 .segment-on-dark .segment:hover {
     outline: 2px solid var(--outline-on-dark);
     outline-offset: -2px;
-    fill-opacity: .80;
+    fill-opacity: 0.8;
 }
 
 .segment-on-dark .segment.segment-selected {
