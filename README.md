@@ -28,11 +28,25 @@ pages.
 
 ## How It Works
 
-1. Use the [por-que Python library](https://github.com/jkeifer/por-que) to
-   analyze a Parquet file and export its structure to JSON
-1. Load the JSON file into this web application (via drag-and-drop, file
-   picker, or URL)
-1. Explore the visual representation of your Parquet file's physical structure
+You can feed the app two things, and it handles both:
+
+- **A raw `.parquet` file** — dropped, picked, or pointed at via `?url=`. The
+  app boots por-que itself in the browser (Python compiled to WebAssembly via
+  [pyodide](https://pyodide.org/), running in a Web Worker) and produces the
+  same structure dump `por-que dump` would, with no server involved.
+- **A por-que dump JSON** — produced by `por-que dump file.parquet`, if you'd
+  rather run the parse yourself.
+
+Either way you then explore the visual representation of the file's physical
+structure. Detection is by magic bytes (`PAR1`), so extension doesn't matter.
+
+### In-browser parsing notes
+
+- The first parquet parse downloads the ~12MB Python runtime from a CDN (cached
+  afterward); the JSON path pays none of that cost.
+- Page **content** decompression is not needed for the structure dump, so the
+  missing wasm build of Snappy doesn't matter — a SNAPPY-compressed file dumps
+  fine. (This only affects future value-reconstruction features, not structure.)
 
 ## Technology Stack
 
@@ -76,21 +90,24 @@ to use the deployed version.
    - Click on different segments to see details about row groups, columns, and pages
    - Understand how your data is compressed and encoded
 
-   The app can also auto-load a dump on startup via a `?url=` query parameter
-   (e.g. `/?url=data.json`), which is how `por-que serve` opens a file.
+   The app can also auto-load a dump (or a raw `.parquet`) on startup via a
+   `?url=` query parameter (e.g. `/?url=data.json`), handy for linking straight
+   to a hosted file.
 
 ## Schema-generated types
 
-The dump JSON shape is defined by the canonical JSON Schema at
-[`schema/por-que.schema.json`](./schema/por-que.schema.json). TypeScript types
-and a standalone runtime validator are generated from it into `src/generated/`
+The dump JSON shape is defined by a JSON Schema, vendored at
+[`schema/por-que.schema.json`](./schema/por-que.schema.json) from
+[por-que](https://github.com/jkeifer/por-que) (a union of the `file` and
+`metadata` dump roots). TypeScript types and standalone runtime
+validators are generated from it into `src/generated/`
 (gitignored) by `npm run generate`. The `dev`, `build`, `test`, `typecheck`,
 and `lint` scripts all run `generate` first, so a fresh clone just works — but
 if you edit the schema, re-run `npm run generate`.
 
 ## License
 
-Apache License 2.0, same as the por-que repository it lives in (see the root `LICENSE`).
+Apache License 2.0, same as [por-que](https://github.com/jkeifer/por-que) (see [`LICENSE`](./LICENSE)).
 
 ## Resources
 

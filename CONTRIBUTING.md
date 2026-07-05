@@ -54,6 +54,7 @@ help you get started with development and contributing to the project.
 | Command                | Description                                        |
 | ---------------------- | ------------------------------------------------- |
 | `npm run generate`     | Generate types + validator from the JSON Schema   |
+| `npm run wheel`        | Build the por-que wheel for the in-browser parser |
 | `npm run dev`          | Start development server with hot reload          |
 | `npm run build`        | Build for production                              |
 | `npm run typecheck`    | Type-check with `tsc --noEmit`                    |
@@ -66,25 +67,54 @@ help you get started with development and contributing to the project.
 `dev`, `build`, `test`, `typecheck`, and `lint` each run `generate` first (via
 npm pre-hooks), so a fresh clone works without a manual step. `generate` reads
 [`schema/por-que.schema.json`](./schema/por-que.schema.json) — the canonical
-contract for the dump JSON — and emits `src/generated/` (gitignored):
+contract for the dump JSON (a union of the `file` and `metadata` roots),
+vendored from [por-que](https://github.com/jkeifer/por-que) — and emits
+`src/generated/` (gitignored):
 
 - `por-que.d.ts` — TypeScript types ([json-schema-to-typescript])
-- `validate.js` / `validate.d.ts` — a standalone AJV validator used at the load
-  boundary in `main.ts`
+- `validate.js` / `validate.d.ts` — standalone AJV validators (one per root)
+  used at the load boundary in `main.ts`
 
 Edit the schema, not the generated files. Re-run `npm run generate` after any
 schema change.
 
 [json-schema-to-typescript]: https://github.com/bcherny/json-schema-to-typescript
 
+### In-browser parquet parsing
+
+Dropping a raw `.parquet` file runs por-que in the browser via
+[pyodide](https://pyodide.org/) in a Web Worker (`src/js/worker/`). The worker
+needs a por-que wheel as a static asset:
+
+```bash
+npm run wheel   # builds the wheel into static/vendor/ (gitignored), once
+```
+
+- The wheel is built from a [por-que](https://github.com/jkeifer/por-que)
+  checkout (`uv build --wheel`) by
+  [`scripts/build-wheel.py`](./scripts/build-wheel.py). Point it at a checkout
+  with `POR_QUE_CHECKOUT=/path/to/por-que`, or place one at `../por-que`. Until
+  por-que ships the current dump format on PyPI, a local checkout is required;
+  after that this becomes a pinned-wheel download.
+- Without the wheel, the JSON path still works and the pyodide integration test
+  skips. You only need `npm run wheel` to exercise browser parquet parsing (dev
+  or the integration test).
+- pyodide itself loads from a CDN, pinned to one version constant in
+  `src/js/worker/worker.ts` (keep it equal to the `pyodide` devDep).
+- The parse never decompresses page content, so the lack of a wasm Snappy wheel
+  is irrelevant to the structure dump. Static assets under `static/` are copied
+  into the build (and served in dev) by `parcel-reporter-static-files-copy`.
+
 ### Pre-commit Hooks
 
-The project uses Husky and lint-staged to run quality checks before commits:
+The project uses [lefthook](https://github.com/evilmartians/lefthook)
+(`lefthook.yml`) to run quality checks on staged JS/TS files before commits:
 
-- **ESLint**: Code quality and style checks
-- **Prettier**: Code formatting
+- **ESLint**: Code quality and style checks (`npm run lint:fix`)
+- **Prettier**: Code formatting (`npm run format`)
 
-If pre-commit hooks fail, fix the issues before committing:
+Install the hooks once with `npx lefthook install`. If pre-commit hooks fail,
+fix the issues before committing:
 
 ```bash
 npm run lint:fix
@@ -96,14 +126,20 @@ npm run format
 ### Project Structure
 
 ```plaintext
-schema/por-que.schema.json     # Canonical contract for the dump JSON
+schema/por-que.schema.json  # Canonical contract for the dump JSON (vendored from por-que)
 src/
 ├── index.html             # Main HTML entry point (loads main.ts as a module)
 ├── css/                   # Styles
 ├── main.ts                # Entry point; JSON.parse → AJV validate → typed dump
+├── detect.ts              # Parquet-vs-JSON detection by magic bytes
 ├── format.ts              # Shared byte/number formatting helpers
 ├── types.ts               # Friendly aliases over the schema-generated types
 ├── generated/             # GENERATED (gitignored): por-que.d.ts + validate.js
+├── js/worker/             # In-browser parquet parsing (pyodide in a Web Worker)
+│   ├── client.ts          # Main-thread handle; lazily spins up the worker
+│   ├── worker.ts          # Worker shell (loads pyodide from the CDN)
+│   ├── pyodide-parquet.ts # Worker-agnostic boot+parse (testable under node)
+│   └── protocol.ts        # Request/response message shapes
 ├── domain/
 │   └── parquet-type-resolver.ts # Logical-type pretty-printing / display logic
 ├── business/
@@ -209,9 +245,9 @@ The project uses ESLint and Prettier with the following conventions:
 
 ### GitHub Pages Deployment
 
-The site automatically deploys to GitHub Pages on push to main:
+The site deploys to GitHub Pages when a GitHub release is published:
 
-1. **Push to main** (or merge a PR)
+1. **Publish a release** (or trigger the workflow manually)
 2. **GitHub Actions** builds and deploys automatically
 3. [**Visit** the live site](https://jkeifer.github.io/ver-por-que)
 
@@ -261,14 +297,21 @@ npm run build              # Rebuild
 Unit tests run under [Vitest](https://vitest.dev/) (`npm test`) and live in
 `test/`. They cover the pure logic: formatting helpers, the segment layout
 calculator, and the tree projection (`projectDump`) — the projection tests read
-real dump fixtures from `../tests/fixtures/metadata/`, assert the validator
+real dump fixtures from `test/fixtures/` (vendored from por-que's test suite),
+assert the validator
 accepts them and rejects mutations, and check the tree has real offsets, sorted
 children, and correct `kind` coverage. New logic in those layers should come
 with a focused test.
 
+`test/pyodide-parquet.integration.test.ts` is the end-to-end check for
+in-browser parsing: it boots real pyodide, installs the locally-built wheel,
+parses a real parquet file, and asserts the dump passes the validator. It skips
+(with a message) when the wheel is absent, so run `npm run wheel` first — CI
+does. It downloads a parquet fixture from `apache/parquet-testing` pinned to the
+same ref as the python fixtures, and has a long timeout.
+
 Welcome additions:
 
-- Integration tests for file loading and parsing
 - Visual regression tests for the byte visualizer
 
 ## 🤝 Community
