@@ -31,7 +31,7 @@
     "bugs": {
         "url": "https://github.com/jkeifer/ver-por-que/issues"
     },
-    "homepage": "https://jkeifer.github.io/ver-por-que",
+    "homepage": "https://teotl.dev/ver-por-que",
     "devDependencies": {
         "@eslint/js": "^9.38.0",
         "@types/node": "^26.1.0",
