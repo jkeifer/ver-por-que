@@ -66,7 +66,7 @@ See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for development setup instructions.
 ### Using the Live App
 
 Visit
-[https://jkeifer.github.io/ver-por-que](https://jkeifer.github.io/ver-por-que)
+[https://jkeifer.github.io/ver-por-que](https://teotl.dev/ver-por-que)
 to use the deployed version.
 
 ### Workflow

@@ -249,7 +249,7 @@ The site deploys to GitHub Pages when a GitHub release is published:
 
 1. **Publish a release** (or trigger the workflow manually)
 2. **GitHub Actions** builds and deploys automatically
-3. [**Visit** the live site](https://jkeifer.github.io/ver-por-que)
+3. [**Visit** the live site](https://teotl.dev/ver-por-que)
 
 The deployment workflow is in `.github/workflows/deploy.yml`.
 
