@@ -6,6 +6,7 @@ interface ParseRequestBase {
     /** Absolute URL of the wheel manifest, resolved against the document. */
     manifestUrl: string;
     warmup?: undefined;
+    probe?: undefined;
 }
 
 /**
@@ -16,6 +17,7 @@ interface ParseRequestBase {
 export interface WarmupRequest {
     warmup: true;
     manifestUrl: string;
+    probe?: undefined;
 }
 
 /** Parse locally-provided bytes (upload/drop). */
@@ -33,13 +35,36 @@ export interface ParseUrlRequest extends ParseRequestBase {
 
 export type ParseRequest = ParseBytesRequest | ParseUrlRequest;
 
+/**
+ * Probe a column chunk's bloom filter in the worker's current file (the most
+ * recently parsed one). The value is a string; the python side coerces it to
+ * the column's physical type (string transport is BigInt-safe for INT64).
+ */
+export interface ProbeBloomRequest {
+    id: number;
+    manifestUrl: string;
+    probe: { rowGroup: number; column: string; value: string };
+    warmup?: undefined;
+    bytes?: undefined;
+    url?: undefined;
+}
+
 /** Everything the main thread can send to the worker. */
-export type WorkerRequest = ParseRequest | WarmupRequest;
+export type WorkerRequest = ParseRequest | ProbeBloomRequest | WarmupRequest;
 
 export interface ParseSuccess {
     id: number;
     ok: true;
     dump: string;
+    mightContain?: undefined;
+}
+
+export interface ProbeBloomSuccess {
+    id: number;
+    ok: true;
+    /** False is exact (definitely absent); true is only ever a maybe. */
+    mightContain: boolean;
+    dump?: undefined;
 }
 
 export interface ParseFailure {
@@ -76,4 +101,4 @@ export interface ProgressEvent {
 }
 
 export type WorkerResponse =
-    ParseSuccess | ParseFailure | StatusEvent | DetailEvent | ProgressEvent;
+    ParseSuccess | ProbeBloomSuccess | ParseFailure | StatusEvent | DetailEvent | ProgressEvent;

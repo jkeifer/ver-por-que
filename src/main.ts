@@ -1,7 +1,7 @@
 /**
  * Main application logic for the Parquet Explorer (JSON Mode).
  */
-import { InfoPanelManager } from './components/info-panel-manager';
+import { InfoPanelManager, type BloomProbe } from './components/info-panel-manager';
 import { QueryPanel } from './components/query-panel';
 import { SvgByteVisualizer } from './components/svg-byte-visualizer';
 import { isParquet, isParquetURL } from './detect';
@@ -27,6 +27,10 @@ class ParquetExplorer {
     // Raw-byte access for the hex inspector. Only raw-parquet loads have one;
     // JSON dumps and IndexedDB restores don't (bytes aren't persisted).
     private byteSource: ByteSource | null = null;
+    // Bloom-filter probe against the worker's current file. Only raw-parquet
+    // loads have one (the worker keeps the parsed file alive); JSON dumps and
+    // restores degrade with a note.
+    private bloomProbe: BloomProbe | null = null;
     private infoPanelManager: InfoPanelManager | null = null;
     private fileStructureViz: SvgByteVisualizer | null = null;
     private queryPanel: QueryPanel | null = null;
@@ -197,7 +201,7 @@ class ParquetExplorer {
                 // The hex inspector re-reads the same URL via range requests;
                 // if the server turns out not to support them, reads reject
                 // and the panel degrades.
-                await this.parseJSON(dump, url, fromURL(url));
+                await this.parseJSON(dump, url, fromURL(url), this.workerBloomProbe());
                 return;
             }
 
@@ -223,7 +227,7 @@ class ParquetExplorer {
             // the original for the hex inspector; workshop files are ~22 MB,
             // holding one in memory is fine.
             const dump = await this.parseParquet(buffer.slice(0), source);
-            await this.parseJSON(dump, source, fromBuffer(buffer));
+            await this.parseJSON(dump, source, fromBuffer(buffer), this.workerBloomProbe());
         } else {
             this.updateLoadingStatus('Parsing JSON data...');
             await this.parseJSON(new TextDecoder().decode(buffer), source);
@@ -238,6 +242,14 @@ class ParquetExplorer {
     /** Parse a remote parquet URL via the pyodide worker (range requests). */
     private parseParquetURL(url: string): Promise<string> {
         return this.ensureWorkerClient().parseURL(url);
+    }
+
+    /**
+     * Probe routed at the worker's current-file slot, which the parse that
+     * just completed populated. Valid until the next parse replaces it.
+     */
+    private workerBloomProbe(): BloomProbe {
+        return (rowGroup, column, value) => this.workerClient!.probeBloom(rowGroup, column, value);
     }
 
     private ensureWorkerClient(): ParquetWorkerClient {
@@ -257,7 +269,8 @@ class ParquetExplorer {
     private async parseJSON(
         jsonText: string,
         source: string,
-        byteSource: ByteSource | null = null
+        byteSource: ByteSource | null = null,
+        bloomProbe: BloomProbe | null = null
     ): Promise<void> {
         const parsed: unknown = JSON.parse(jsonText);
 
@@ -293,6 +306,7 @@ class ParquetExplorer {
 
         this.parquetData = data;
         this.byteSource = byteSource;
+        this.bloomProbe = bloomProbe;
         await this.saveToStorage(data, source);
 
         this.showExplorer();
@@ -339,7 +353,11 @@ class ParquetExplorer {
             // Tear down any previous visualizer so its listeners/tooltip don't leak.
             this.fileStructureViz?.destroy();
 
-            this.infoPanelManager = new InfoPanelManager(infoPanelContainer, this.byteSource);
+            this.infoPanelManager = new InfoPanelManager(
+                infoPanelContainer,
+                this.byteSource,
+                this.bloomProbe
+            );
             this.fileStructureViz = new SvgByteVisualizer(canvasContainer, this.infoPanelManager);
             this.fileStructureViz.onSelectionChange = id => this.syncHashNode(id);
             this.fileStructureViz.initWithData(data);
@@ -414,6 +432,7 @@ class ParquetExplorer {
     private async handleReset(): Promise<void> {
         this.parquetData = null;
         this.byteSource = null;
+        this.bloomProbe = null;
         // A permalink is meaningless with no dump loaded (query included).
         history.replaceState(null, '', location.pathname + location.search);
         await this.clearStorage();

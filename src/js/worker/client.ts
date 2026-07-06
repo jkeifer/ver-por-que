@@ -2,10 +2,16 @@
  * Main-thread handle to the parquet worker. Spins the worker up on first use
  * (so the JSON path pays zero pyodide cost) and reuses it thereafter.
  */
-import type { ParseRequest, WorkerResponse } from './protocol';
+import type {
+    ParseRequest,
+    ParseSuccess,
+    ProbeBloomRequest,
+    ProbeBloomSuccess,
+    WorkerResponse,
+} from './protocol';
 
 interface Pending {
-    resolve: (dump: string) => void;
+    resolve: (msg: ParseSuccess | ProbeBloomSuccess) => void;
     reject: (error: Error) => void;
 }
 
@@ -64,7 +70,7 @@ export class ParquetWorkerClient {
         }
         this.pending.delete(msg.id);
         if (msg.ok) {
-            entry.resolve(msg.dump);
+            entry.resolve(msg);
         } else {
             entry.reject(new Error(msg.error));
         }
@@ -72,7 +78,7 @@ export class ParquetWorkerClient {
 
     /** Parses raw parquet bytes into a por-que dump JSON string. */
     parse(bytes: ArrayBuffer, name: string): Promise<string> {
-        return this.request({ name, bytes }, [bytes]);
+        return this.request({ name, bytes }, [bytes]).then(msg => msg.dump!);
     }
 
     /**
@@ -81,7 +87,15 @@ export class ParquetWorkerClient {
      * download when the server (or CORS) doesn't support ranges.
      */
     parseURL(url: string): Promise<string> {
-        return this.request({ name: url, url });
+        return this.request({ name: url, url }).then(msg => msg.dump!);
+    }
+
+    /**
+     * Probes a bloom filter in the worker's current file (the one it parsed
+     * last). False is exact -- definitely absent; true is only ever a maybe.
+     */
+    probeBloom(rowGroup: number, column: string, value: string): Promise<boolean> {
+        return this.request({ probe: { rowGroup, column, value } }).then(msg => msg.mightContain!);
     }
 
     /**
@@ -93,14 +107,17 @@ export class ParquetWorkerClient {
     }
 
     private request(
-        payload: { name: string } & ({ bytes: ArrayBuffer } | { url: string }),
+        payload:
+            | ({ name: string } & ({ bytes: ArrayBuffer } | { url: string }))
+            | { probe: ProbeBloomRequest['probe'] },
         transfer: Transferable[] = []
-    ): Promise<string> {
+    ): Promise<ParseSuccess | ProbeBloomSuccess> {
         const worker = this.ensureWorker();
         const id = this.nextId++;
-        return new Promise<string>((resolve, reject) => {
+        return new Promise<ParseSuccess | ProbeBloomSuccess>((resolve, reject) => {
             this.pending.set(id, { resolve, reject });
-            const req = { id, manifestUrl: manifestUrl(), ...payload } as ParseRequest;
+            const req = { id, manifestUrl: manifestUrl(), ...payload } as
+                ParseRequest | ProbeBloomRequest;
             worker.postMessage(req, transfer);
         });
     }
