@@ -95,9 +95,8 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
     // hctef[async], python-snappy) that we intentionally skip -- the structure
     // dump never decompresses page content. The wheel filenames must stay
     // intact (micropip parses name/version from them).
-    // ponytail: local wheels because the PyPI releases predate the current
-    // dump format (por-que) and the pyfetch transport (hctef); pin PyPI
-    // versions here once releases ship them.
+    // The wheels are pinned PyPI releases staged as static assets by
+    // scripts/fetch-wheels.py; bump versions there.
     for (const wheel of await deps.loadWheels()) {
         const wheelPath = `/tmp/${wheel.filename}`;
         pyodide.FS.writeFile(wheelPath, wheel.bytes);

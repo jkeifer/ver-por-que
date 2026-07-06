@@ -90,16 +90,14 @@ falling back to a full download when the server (or CORS) doesn't allow
 ranges. The worker needs por-que and hctef wheels as static assets:
 
 ```bash
-npm run wheel   # builds the wheels into static/vendor/ (gitignored), once
+npm run wheel   # downloads the wheels into static/vendor/ (gitignored), once
 ```
 
-- The wheels are built from [por-que](https://github.com/jkeifer/por-que) and
-  [hctef](https://github.com/jkeifer/hctef) checkouts (`uv build --wheel`) by
-  [`scripts/build-wheel.py`](./scripts/build-wheel.py). Point it at checkouts
-  with `POR_QUE_CHECKOUT=/path/to/por-que` and `HCTEF_CHECKOUT=/path/to/hctef`,
-  or place them at `../por-que` and `../hctef`. Until por-que ships the current
-  dump format and hctef ships the pyfetch transport on PyPI, local checkouts
-  are required; after that this becomes a pinned-wheel download.
+- The wheels are pinned [por-que](https://pypi.org/project/por-que/) and
+  [hctef](https://pypi.org/project/hctef/) releases, downloaded from PyPI and
+  hash-verified by [`scripts/fetch-wheels.py`](./scripts/fetch-wheels.py). To
+  bump a version, update the pins (filename, URL, sha256) at the top of that
+  script.
 - Without the wheels, the JSON path still works and the pyodide integration
   test skips. You only need `npm run wheel` to exercise browser parquet parsing
   (dev or the integration test).
