@@ -41,12 +41,39 @@ export interface ParquetParserDeps {
 /** A parse input: raw parquet bytes, or a remote URL read via range requests. */
 export type ParquetSource = Uint8Array | { url: string };
 
-/** Parses a parquet source into a por-que dump JSON string. */
-export type ParquetParser = (source: ParquetSource, name: string) => Promise<string>;
+/** Parses parquet sources into por-que dump JSON, plus follow-up queries. */
+export interface ParquetParser {
+    (source: ParquetSource, name: string): Promise<string>;
+    /**
+     * Tests a value against a column chunk's bloom filter in the most recently
+     * parsed file. The value crosses as a string (BigInt-safe for INT64) and
+     * is coerced python-side per the column's physical type. Rejects when no
+     * file is loaded, the chunk has no bloom filter, or the type can't probe.
+     */
+    probeBloom(rowGroup: number, column: string, value: string): Promise<boolean>;
+}
 
 const PARSE_PY = `
 import io
 from por_que import AsyncHttpFile, ParquetFile
+from por_que.statistics import BloomFilter
+from por_que.util.async_adapter import ensure_async_reader
+
+# Current-file slot: (ParquetFile, reader) of the most recent successful
+# parse, kept alive so follow-up requests (bloom probes, value previews) can
+# re-read the source without re-parsing. Replaced on every parse.
+_current = None
+
+async def _set_current(pf, reader):
+    global _current
+    if _current is not None:
+        try:
+            closing = _current[1].close()
+            if closing is not None:  # AsyncHttpFile.close is async; BytesIO's isn't
+                await closing
+        except Exception:
+            pass  # a dead old reader must not fail the new parse
+    _current = (pf, reader)
 
 def _wrap_progress(progress):
     # progress is a pyodide proxy of the JS callback; coerce the StrEnum phase
@@ -54,19 +81,47 @@ def _wrap_progress(progress):
     return lambda phase, done, total: progress(str(phase), int(done), int(total))
 
 async def _dump(data, name, progress):
-    pf = await ParquetFile.from_reader(
-        io.BytesIO(bytes(data.to_py())), name, progress=_wrap_progress(progress)
-    )
+    reader = io.BytesIO(bytes(data.to_py()))
+    pf = await ParquetFile.from_reader(reader, name, progress=_wrap_progress(progress))
+    await _set_current(pf, reader)
     return pf.to_json()
 
 async def _dump_url(url, progress):
     # AsyncHttpFile auto-selects hctef's pyfetch transport under emscripten
     # (browser fetch; node's global fetch under vitest) and reads via HTTP
     # range requests through a block cache, so only the byte ranges the
-    # parser touches are downloaded.
-    async with AsyncHttpFile(url) as f:
+    # parser touches are downloaded. Opened without a context manager: the
+    # reader outlives the parse in the current-file slot.
+    f = await AsyncHttpFile(url).open()
+    try:
         pf = await ParquetFile.from_reader(f, url, progress=_wrap_progress(progress))
-        return pf.to_json()
+    except BaseException:
+        await f.close()
+        raise
+    await _set_current(pf, f)
+    return pf.to_json()
+
+def _coerce_probe_value(value, physical_type):
+    # Probe values always cross the JS boundary as strings; convert to the
+    # python type BloomFilter hashing expects for the column. BYTE_ARRAY /
+    # FIXED_LEN_BYTE_ARRAY take the string as-is (hashed as UTF-8); other
+    # types (BOOLEAN, INT96) are rejected by might_contain itself.
+    match physical_type.name:
+        case 'INT32' | 'INT64':
+            return int(value)
+        case 'FLOAT' | 'DOUBLE':
+            return float(value)
+        case _:
+            return value
+
+async def _probe_bloom(row_group, column, value):
+    if _current is None:
+        raise RuntimeError('no parquet file is loaded in this worker')
+    pf, reader = _current
+    chunk = pf.metadata.row_groups[row_group].column_chunks[column]
+    # The bytes path keeps a plain (sync) BytesIO in the slot; adapt it.
+    bloom = await BloomFilter.from_reader(ensure_async_reader(reader), chunk)
+    return bool(bloom.might_contain(_coerce_probe_value(value, chunk.type)))
 `;
 
 /**
@@ -135,6 +190,11 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         url: string,
         progress: PyProgress
     ) => Promise<string>;
+    const probeBloom = pyodide.globals.get('_probe_bloom') as (
+        rowGroup: number,
+        column: string,
+        value: string
+    ) => Promise<boolean>;
 
     // por-que's parse phases, in emission order, with human labels. The parse
     // is one process, so the status (modal title) stays put; each phase is
@@ -190,7 +250,7 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         return dump(bytes, name, parseProgress());
     };
 
-    return async (source: ParquetSource, name: string): Promise<string> => {
+    const parse = async (source: ParquetSource, name: string): Promise<string> => {
         if (source instanceof Uint8Array) {
             return parseBytes(source, name);
         }
@@ -217,4 +277,9 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
             return parseBytes(await fetchBytes(url, progress), name);
         }
     };
+
+    return Object.assign(parse, {
+        probeBloom: (rowGroup: number, column: string, value: string) =>
+            probeBloom(rowGroup, column, value),
+    });
 }

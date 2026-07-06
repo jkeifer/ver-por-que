@@ -1507,6 +1507,35 @@ code {
     color: var(--viz-red);
 }
 
+/* Bloom filter probe (Probe a Value section) */
+.bloom-probe-controls {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-sm);
+}
+
+.bloom-probe-value {
+    flex: 1;
+    min-width: 0;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--border-radius);
+    color: var(--text-primary);
+}
+
+.bloom-probe-result {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.bloom-probe-result strong {
+    color: var(--text-primary);
+}
+
 /* Hex inspector (Raw Bytes section) */
 .hex-header {
     font-family: var(--font-mono);

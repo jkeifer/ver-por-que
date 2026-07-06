@@ -26,6 +26,9 @@ const vendorDir = fileURLToPath(new URL('../static/vendor/', import.meta.url));
 const manifestPath = `${vendorDir}manifest.json`;
 const hasWheel = existsSync(manifestPath);
 
+const fixturePath = (name: string): string =>
+    fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
+
 // Pinned to the same apache/parquet-testing ref as the python test fixtures.
 const PARQUET_TESTING_REF = '1a2a75127be06fc0123f03ebd36c966f7beda27d';
 const PARQUET_URL =
@@ -176,6 +179,22 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
             await server.close();
         }
     }, 60_000);
+
+    it('probes bloom filters in the current-file slot after a bytes parse', async () => {
+        // Local fixture with a real split-block bloom filter (offset AND
+        // length recorded) on its one String column, values 'Hello'..'today'.
+        const bloomFile = new Uint8Array(
+            readFileSync(fixturePath('data_index_bloom_encoding_with_length.parquet'))
+        );
+        expectValidDump(await parse(bloomFile, 'data_index_bloom_encoding_with_length.parquet'));
+
+        // The parse populated the worker-side current-file slot; probes hit it.
+        await expect(parse.probeBloom(0, 'String', 'Hello')).resolves.toBe(true);
+        await expect(parse.probeBloom(0, 'String', 'zzzzzz-not-here')).resolves.toBe(false);
+
+        // Unknown columns and unloadable filters reject rather than guess.
+        await expect(parse.probeBloom(0, 'nope', 'x')).rejects.toThrow(/KeyError|nope/);
+    });
 
     it('falls back to a whole-file download when ranges are unsupported', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});

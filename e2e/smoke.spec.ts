@@ -147,6 +147,22 @@ test('query simulation: matrix, pruning, projection, permalink', async ({ page }
     await expect(page).not.toHaveURL(/q=/);
 });
 
+test('bloom filter probe degrades with a note on JSON-dump loads', async ({ page }) => {
+    // This dump records bloom_filter_offset AND length, so the bloom node
+    // exists -- but a JSON load has no live worker file to probe against.
+    await loadFixture(page, 'data_index_bloom_encoding_with_length_expected.json');
+
+    const viz = page.locator('#canvas-container svg');
+    await viz.locator('rect.segment[data-segment-id="data_region"]').click();
+    await viz.locator('rect.segment[data-segment-id="bloomfilter_rg0_String"]').click();
+
+    const panel = page.locator('#info-panel-container');
+    await expect(panel).toContainText('Bloom Filter');
+    await expect(panel).toContainText('Probe a Value');
+    await expect(panel).toContainText('Probing needs the filter bytes');
+    await expect(panel.locator('.bloom-probe-btn')).toHaveCount(0);
+});
+
 test('downloads the loaded dump as re-validating JSON', async ({ page }) => {
     await loadFixture(page, 'data_index_bloom_encoding_stats_expected.json');
     await expect(page.locator('#loaded-file-source')).toContainText('.parquet');
@@ -192,4 +208,28 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
     const hexView = page.locator('#info-panel-container .hex-view');
     await expect(hexView).toContainText('50 41 52 31');
     await expect(hexView).toContainText('PAR1');
+
+    // Bloom filter probe: needs a file whose footer records the filter's
+    // length (data_index_bloom_encoding_stats records only the offset, so no
+    // bloom node exists for it). The worker is already booted; this parse and
+    // the probes against its current-file slot are fast.
+    await page
+        .locator('#file-input')
+        .setInputFiles(fixture('data_index_bloom_encoding_with_length.parquet'));
+    await expect(source).toContainText('data_index_bloom_encoding_with_length.parquet');
+
+    await viz.locator('rect.segment[data-segment-id="data_region"]').click();
+    await viz.locator('rect.segment[data-segment-id="bloomfilter_rg0_String"]').click();
+    await expect(page.locator('#info-panel-container')).toContainText('Bloom Filter');
+
+    // 'Hello' is in the column (footer stats min); the filter can only say maybe.
+    const result = page.locator('.bloom-probe-result');
+    await page.locator('.bloom-probe-value').fill('Hello');
+    await page.locator('.bloom-probe-btn').click();
+    await expect(result).toContainText('maybe present');
+
+    // Garbage gets the exact answer: definitely absent.
+    await page.locator('.bloom-probe-value').fill('zzzzzz-not-here');
+    await page.locator('.bloom-probe-btn').click();
+    await expect(result).toContainText('definitely not present');
 });

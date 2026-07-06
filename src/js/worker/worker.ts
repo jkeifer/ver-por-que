@@ -84,6 +84,12 @@ ctx.addEventListener('message', event => {
     void (async () => {
         try {
             const parser = await getParser(req.manifestUrl);
+            if (req.probe) {
+                const { rowGroup, column, value } = req.probe;
+                const mightContain = await parser.probeBloom(rowGroup, column, value);
+                ctx.postMessage({ id: req.id, ok: true, mightContain });
+                return;
+            }
             const source = req.url !== undefined ? { url: req.url } : new Uint8Array(req.bytes);
             const dump = await parser(source, req.name);
             ctx.postMessage({ id: req.id, ok: true, dump });

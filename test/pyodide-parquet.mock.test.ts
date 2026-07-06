@@ -12,9 +12,11 @@ function fakePyodide() {
     });
     const dump = vi.fn().mockResolvedValue('{"dumped":true}');
     const dumpUrl = vi.fn().mockResolvedValue('{"dumped":"url"}');
+    const probeBloom = vi.fn().mockResolvedValue(false);
     const globals = new Map<string, unknown>([
         ['_dump', dump],
         ['_dump_url', dumpUrl],
+        ['_probe_bloom', probeBloom],
     ]);
     return {
         loadPackage: vi.fn().mockResolvedValue(undefined),
@@ -25,6 +27,7 @@ function fakePyodide() {
         _install: install,
         _dump: dump,
         _dumpUrl: dumpUrl,
+        _probeBloom: probeBloom,
     };
 }
 
@@ -116,6 +119,17 @@ describe('createParquetParser (mocked pyodide)', () => {
             'parsing metadata — step 2 of 3',
             'scanning column chunks — step 3 of 3',
         ]);
+    });
+
+    it('routes bloom probes to the python probe with string values', async () => {
+        const py = fakePyodide();
+        py._probeBloom.mockResolvedValueOnce(true);
+        const parse = await boot(py);
+
+        // The value stays a string across the boundary (BigInt-safe for INT64);
+        // the python side coerces it per the column's physical type.
+        await expect(parse.probeBloom(2, 'id', '9007199254740993')).resolves.toBe(true);
+        expect(py._probeBloom).toHaveBeenCalledWith(2, 'id', '9007199254740993');
     });
 
     it('routes URL sources through the range-request path', async () => {

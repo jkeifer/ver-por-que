@@ -8,7 +8,8 @@
 import { formatBytes, formatNumber, formatOffset } from '../format';
 import { logicalTypeLabel, displayType } from '../domain/parquet-type-resolver';
 import { OP_LABEL, type Evaluation, type Predicate } from '../business/pruning';
-import { describe, type Kind, type SegmentNode } from '../business/segment-tree';
+import { describe, findSchemaLeaf, type Kind, type SegmentNode } from '../business/segment-tree';
+import { parsePredicateValue } from '../business/stat-values';
 import type { ByteSource } from '../js/byte-source';
 import type { AnyDump, ColumnStatistics, SchemaGroup, SchemaLeaf, SchemaRoot } from '../types';
 
@@ -30,6 +31,15 @@ const METADATA_ONLY_NOTE =
 
 const BYTES_UNAVAILABLE_NOTE =
     'Raw bytes are not available for this load — load the original .parquet to inspect bytes.';
+
+const BLOOM_PROBE_UNAVAILABLE_NOTE =
+    'Probing needs the filter bytes — load the original .parquet to test values.';
+
+/**
+ * Tests a value against a column chunk's bloom filter. Only raw-parquet loads
+ * have one (the worker holds the file); the value crosses as a string.
+ */
+export type BloomProbe = (rowGroup: number, column: string, value: string) => Promise<boolean>;
 
 /** Hex inspector window: page through the span 4 KB at a time. */
 const HEX_WINDOW = 4096;
@@ -630,6 +640,8 @@ export class InfoPanelManager {
     private container: HTMLElement;
     private infoPanel: HTMLElement;
     private byteSource: ByteSource | null;
+    /** Live bloom-filter probe; null for JSON-dump / metadata-only loads. */
+    private bloomProbe: BloomProbe | null;
     /** Active query-simulation result, or null when no predicate has run. */
     private query: QueryOverlay | null = null;
     /** Last shown node/dump, so a query run can refresh the open panel. */
@@ -639,10 +651,15 @@ export class InfoPanelManager {
     /** Invalidates in-flight hex reads when the selection or window changes. */
     private hexToken = 0;
 
-    constructor(container: HTMLElement, byteSource: ByteSource | null = null) {
+    constructor(
+        container: HTMLElement,
+        byteSource: ByteSource | null = null,
+        bloomProbe: BloomProbe | null = null
+    ) {
         this.container = container;
         this.container.innerHTML = '';
         this.byteSource = byteSource;
+        this.bloomProbe = bloomProbe;
         this.infoPanel = document.createElement('div');
         this.infoPanel.className = 'info-panel';
         this.infoPanel.style.display = 'none';
@@ -692,6 +709,14 @@ export class InfoPanelManager {
         if (query) {
             sections.push(query);
         }
+        if (node.kind === 'bloom_filter' && !this.bloomProbe) {
+            // No live worker file (JSON dump, metadata export, or restore):
+            // same degradation pattern as METADATA_ONLY_NOTE.
+            sections.push({
+                title: 'Probe a Value',
+                rows: [['Detail', BLOOM_PROBE_UNAVAILABLE_NOTE]],
+            });
+        }
         if (!this.byteSource) {
             // No original file bytes (JSON dump, metadata export, or restore):
             // same degradation pattern as METADATA_ONLY_NOTE.
@@ -701,10 +726,71 @@ export class InfoPanelManager {
         this.infoPanel.innerHTML = `<h3>${heading}</h3><div class="info-sections">${sections
             .map(s => this.renderSection(s))
             .join('')}</div>`;
+        if (node.kind === 'bloom_filter' && this.bloomProbe) {
+            this.infoPanel
+                .querySelector('.info-sections')!
+                .appendChild(this.buildBloomProbeSection(node, dump));
+        }
         if (this.byteSource) {
             this.hexOffset = node.start;
             this.infoPanel.querySelector('.info-sections')!.appendChild(this.buildHexSection(node));
         }
+    }
+
+    /** Interactive bloom-filter probe: type a value, ask the worker's filter. */
+    private buildBloomProbeSection(
+        node: Extract<SegmentNode, { kind: 'bloom_filter' }>,
+        dump: AnyDump
+    ): HTMLElement {
+        const leaf = findSchemaLeaf(dump.metadata.schema_root, node.path);
+        const section = document.createElement('div');
+        section.className = 'info-section regular-card bloom-probe-section';
+        section.innerHTML =
+            `<h5 class="info-section-title">Probe a Value</h5>` +
+            `<div class="bloom-probe-controls">` +
+            `<input type="text" class="bloom-probe-value" placeholder="${
+                leaf ? `${leaf.type} value` : 'value'
+            }">` +
+            `<button type="button" class="bloom-probe-btn">Probe</button>` +
+            `</div>` +
+            `<div class="bloom-probe-result"></div>`;
+        const input = section.querySelector<HTMLInputElement>('.bloom-probe-value')!;
+        const result = section.querySelector<HTMLElement>('.bloom-probe-result')!;
+        const run = (): void => {
+            // Same typed-input parsing as the query panel: reject input that
+            // isn't a valid value for the column's physical type.
+            const parsed = leaf ? parsePredicateValue(input.value, leaf) : undefined;
+            if (parsed === undefined) {
+                result.textContent = leaf
+                    ? `'${input.value}' is not a valid ${leaf.type} value`
+                    : `column '${node.path}' was not found in the schema`;
+                return;
+            }
+            result.textContent = 'Probing...';
+            this.bloomProbe!(node.rowGroup, node.path, String(parsed)).then(
+                might => {
+                    // Static strings only: nothing user-typed goes into innerHTML.
+                    result.innerHTML = might
+                        ? '<strong>maybe present</strong> — a bloom filter can only ever ' +
+                          'answer “definitely not” or “maybe”; this could be a false positive.'
+                        : '<strong>definitely not present</strong> — the filter has no false ' +
+                          'negatives, so a reader can safely skip this row group.';
+                },
+                (error: unknown) => {
+                    // Pyodide errors embed the python traceback; the last line
+                    // is the actual exception.
+                    const message = (error as Error).message.trim();
+                    result.textContent = `Probe failed: ${message.split('\n').pop()!}`;
+                }
+            );
+        };
+        section.querySelector('.bloom-probe-btn')!.addEventListener('click', run);
+        input.addEventListener('keypress', e => {
+            if ((e as KeyboardEvent).key === 'Enter') {
+                run();
+            }
+        });
+        return section;
     }
 
     /** Interactive hex inspector over the node's byte span. */
