@@ -104,8 +104,8 @@ npm run wheel   # downloads the wheels into static/vendor/ (gitignored), once
 - pyodide itself loads from a CDN, pinned to one version constant in
   `src/js/worker/worker.ts` (keep it equal to the `pyodide` devDep).
 - The parse never decompresses page content, so the lack of a wasm Snappy wheel
-  is irrelevant to the structure dump. Static assets under `static/` are copied
-  into the build (and served in dev) by `parcel-reporter-static-files-copy`.
+  is irrelevant to the structure dump. Static assets under `static/` are Vite's
+  `publicDir`: served at the site root in dev and copied into `dist/` on build.
 
 ### Pre-commit Hooks
 
@@ -273,7 +273,7 @@ Output goes to `dist/` directory with assets at `./` public URL.
 #### Development Server Won't Start
 
 ```bash
-rm -rf .parcel-cache
+rm -rf node_modules/.vite
 npm run dev
 ```
 
@@ -287,8 +287,8 @@ npm run format            # Format code
 #### Build Issues
 
 ```bash
-rm -rf .parcel-cache dist  # Clear caches
-npm run build              # Rebuild
+rm -rf node_modules/.vite dist  # Clear caches
+npm run build                   # Rebuild
 ```
 
 #### JSON File Won't Load

@@ -56,9 +56,9 @@ structure. Detection is by magic bytes (`PAR1`), so extension doesn't matter.
 ## Technology Stack
 
 - **TypeScript (ESM)**: Strict, framework-free modules bundled natively by
-  Parcel
-- **Parcel**: Fast, zero-configuration bundler for development and production
-  builds
+  Vite
+- **Vite**: Bundler and dev server; native ESM in dev, so the pyodide module
+  worker runs the same way in dev and production
 - **Vitest**: Unit tests for the domain/business logic
 - **Modern CSS**: Responsive design for an optimal viewing experience
 
