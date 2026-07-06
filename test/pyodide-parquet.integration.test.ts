@@ -111,6 +111,9 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
 
     let parse: ParquetParser;
     let data: Uint8Array;
+    const statuses: string[] = [];
+    const fractions: number[] = [];
+    const details: string[] = [];
 
     // Boot once (~12MB runtime) and reuse the parser across tests, like the app.
     beforeAll(async () => {
@@ -121,6 +124,9 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
             loadPyodide: loadPyodide as unknown as LoadPyodide,
             indexURL,
             loadWheels: () => Promise.resolve(loadWheels()),
+            onStatus: s => statuses.push(s),
+            onProgress: f => fractions.push(f),
+            onDetail: d => details.push(d),
         });
         data = new Uint8Array(await (await fetch(PARQUET_URL)).arrayBuffer());
     }, 180_000);
@@ -129,9 +135,29 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         vi.restoreAllMocks();
     });
 
-    it('parses raw bytes into a schema-valid dump', async () => {
+    it('parses raw bytes into a schema-valid dump, reporting phased progress', async () => {
+        const statusStart = statuses.length;
+        const fractionStart = fractions.length;
+        const detailStart = details.length;
+
         const dump = await parse(data, 'alltypes_plain.snappy.parquet');
         expectValidDump(dump);
+
+        // One title for the whole parse; the real por-que wheel drives all
+        // three progress phases in order on the detail line.
+        expect(statuses.slice(statusStart)).toEqual(['Parsing parquet...']);
+        const steps = details.slice(detailStart).filter(d => d.includes('step '));
+        expect(steps[0]).toMatch(/^downloading metadata \(\d+ KB\) — step 1 of 3$/);
+        expect(steps.slice(1)).toEqual([
+            'parsing metadata — step 2 of 3',
+            'scanning column chunks — step 3 of 3',
+        ]);
+        const seen = fractions.slice(fractionStart);
+        // Each phase contributes at least its 0 and its 1 (throttle permitting).
+        expect(seen.length).toBeGreaterThanOrEqual(6);
+        expect(seen[0]).toBe(0);
+        expect(seen[seen.length - 1]).toBe(1);
+        expect(seen.every(f => f >= 0 && f <= 1)).toBe(true);
     }, 60_000);
 
     it('parses a URL via HTTP range requests, never fetching the whole body', async () => {

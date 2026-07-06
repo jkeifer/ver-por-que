@@ -33,11 +33,18 @@ const WHEELS = [
     { filename: 'por_que-9.9.9-py3-none-any.whl', bytes: new Uint8Array([1, 2, 3]) },
 ];
 
-async function boot(py: ReturnType<typeof fakePyodide>, statuses: string[] = []) {
+async function boot(
+    py: ReturnType<typeof fakePyodide>,
+    statuses: string[] = [],
+    fractions: number[] = [],
+    details: string[] = []
+) {
     return createParquetParser({
         loadPyodide: (() => Promise.resolve(py)) as unknown as LoadPyodide,
         loadWheels: () => Promise.resolve(WHEELS),
         onStatus: s => statuses.push(s),
+        onProgress: f => fractions.push(f),
+        onDetail: d => details.push(d),
     });
 }
 
@@ -53,12 +60,10 @@ describe('createParquetParser (mocked pyodide)', () => {
         const parse = await boot(py, statuses);
 
         // No aiohttp: hctef.aio imports cleanly and uses pyfetch in pyodide.
-        expect(py.loadPackage).toHaveBeenCalledWith([
-            'micropip',
-            'pydantic',
-            'zstandard',
-            'brotli',
-        ]);
+        expect(py.loadPackage).toHaveBeenCalledWith(
+            ['micropip', 'pydantic', 'zstandard', 'brotli'],
+            { messageCallback: expect.any(Function) }
+        );
         // Wheels installed by exact filename, without resolving deps.
         for (const wheel of WHEELS) {
             expect(py.FS.writeFile).toHaveBeenCalledWith(`/tmp/${wheel.filename}`, wheel.bytes);
@@ -72,9 +77,45 @@ describe('createParquetParser (mocked pyodide)', () => {
         const input = new Uint8Array([0x50, 0x41, 0x52, 0x31]);
         const dump = await parse(input, 'x.parquet');
         expect(dump).toBe('{"dumped":true}');
-        expect(py._dump).toHaveBeenCalledWith(input, 'x.parquet');
+        expect(py._dump).toHaveBeenCalledWith(input, 'x.parquet', expect.any(Function));
         expect(py._dumpUrl).not.toHaveBeenCalled();
         expect(statuses).toContain('Parsing parquet...');
+    });
+
+    it('forwards phase-tagged progress, deduplicated by integer percent per phase', async () => {
+        const py = fakePyodide();
+        const statuses: string[] = [];
+        const fractions: number[] = [];
+        const details: string[] = [];
+        const parse = await boot(py, statuses, fractions, details);
+        await parse(new Uint8Array([1]), 'x.parquet');
+        const statusCount = statuses.length;
+
+        const onProgress = py._dump.mock.calls[0]?.[2] as (
+            phase: string,
+            done: number,
+            total: number
+        ) => void;
+        onProgress('metadata-read', 0, 100);
+        onProgress('metadata-read', 0, 100); // same phase, same percent: dropped
+        onProgress('metadata-read', 50, 100);
+        onProgress('metadata-read', 100, 100);
+        onProgress('metadata-parse', 0, 4); // new phase: 0% re-emitted
+        onProgress('metadata-parse', 2, 4);
+        onProgress('metadata-parse', 4, 4);
+        onProgress('column-chunks', 0, 8);
+        onProgress('column-chunks', 8, 8);
+        onProgress('column-chunks', 1, 0); // zero total: ignored
+        expect(fractions).toEqual([0, 0.5, 1, 0, 0.5, 1, 0, 1]);
+
+        // The modal title (status) never changes during the parse: phases are
+        // announced on the detail line, with overall step position.
+        expect(statuses.length).toBe(statusCount);
+        expect(details.slice(-3)).toEqual([
+            'downloading metadata (0 KB) — step 1 of 3',
+            'parsing metadata — step 2 of 3',
+            'scanning column chunks — step 3 of 3',
+        ]);
     });
 
     it('routes URL sources through the range-request path', async () => {
@@ -84,7 +125,10 @@ describe('createParquetParser (mocked pyodide)', () => {
 
         const dump = await parse({ url: 'https://example.com/f.parquet' }, 'f.parquet');
         expect(dump).toBe('{"dumped":"url"}');
-        expect(py._dumpUrl).toHaveBeenCalledWith('https://example.com/f.parquet');
+        expect(py._dumpUrl).toHaveBeenCalledWith(
+            'https://example.com/f.parquet',
+            expect.any(Function)
+        );
         expect(py._dump).not.toHaveBeenCalled();
         expect(statuses).toContain('Parsing parquet (HTTP range requests)...');
     });
@@ -97,6 +141,8 @@ describe('createParquetParser (mocked pyodide)', () => {
         const body = new Uint8Array([0x50, 0x41, 0x52, 0x31]);
         const fetchMock = vi.fn().mockResolvedValue({
             ok: true,
+            headers: new Headers(),
+            body: null,
             arrayBuffer: () => Promise.resolve(body.buffer),
         });
         vi.stubGlobal('fetch', fetchMock);
@@ -108,7 +154,7 @@ describe('createParquetParser (mocked pyodide)', () => {
 
         expect(dump).toBe('{"dumped":true}');
         expect(fetchMock).toHaveBeenCalledWith('https://example.com/f.parquet');
-        expect(py._dump).toHaveBeenCalledWith(body, 'f.parquet');
+        expect(py._dump).toHaveBeenCalledWith(body, 'f.parquet', expect.any(Function));
         expect(warn).toHaveBeenCalledWith(
             expect.stringContaining('Range requests unavailable'),
             expect.anything()

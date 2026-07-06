@@ -14,7 +14,11 @@ export class ParquetWorkerClient {
     private nextId = 1;
     private readonly pending = new Map<number, Pending>();
 
-    constructor(private readonly onStatus: (status: string) => void) {}
+    constructor(
+        private readonly onStatus: (status: string) => void,
+        private readonly onDetail: (detail: string) => void = () => {},
+        private readonly onProgress: (fraction: number) => void = () => {}
+    ) {}
 
     private ensureWorker(): Worker {
         if (!this.worker) {
@@ -24,13 +28,34 @@ export class ParquetWorkerClient {
             this.worker.addEventListener('message', (event: MessageEvent<WorkerResponse>) =>
                 this.handle(event.data)
             );
+            // A worker that dies (script load failure, uncaught boot error)
+            // never answers; without this, every pending parse hangs forever.
+            this.worker.addEventListener('error', (event: ErrorEvent) => this.fail(event));
         }
         return this.worker;
     }
 
+    private fail(event: ErrorEvent): void {
+        const error = new Error(event.message || 'parquet worker crashed');
+        for (const { reject } of this.pending.values()) {
+            reject(error);
+        }
+        this.pending.clear();
+        this.worker?.terminate();
+        this.worker = null;
+    }
+
     private handle(msg: WorkerResponse): void {
-        if ('status' in msg) {
+        if ('status' in msg && msg.status !== undefined) {
             this.onStatus(msg.status);
+            return;
+        }
+        if ('detail' in msg && msg.detail !== undefined) {
+            this.onDetail(msg.detail);
+            return;
+        }
+        if ('progress' in msg && msg.progress !== undefined) {
+            this.onProgress(msg.progress);
             return;
         }
         const entry = this.pending.get(msg.id);
@@ -59,17 +84,28 @@ export class ParquetWorkerClient {
         return this.request({ name: url, url });
     }
 
+    /**
+     * Starts booting pyodide in the background (fire-and-forget) so the
+     * runtime is warm -- or already up -- before the first parse.
+     */
+    warmUp(): void {
+        this.ensureWorker().postMessage({ warmup: true, manifestUrl: manifestUrl() });
+    }
+
     private request(
         payload: { name: string } & ({ bytes: ArrayBuffer } | { url: string }),
         transfer: Transferable[] = []
     ): Promise<string> {
         const worker = this.ensureWorker();
         const id = this.nextId++;
-        const manifestUrl = new URL('vendor/manifest.json', document.baseURI).href;
         return new Promise<string>((resolve, reject) => {
             this.pending.set(id, { resolve, reject });
-            const req = { id, manifestUrl, ...payload } as ParseRequest;
+            const req = { id, manifestUrl: manifestUrl(), ...payload } as ParseRequest;
             worker.postMessage(req, transfer);
         });
     }
+}
+
+function manifestUrl(): string {
+    return new URL('vendor/manifest.json', document.baseURI).href;
 }

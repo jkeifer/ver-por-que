@@ -15,6 +15,8 @@
 // npm pyodide package (it loads the runtime from the CDN instead).
 import type { PyodideInterface } from 'pyodide';
 
+import { fetchBytes } from '../fetch-progress';
+
 export type LoadPyodide = (options?: { indexURL?: string }) => Promise<PyodideInterface>;
 
 export interface WheelAsset {
@@ -30,6 +32,10 @@ export interface ParquetParserDeps {
     indexURL?: string;
     /** Surfaces coarse boot/parse progress to the UI. */
     onStatus?: (status: string) => void;
+    /** Surfaces fine-grained sub-steps under the current status. */
+    onDetail?: (detail: string) => void;
+    /** Surfaces fractional (0..1) download progress where it's measurable. */
+    onProgress?: (fraction: number) => void;
 }
 
 /** A parse input: raw parquet bytes, or a remote URL read via range requests. */
@@ -42,17 +48,24 @@ const PARSE_PY = `
 import io
 from por_que import AsyncHttpFile, ParquetFile
 
-async def _dump(data, name):
-    pf = await ParquetFile.from_reader(io.BytesIO(bytes(data.to_py())), name)
+def _wrap_progress(progress):
+    # progress is a pyodide proxy of the JS callback; coerce the StrEnum phase
+    # and ints before crossing back into JS.
+    return lambda phase, done, total: progress(str(phase), int(done), int(total))
+
+async def _dump(data, name, progress):
+    pf = await ParquetFile.from_reader(
+        io.BytesIO(bytes(data.to_py())), name, progress=_wrap_progress(progress)
+    )
     return pf.to_json()
 
-async def _dump_url(url):
+async def _dump_url(url, progress):
     # AsyncHttpFile auto-selects hctef's pyfetch transport under emscripten
     # (browser fetch; node's global fetch under vitest) and reads via HTTP
     # range requests through a block cache, so only the byte ranges the
     # parser touches are downloaded.
     async with AsyncHttpFile(url) as f:
-        pf = await ParquetFile.from_reader(f, url)
+        pf = await ParquetFile.from_reader(f, url, progress=_wrap_progress(progress))
         return pf.to_json()
 `;
 
@@ -73,14 +86,20 @@ function isHctefNetworkError(error: unknown): boolean {
  */
 export async function createParquetParser(deps: ParquetParserDeps): Promise<ParquetParser> {
     const status = deps.onStatus ?? (() => {});
+    const detail = deps.onDetail ?? (() => {});
+    const progress = deps.onProgress ?? (() => {});
 
     status('Loading Python runtime...');
+    detail('downloading the pyodide runtime (~12 MB, cached by the browser)');
     const pyodide = await deps.loadPyodide(deps.indexURL ? { indexURL: deps.indexURL } : undefined);
 
     status('Installing dependencies...');
     // Compiled wheels bundled with the pyodide distribution. No aiohttp:
     // hctef.aio now imports without it and uses its pyfetch transport here.
-    await pyodide.loadPackage(['micropip', 'pydantic', 'zstandard', 'brotli']);
+    // messageCallback streams pyodide's per-package "Loading x" lines to the UI.
+    await pyodide.loadPackage(['micropip', 'pydantic', 'zstandard', 'brotli'], {
+        messageCallback: detail,
+    });
 
     // micropip's PyProxy is untyped; keep the surface we use narrow.
     const micropip = pyodide.pyimport('micropip') as {
@@ -98,21 +117,77 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
     // The wheels are pinned PyPI releases staged as static assets by
     // scripts/fetch-wheels.py; bump versions there.
     for (const wheel of await deps.loadWheels()) {
+        detail(`installing ${wheel.filename}`);
         const wheelPath = `/tmp/${wheel.filename}`;
         pyodide.FS.writeFile(wheelPath, wheel.bytes);
         await micropip.install.callKwargs(`emfs:${wheelPath}`, { deps: false });
     }
 
+    detail('importing por_que');
     await pyodide.runPythonAsync(PARSE_PY);
+    type PyProgress = (phase: string, done: number, total: number) => void;
     const dump = pyodide.globals.get('_dump') as (
         data: Uint8Array,
-        name: string
+        name: string,
+        progress: PyProgress
     ) => Promise<string>;
-    const dumpUrl = pyodide.globals.get('_dump_url') as (url: string) => Promise<string>;
+    const dumpUrl = pyodide.globals.get('_dump_url') as (
+        url: string,
+        progress: PyProgress
+    ) => Promise<string>;
+
+    // por-que's parse phases, in emission order, with human labels. The parse
+    // is one process, so the status (modal title) stays put; each phase is
+    // announced on the detail line with "step n of N", and the bar restarts
+    // at that phase's own honest denominator. Unknown phases from a newer
+    // por-que fall through to the raw phase string, uncounted.
+    const PHASES = ['metadata-read', 'metadata-parse', 'column-chunks'] as const;
+    const PHASE_LABELS: Record<string, string> = {
+        'metadata-read': 'downloading metadata',
+        'metadata-parse': 'parsing metadata',
+        'column-chunks': 'scanning column chunks',
+    };
+    const formatSize = (bytes: number): string =>
+        bytes < 1_000_000
+            ? `${Math.round(bytes / 1000)} KB`
+            : `${(bytes / 1_000_000).toFixed(1)} MB`;
+    const phaseDetail = (phase: string, totalBytes: number): string => {
+        const step = (PHASES as readonly string[]).indexOf(phase);
+        let label = PHASE_LABELS[phase] ?? phase;
+        if (phase === 'metadata-read') {
+            label += ` (${formatSize(totalBytes)})`;
+        }
+        return step === -1 ? label : `${label} — step ${step + 1} of ${PHASES.length}`;
+    };
+
+    // Per-parse throttle: each Python->JS crossing is a proxy call plus a
+    // postMessage, and parses can have thousands of row groups. Only forward
+    // when the integer percentage changes within a phase. A phase change
+    // updates the detail line and re-arms the throttle.
+    const parseProgress = (): PyProgress => {
+        let lastPhase: string | undefined;
+        let lastPercent = -1;
+        return (phase, done, total) => {
+            if (total <= 0) {
+                return;
+            }
+            if (phase !== lastPhase) {
+                lastPhase = phase;
+                lastPercent = -1;
+                detail(phaseDetail(phase, total));
+            }
+            const percent = Math.floor((done / total) * 100);
+            if (percent !== lastPercent) {
+                lastPercent = percent;
+                progress(done / total);
+            }
+        };
+    };
 
     const parseBytes = async (bytes: Uint8Array, name: string): Promise<string> => {
         status('Parsing parquet...');
-        return dump(bytes, name);
+        detail(`${name} (${(bytes.length / 1_000_000).toFixed(1)} MB)`);
+        return dump(bytes, name, parseProgress());
     };
 
     return async (source: ParquetSource, name: string): Promise<string> => {
@@ -121,8 +196,9 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         }
         const { url } = source;
         status('Parsing parquet (HTTP range requests)...');
+        detail(url);
         try {
-            return await dumpUrl(url);
+            return await dumpUrl(url, parseProgress());
         } catch (error) {
             if (!isHctefNetworkError(error)) {
                 throw error;
@@ -137,13 +213,8 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
                 error
             );
             status('Range requests unavailable; downloading whole file...');
-            const response = await fetch(url);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`, {
-                    cause: error,
-                });
-            }
-            return parseBytes(new Uint8Array(await response.arrayBuffer()), name);
+            detail(url);
+            return parseBytes(await fetchBytes(url, progress), name);
         }
     };
 }
