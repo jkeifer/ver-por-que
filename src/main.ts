@@ -3,7 +3,7 @@
  */
 import { InfoPanelManager } from './components/info-panel-manager';
 import { SvgByteVisualizer } from './components/svg-byte-visualizer';
-import { isParquet } from './detect';
+import { isParquet, isParquetURL } from './detect';
 import { validateFile, validateMetadata, type ValidationError } from './generated/validate';
 import { ParquetWorkerClient } from './js/worker/client';
 import type { AnyDump } from './types';
@@ -149,9 +149,20 @@ class ParquetExplorer {
     /** Load a remote dump JSON or raw .parquet into the app. */
     async loadURL(url: string): Promise<void> {
         this.showLoadingScreen();
-        this.updateLoadingStatus('Fetching remote file...');
 
         try {
+            // A .parquet URL skips the whole-file download: the worker reads
+            // it in place via HTTP range requests, falling back to a full
+            // download when the server (or CORS) doesn't allow ranges. Other
+            // URLs (dump JSON, or parquet without the extension) are fetched
+            // whole and sniffed as before.
+            if (isParquetURL(url)) {
+                const dump = await this.parseParquetURL(url);
+                await this.parseJSON(dump, url);
+                return;
+            }
+
+            this.updateLoadingStatus('Fetching remote file...');
             const response = await fetch(url);
             if (!response.ok) {
                 throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -182,13 +193,22 @@ class ParquetExplorer {
 
     /** Parse raw parquet bytes in the browser via the pyodide worker. */
     private parseParquet(buffer: ArrayBuffer, source: string): Promise<string> {
+        return this.ensureWorkerClient().parse(buffer, source);
+    }
+
+    /** Parse a remote parquet URL via the pyodide worker (range requests). */
+    private parseParquetURL(url: string): Promise<string> {
+        return this.ensureWorkerClient().parseURL(url);
+    }
+
+    private ensureWorkerClient(): ParquetWorkerClient {
         if (!this.workerClient) {
             this.workerClient = new ParquetWorkerClient(status => this.updateLoadingStatus(status));
         }
         // First parse downloads the ~12MB python runtime; the worker emits
         // status events that updateLoadingStatus surfaces.
         this.updateLoadingStatus('Loading Python runtime...');
-        return this.workerClient.parse(buffer, source);
+        return this.workerClient;
     }
 
     private async parseJSON(jsonText: string, source: string): Promise<void> {

@@ -44,6 +44,11 @@ structure. Detection is by magic bytes (`PAR1`), so extension doesn't matter.
 
 - The first parquet parse downloads the ~12MB Python runtime from a CDN (cached
   afterward); the JSON path pays none of that cost.
+- A remote `.parquet` URL is read in place via HTTP range requests — only the
+  byte ranges the parser touches are downloaded. This needs the server to
+  support `Range` and (cross-origin) to expose `Content-Range` via
+  `Access-Control-Expose-Headers`; otherwise the app warns in the console and
+  falls back to downloading the whole file.
 - Page **content** decompression is not needed for the structure dump, so the
   missing wasm build of Snappy doesn't matter — a SNAPPY-compressed file dumps
   fine. (This only affects future value-reconstruction features, not structure.)

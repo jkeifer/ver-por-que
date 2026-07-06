@@ -83,22 +83,26 @@ schema change.
 ### In-browser parquet parsing
 
 Dropping a raw `.parquet` file runs por-que in the browser via
-[pyodide](https://pyodide.org/) in a Web Worker (`src/js/worker/`). The worker
-needs a por-que wheel as a static asset:
+[pyodide](https://pyodide.org/) in a Web Worker (`src/js/worker/`). A remote
+`.parquet` URL is parsed the same way, but in place via HTTP range requests
+(hctef's `AsyncHttpFile`, pyfetch transport) instead of a whole-file download,
+falling back to a full download when the server (or CORS) doesn't allow
+ranges. The worker needs por-que and hctef wheels as static assets:
 
 ```bash
-npm run wheel   # builds the wheel into static/vendor/ (gitignored), once
+npm run wheel   # builds the wheels into static/vendor/ (gitignored), once
 ```
 
-- The wheel is built from a [por-que](https://github.com/jkeifer/por-que)
-  checkout (`uv build --wheel`) by
-  [`scripts/build-wheel.py`](./scripts/build-wheel.py). Point it at a checkout
-  with `POR_QUE_CHECKOUT=/path/to/por-que`, or place one at `../por-que`. Until
-  por-que ships the current dump format on PyPI, a local checkout is required;
-  after that this becomes a pinned-wheel download.
-- Without the wheel, the JSON path still works and the pyodide integration test
-  skips. You only need `npm run wheel` to exercise browser parquet parsing (dev
-  or the integration test).
+- The wheels are built from [por-que](https://github.com/jkeifer/por-que) and
+  [hctef](https://github.com/jkeifer/hctef) checkouts (`uv build --wheel`) by
+  [`scripts/build-wheel.py`](./scripts/build-wheel.py). Point it at checkouts
+  with `POR_QUE_CHECKOUT=/path/to/por-que` and `HCTEF_CHECKOUT=/path/to/hctef`,
+  or place them at `../por-que` and `../hctef`. Until por-que ships the current
+  dump format and hctef ships the pyfetch transport on PyPI, local checkouts
+  are required; after that this becomes a pinned-wheel download.
+- Without the wheels, the JSON path still works and the pyodide integration
+  test skips. You only need `npm run wheel` to exercise browser parquet parsing
+  (dev or the integration test).
 - pyodide itself loads from a CDN, pinned to one version constant in
   `src/js/worker/worker.ts` (keep it equal to the `pyodide` devDep).
 - The parse never decompresses page content, so the lack of a wasm Snappy wheel
@@ -304,11 +308,13 @@ children, and correct `kind` coverage. New logic in those layers should come
 with a focused test.
 
 `test/pyodide-parquet.integration.test.ts` is the end-to-end check for
-in-browser parsing: it boots real pyodide, installs the locally-built wheel,
-parses a real parquet file, and asserts the dump passes the validator. It skips
-(with a message) when the wheel is absent, so run `npm run wheel` first — CI
-does. It downloads a parquet fixture from `apache/parquet-testing` pinned to the
-same ref as the python fixtures, and has a long timeout.
+in-browser parsing: it boots real pyodide, installs the locally-built wheels,
+parses a real parquet file — from bytes, and from a URL served by a local
+range-supporting HTTP server (plus the no-range fallback) — and asserts the
+dumps pass the validator. It skips (with a message) when the wheels are absent,
+so run `npm run wheel` first — CI does. It downloads a parquet fixture from
+`apache/parquet-testing` pinned to the same ref as the python fixtures, and has
+a long timeout.
 
 Welcome additions:
 

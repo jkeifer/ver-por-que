@@ -11,3 +11,17 @@ export function isParquet(head: Uint8Array, name?: string): boolean {
     }
     return name !== undefined && name.toLowerCase().endsWith('.parquet');
 }
+
+/**
+ * Detects a remote parquet file by its URL path (query/hash ignored). No bytes
+ * are available before deciding whether to range-read the file, so this is
+ * extension-only: a parquet URL without the extension just takes the
+ * download-and-sniff path instead.
+ */
+export function isParquetURL(url: string): boolean {
+    try {
+        return isParquet(new Uint8Array(), new URL(url).pathname);
+    } catch {
+        return false;
+    }
+}
