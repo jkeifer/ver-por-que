@@ -78,6 +78,50 @@ test('permalink hash selects the node when data arrives', async ({ page }) => {
     expect(new URL(page.url()).hash).toBe('');
 });
 
+test('query simulation dims pruned segments and reports a summary', async ({ page }) => {
+    await loadFixture(page, 'data_index_bloom_encoding_stats_expected.json');
+    const viz = page.locator('#canvas-container svg');
+    await expect(viz.locator('rect.segment')).not.toHaveCount(0);
+
+    // String > 'zzz' prunes the only row group and its only page.
+    await page.locator('#query-column').selectOption('String');
+    await page.locator('#query-op').selectOption('gt');
+    await page.locator('#query-value').fill('zzz');
+    await page.locator('#query-run-btn').click();
+
+    const summary = page.locator('#query-summary');
+    await expect(summary).toHaveText('would read 0 of 1 row group, 0 of 1 page');
+    await expect(page).toHaveURL(/q=/);
+
+    // The row-group rect renders inside the data region drill-down — and
+    // arrives already dimmed.
+    await viz.locator('rect.segment[data-segment-id="data_region"]').click();
+    const rowGroup = viz.locator('rect.segment[data-segment-id="rg_0"]');
+    await expect(rowGroup).toHaveClass(/segment-dimmed/);
+
+    // The evaluated node's info panel explains the decision.
+    await rowGroup.click();
+    const panel = page.locator('#info-panel-container');
+    await expect(panel).toContainText('Query Pruning');
+    await expect(panel).toContainText("max value 'today' < query value 'zzz'");
+
+    // The predicate round-trips through the permalink (IndexedDB restore).
+    await page.reload();
+    await expect(summary).toHaveText('would read 0 of 1 row group, 0 of 1 page');
+
+    // String = 'Hello' keeps the row group.
+    await page.locator('#query-value').fill('Hello');
+    await page.locator('#query-op').selectOption('eq');
+    await page.locator('#query-run-btn').click();
+    await expect(summary).toHaveText('would read 1 of 1 row group, 1 of 1 page');
+
+    // Clear drops the overlay, the summary, and the hash param.
+    await page.locator('#query-clear-btn').click();
+    await expect(summary).toHaveText('');
+    await expect(page.locator('rect.segment-dimmed')).toHaveCount(0);
+    await expect(page).not.toHaveURL(/q=/);
+});
+
 test('reset returns to the drop zone', async ({ page }) => {
     await loadFixture(page, 'metadata-export.json');
     await page.locator('#reset-btn').click();

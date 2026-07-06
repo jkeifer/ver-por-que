@@ -1180,6 +1180,41 @@ code {
     cursor: pointer;
 }
 
+/* Query simulation: segments a reader would prune render dimmed. */
+.segment.segment-dimmed {
+    opacity: 0.2;
+}
+
+/* Query simulation bar */
+.query-bar {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+}
+
+.query-bar label {
+    font-weight: 500;
+    color: var(--text-primary);
+}
+
+.query-bar select,
+#query-value {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border: 1px solid var(--border-medium);
+    border-radius: var(--border-radius);
+    font-family: var(--font-mono);
+    font-size: 0.85rem;
+    background: var(--bg-primary);
+    color: var(--text-primary);
+}
+
+.query-summary {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
 /* Generic segment hover and selection (fallback) */
 /*
 .segment-hover {

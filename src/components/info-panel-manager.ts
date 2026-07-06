@@ -7,6 +7,7 @@
  */
 import { formatBytes, formatNumber, formatOffset } from '../format';
 import { logicalTypeLabel, displayType } from '../domain/parquet-type-resolver';
+import { OP_LABEL, type Evaluation, type Predicate } from '../business/pruning';
 import { describe, type Kind, type SegmentNode } from '../business/segment-tree';
 import type { ByteSource } from '../js/byte-source';
 import type { AnyDump, ColumnStatistics, SchemaGroup, SchemaLeaf, SchemaRoot } from '../types';
@@ -619,10 +620,20 @@ const PANELS: Registry = {
 /** Kinds that have a panel handler (exhaustiveness checks). */
 export const PANEL_KINDS = new Set<Kind>(Object.keys(PANELS) as Kind[]);
 
+/** A run query-simulation result, overlaid on the panels of evaluated nodes. */
+export interface QueryOverlay {
+    predicate: Predicate;
+    evaluation: Evaluation;
+}
+
 export class InfoPanelManager {
     private container: HTMLElement;
     private infoPanel: HTMLElement;
     private byteSource: ByteSource | null;
+    /** Active query-simulation result, or null when no predicate has run. */
+    private query: QueryOverlay | null = null;
+    /** Last shown node/dump, so a query run can refresh the open panel. */
+    private current: { node: SegmentNode; dump: AnyDump } | null = null;
     /** Hex window start (absolute file offset) for the currently shown node. */
     private hexOffset = 0;
     /** Invalidates in-flight hex reads when the selection or window changes. */
@@ -638,13 +649,51 @@ export class InfoPanelManager {
         this.container.appendChild(this.infoPanel);
     }
 
+    /** Set (or clear) the query overlay and refresh the open panel. */
+    setQuery(query: QueryOverlay | null): void {
+        this.query = query;
+        if (this.current) {
+            this.show(this.current.node, this.current.dump);
+        }
+    }
+
+    /** The query decision for this node, if it was evaluated. */
+    private querySection(node: SegmentNode): Section | null {
+        if (!this.query) {
+            return null;
+        }
+        const { predicate, evaluation } = this.query;
+        const decision =
+            node.kind === 'row_group'
+                ? evaluation.rowGroups.get(node.index)
+                : evaluation.pages.get(node.id);
+        if (!decision) {
+            return null;
+        }
+        return {
+            title: 'Query Pruning',
+            rows: [
+                [
+                    'Predicate',
+                    escapeHtml(`${predicate.column} ${OP_LABEL[predicate.op]} ${predicate.value}`),
+                ],
+                ['Decision', escapeHtml(decision.reason)],
+            ],
+        };
+    }
+
     /** Render the panel for a segment node (the root node renders the overview). */
     show(node: SegmentNode, dump: AnyDump): void {
+        this.current = { node, dump };
         // ponytail: registry keys are correlated with node.kind by construction;
         // the mapped type can't prove that at the call site, so widen once here.
         const handler = PANELS[node.kind] as (n: SegmentNode, d: AnyDump) => Section[];
         const heading = node.kind === 'file' ? 'File Overview' : describe(node);
         const sections = handler(node, dump);
+        const query = this.querySection(node);
+        if (query) {
+            sections.push(query);
+        }
         if (!this.byteSource) {
             // No original file bytes (JSON dump, metadata export, or restore):
             // same degradation pattern as METADATA_ONLY_NOTE.
