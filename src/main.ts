@@ -8,6 +8,8 @@ import {
 } from './components/info-panel-manager';
 import { QueryPanel } from './components/query-panel';
 import { SvgByteVisualizer } from './components/svg-byte-visualizer';
+import { TreemapVisualizer } from './components/treemap-visualizer';
+import type { Visualizer } from './components/visualizer';
 import { isParquet, isParquetURL } from './detect';
 import { fromBuffer, fromURL, type ByteSource } from './js/byte-source';
 import { validateFile, validateMetadata, type ValidationError } from './generated/validate';
@@ -18,6 +20,9 @@ import { ParquetWorkerClient } from './js/worker/client';
 import type { AnyDump } from './types';
 
 const DB_NAME = 'ParquetExplorerDB';
+
+/** The two renderers over the same segment tree. 'bytes' is the default. */
+type Lens = 'bytes' | 'treemap';
 
 interface StoredFile {
     id: string;
@@ -39,8 +44,13 @@ class ParquetExplorer {
     // bloom probe.
     private valuePreview: ValuePreview | null = null;
     private infoPanelManager: InfoPanelManager | null = null;
-    private fileStructureViz: SvgByteVisualizer | null = null;
+    private fileStructureViz: Visualizer | null = null;
     private queryPanel: QueryPanel | null = null;
+    // Lens + overlay state that must survive a lens switch: the new renderer
+    // starts blank, so main.ts re-selects the node and re-applies the dimming.
+    private lens: Lens = 'bytes';
+    private selectedNodeId: string | null = null;
+    private dimmedIds = new Set<string>();
     // Lazily created on the first raw-parquet load so the JSON path never boots
     // pyodide.
     private workerClient: ParquetWorkerClient | null = null;
@@ -110,6 +120,13 @@ class ParquetExplorer {
                 }
             }
         });
+
+        document
+            .getElementById('lens-bytes')!
+            .addEventListener('click', () => this.setLens('bytes'));
+        document
+            .getElementById('lens-treemap')!
+            .addEventListener('click', () => this.setLens('treemap'));
 
         document.getElementById('reset-btn')!.addEventListener('click', () => this.handleReset());
         document
@@ -377,25 +394,28 @@ class ParquetExplorer {
                 throw new Error('Required containers not found');
             }
 
-            // Tear down any previous visualizer so its listeners/tooltip don't leak.
-            this.fileStructureViz?.destroy();
-
             this.infoPanelManager = new InfoPanelManager(
                 infoPanelContainer,
                 this.byteSource,
                 this.bloomProbe,
                 this.valuePreview
             );
-            this.fileStructureViz = new SvgByteVisualizer(canvasContainer, this.infoPanelManager);
-            this.fileStructureViz.onSelectionChange = id => this.syncHashNode(id);
-            this.fileStructureViz.initWithData(data);
+
+            // A new dump invalidates the previous dump's selection and dimming.
+            this.selectedNodeId = null;
+            this.dimmedIds = new Set();
+
+            // Permalink: `#lens=treemap` opens straight into the treemap
+            // (only the non-default lens is ever written to the hash).
+            this.lens = getHashParam(location.hash, 'lens') === 'treemap' ? 'treemap' : 'bytes';
+            this.createVisualizer(data);
 
             // Permalink: `#node=<id>` selects that node in whatever dump just
             // loaded (file drop, URL, or IndexedDB restore). Ids that don't
             // resolve in this tree are silently ignored.
             const nodeId = getHashParam(location.hash, 'node');
             if (nodeId) {
-                this.fileStructureViz.selectNodeById(nodeId);
+                this.fileStructureViz!.selectNodeById(nodeId);
             }
 
             // Query simulation section (matrix + builder) below the structure.
@@ -418,9 +438,61 @@ class ParquetExplorer {
         }
     }
 
+    /**
+     * (Re)build the active lens's visualizer in the canvas container. The
+     * previous one (if any) is destroyed first so its listeners don't leak.
+     */
+    private createVisualizer(data: AnyDump): void {
+        const canvasContainer = document.getElementById('canvas-container')!;
+        this.fileStructureViz?.destroy();
+        this.fileStructureViz =
+            this.lens === 'treemap'
+                ? new TreemapVisualizer(canvasContainer, this.infoPanelManager)
+                : new SvgByteVisualizer(canvasContainer, this.infoPanelManager);
+        this.fileStructureViz.onSelectionChange = id => {
+            this.selectedNodeId = id;
+            this.syncHashNode(id);
+        };
+        this.fileStructureViz.initWithData(data);
+        this.updateLensButtons();
+    }
+
+    /**
+     * Switch to the other lens: same tree, new renderer. The current selection
+     * is re-selected by id and any active query dimming re-applied, so the
+     * views stay interchangeable mid-exploration.
+     */
+    private setLens(lens: Lens): void {
+        if (lens === this.lens || !this.parquetData) {
+            return;
+        }
+        this.lens = lens;
+        this.createVisualizer(this.parquetData);
+        if (this.selectedNodeId) {
+            this.fileStructureViz!.selectNodeById(this.selectedNodeId);
+        }
+        this.fileStructureViz!.setDimmed(this.dimmedIds);
+        this.syncHashLens();
+    }
+
+    private updateLensButtons(): void {
+        document
+            .getElementById('lens-bytes')
+            ?.classList.toggle('lens-active', this.lens === 'bytes');
+        document
+            .getElementById('lens-treemap')
+            ?.classList.toggle('lens-active', this.lens === 'treemap');
+    }
+
     /** Mirror the selected node into the permalink hash (`?url=` untouched). */
     private syncHashNode(id: string | null): void {
         const hash = setHashParam(location.hash, 'node', id);
+        history.replaceState(null, '', location.pathname + location.search + hash);
+    }
+
+    /** Mirror the active lens into the permalink hash (default lens = no param). */
+    private syncHashLens(): void {
+        const hash = setHashParam(location.hash, 'lens', this.lens === 'bytes' ? null : this.lens);
         history.replaceState(null, '', location.pathname + location.search + hash);
     }
 
@@ -445,6 +517,7 @@ class ParquetExplorer {
                 dimmed.add(nodeId);
             }
         });
+        this.dimmedIds = dimmed;
         this.fileStructureViz?.setDimmed(dimmed);
         this.infoPanelManager?.setQuery({ predicates: state.predicates, evaluation });
         this.syncHashQuery(state);
@@ -452,7 +525,8 @@ class ParquetExplorer {
 
     /** Drop the query overlay and the `q` permalink param. */
     private clearQueryOverlay(): void {
-        this.fileStructureViz?.setDimmed(new Set());
+        this.dimmedIds = new Set();
+        this.fileStructureViz?.setDimmed(this.dimmedIds);
         this.infoPanelManager?.setQuery(null);
         this.syncHashQuery(null);
     }
@@ -462,7 +536,11 @@ class ParquetExplorer {
         this.byteSource = null;
         this.bloomProbe = null;
         this.valuePreview = null;
-        // A permalink is meaningless with no dump loaded (query included).
+        this.lens = 'bytes';
+        this.selectedNodeId = null;
+        this.dimmedIds = new Set();
+        this.updateLensButtons();
+        // A permalink is meaningless with no dump loaded (lens and query included).
         history.replaceState(null, '', location.pathname + location.search);
         await this.clearStorage();
         this.clearFileStructureContent();

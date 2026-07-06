@@ -12,6 +12,7 @@ import {
 import { project, describe, findPath, type SegmentNode } from '../business/segment-tree';
 import type { AnyDump } from '../types';
 import type { InfoPanelManager } from './info-panel-manager';
+import type { Visualizer } from './visualizer';
 
 type FunnelElement = SVGElement & { labelElement?: SVGElement | null };
 type SegmentRect = SVGElement & { labelElement?: SVGElement | null };
@@ -28,7 +29,7 @@ interface Level {
 
 const ANIM_MS = 300;
 
-export class SvgByteVisualizer {
+export class SvgByteVisualizer implements Visualizer {
     private container: HTMLElement;
     private svg!: SVGSVGElement;
     private config: LayoutConfig;
