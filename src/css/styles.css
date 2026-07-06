@@ -1315,26 +1315,11 @@ code {
     margin-right: var(--spacing-xs);
 }
 
-.query-builder {
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--spacing-sm);
-}
-
-.query-columns {
-    border: 1px solid var(--border-light);
-    border-radius: var(--border-radius);
-    padding: var(--spacing-sm) var(--spacing-md);
-    width: 100%;
-    max-width: 60rem;
-}
-
-.query-columns legend {
-    font-weight: 500;
-    color: var(--text-primary);
-    font-size: 0.85rem;
-    padding: 0 var(--spacing-xs);
+/* The summary and builder controls are .info-section cards — the same
+ * metadata-card idiom the info panel uses; .info-sections provides the
+ * wrapping flex layout. */
+.query-cards {
+    margin-top: var(--spacing-sm);
 }
 
 .query-columns-actions {
@@ -1368,14 +1353,14 @@ code {
     text-overflow: ellipsis;
 }
 
-.query-predicates {
+.query-predicates-actions {
     display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    gap: var(--spacing-xs);
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-xs);
 }
 
 .query-predicates-note {
+    display: block;
     font-size: 0.8rem;
     color: var(--text-muted);
 }
@@ -1393,6 +1378,18 @@ code {
     color: var(--text-muted);
 }
 
+/* Muted per-row hint for a predicate that can't evaluate yet — informational
+ * only, never an error state while typing. */
+.qp-hint {
+    font-size: 0.8rem;
+    font-style: italic;
+    color: var(--text-muted);
+}
+
+.qp-hint:empty {
+    display: none;
+}
+
 .query-predicate select,
 .query-predicate input {
     padding: var(--spacing-xs) var(--spacing-sm);
@@ -1404,16 +1401,10 @@ code {
     color: var(--text-primary);
 }
 
-.query-actions {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: var(--spacing-sm);
-}
-
-.query-summary {
-    font-size: 0.85rem;
-    color: var(--text-secondary);
+.query-summary-note {
+    margin: var(--spacing-sm) 0 0;
+    font-size: 0.8rem;
+    color: var(--text-muted);
 }
 
 /* Loaded-file header actions (download dump + reset) */

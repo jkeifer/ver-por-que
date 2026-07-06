@@ -420,12 +420,12 @@ class ParquetExplorer {
 
             // Query simulation section (matrix + builder) below the structure.
             this.queryPanel = new QueryPanel(document.getElementById('query-panel')!, data, {
-                onRun: (state, evaluation) => this.applyQueryRun(state, evaluation),
+                onUpdate: (state, evaluation) => this.applyQueryRun(state, evaluation),
                 onClear: () => this.clearQueryOverlay(),
             });
 
-            // Permalink: `#q=<json {predicates, columns}>` re-runs the query
-            // simulation against the dump that just loaded (applied after `node`).
+            // Permalink: `#q=<json {predicates, columns}>` re-applies the query
+            // simulation to the dump that just loaded (applied after `node`).
             const q = getHashParam(location.hash, 'q');
             const state = q ? parseQueryState(q) : null;
             if (state) {
@@ -496,7 +496,7 @@ class ParquetExplorer {
         history.replaceState(null, '', location.pathname + location.search + hash);
     }
 
-    /** Mirror the run query state (JSON) into the permalink hash. */
+    /** Mirror the live query state (JSON) into the permalink hash. */
     private syncHashQuery(state: QueryState | null): void {
         const hash = setHashParam(location.hash, 'q', state ? JSON.stringify(state) : null);
         history.replaceState(null, '', location.pathname + location.search + hash);
@@ -504,7 +504,7 @@ class ParquetExplorer {
 
     // Query simulation (predicate pushdown visualization)
 
-    /** A query ran: dim pruned segments, overlay the info panel, sync the hash. */
+    /** The live query changed: dim pruned segments, overlay the info panel, sync the hash. */
     private applyQueryRun(state: QueryState, evaluation: Evaluation): void {
         const dimmed = new Set<string>();
         evaluation.rowGroups.forEach((decision, index) => {

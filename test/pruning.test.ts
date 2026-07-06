@@ -5,8 +5,10 @@ import { validateFile, validateMetadata } from '../src/generated/validate.js';
 import {
     columnStats,
     evaluate,
+    isValidPredicate,
     leafColumns,
     parseQueryState,
+    rowCounts,
     type Predicate,
 } from '../src/business/pruning';
 import { project, findNode } from '../src/business/segment-tree';
@@ -204,6 +206,69 @@ describe('evaluate — input errors', () => {
         const clone = structuredClone(dump);
         (clone.metadata.schema_root.children!['String'] as SchemaLeaf).type = 'INT32';
         expect(() => evaluate(clone, [p('eq', 'abc')])).toThrow(/not a valid INT32/);
+    });
+});
+
+describe('isValidPredicate — live-state validity filtering', () => {
+    const dump = loadStats();
+
+    it('accepts a parseable value on a known column', () => {
+        expect(isValidPredicate(dump, p('eq', 'Hello'))).toBe(true);
+    });
+
+    it('rejects an empty value (an incomplete row, not an error)', () => {
+        expect(isValidPredicate(dump, p('eq', ''))).toBe(false);
+    });
+
+    it('rejects an unknown column', () => {
+        expect(isValidPredicate(dump, { column: 'nope', op: 'eq', value: 'x' })).toBe(false);
+    });
+
+    it('rejects a value that does not parse for the column type', () => {
+        const clone = structuredClone(dump);
+        (clone.metadata.schema_root.children!['String'] as SchemaLeaf).type = 'INT32';
+        expect(isValidPredicate(clone, p('eq', 'abc'))).toBe(false);
+        expect(isValidPredicate(clone, p('eq', '5'))).toBe(true);
+    });
+
+    it('accepts unsupported column types — they evaluate to "cannot prune"', () => {
+        const clone = structuredClone(dump);
+        const leaf = clone.metadata.schema_root.children!['String']!;
+        leaf.logical_type = null;
+        leaf.converted_type = null;
+        expect(isValidPredicate(clone, p('eq', 'Hello'))).toBe(true);
+    });
+});
+
+describe('rowCounts', () => {
+    const dump = loadStats();
+
+    it('counts every row as kept when nothing is pruned', () => {
+        expect(rowCounts(dump, evaluate(dump, []))).toEqual({ kept: 14, total: 14 });
+        expect(rowCounts(dump, evaluate(dump, [p('eq', 'Hello')]))).toEqual({
+            kept: 14,
+            total: 14,
+        });
+    });
+
+    it('excludes pruned row groups from kept (an upper bound, never exact)', () => {
+        expect(rowCounts(dump, evaluate(dump, [p('gt', 'zzz')]))).toEqual({ kept: 0, total: 14 });
+    });
+
+    it('sums across multiple row groups', () => {
+        const multi: unknown = JSON.parse(
+            readFileSync(`${FIXTURES}sort_columns_expected.json`, 'utf8')
+        );
+        if (!validateFile(multi)) {
+            throw new Error('sort_columns fixture failed schema validation');
+        }
+        const a = (op: Predicate['op'], value: string): Predicate => ({ column: 'a', op, value });
+        expect(rowCounts(multi, evaluate(multi, []))).toEqual({ kept: 6, total: 6 });
+        // Both row groups share the range [1,2]: a > 100 prunes them all.
+        expect(rowCounts(multi, evaluate(multi, [a('gt', '100')]))).toEqual({
+            kept: 0,
+            total: 6,
+        });
     });
 });
 

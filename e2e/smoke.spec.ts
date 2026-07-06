@@ -79,43 +79,49 @@ test('permalink hash selects the node when data arrives', async ({ page }) => {
     expect(new URL(page.url()).hash).toBe('');
 });
 
-test('query simulation: matrix, pruning, projection, permalink', async ({ page }) => {
+test('query simulation: live matrix, pruning, projection, permalink', async ({ page }) => {
     await loadFixture(page, 'data_index_bloom_encoding_stats_expected.json');
     const viz = page.locator('#canvas-container svg');
     await expect(viz.locator('rect.segment')).not.toHaveCount(0);
 
     // Default state: no predicates, all columns selected — the fixture's one
-    // row group × one column cell reads green.
+    // row group × one column cell reads green. There is no Run button.
     const cell = page.locator('.query-matrix .qm-cell');
     await expect(cell).toHaveCount(1);
     await expect(cell).toHaveClass(/qm-read/);
+    await expect(page.locator('#query-run-btn')).toHaveCount(0);
     const summary = page.locator('#query-summary');
-    await expect(summary).toHaveText('would read 1 of 1 column chunk in 1 of 1 row group');
+    await expect(summary).toContainText('up to 14 of 14');
+    await expect(summary).toContainText('1 of 1 read');
 
     // Column header hover shows the full name + decoded stats.
     const header = page.locator('.query-matrix th').nth(1);
     await expect(header).toHaveAttribute('title', /String/);
     await expect(header).toHaveAttribute('title', /min 'Hello' · max 'today'/);
 
-    // String > 'zzz' prunes the only row group: the cell turns red and its
-    // tooltip carries the reason.
+    // A fresh predicate row is incomplete (empty value): it's flagged with a
+    // muted hint, excluded from evaluation, and nothing breaks.
     await page.locator('#query-add-predicate').click();
     await page.locator('.qp-column').selectOption('String');
+    await expect(page.locator('.qp-hint')).toHaveText('incomplete — not applied');
+    await expect(cell).toHaveClass(/qm-read/);
     // The predicate row shows the selected column's decoded stats live.
     await expect(page.locator('.qp-stats')).toContainText("min 'Hello' · max 'today'");
     await expect(page.locator('.qp-stats')).toContainText('0 nulls');
+
+    // String > 'zzz' prunes the only row group LIVE — typing the value is
+    // enough, no button click: the cell turns red with the reason.
     await page.locator('.qp-op').selectOption('gt');
     await page.locator('.qp-value').fill('zzz');
-    await page.locator('#query-run-btn').click();
-
     await expect(cell).toHaveClass(/qm-pruned/);
+    await expect(page.locator('.qp-hint')).toHaveText('');
     await expect(cell).toHaveAttribute('title', /max value 'today' < query value 'zzz'/);
     // The cell tooltip also carries the full column name + its stats.
     await expect(cell).toHaveAttribute('title', /^String\n/);
     await expect(cell).toHaveAttribute('title', /min 'Hello' · max 'today'/);
-    await expect(summary).toHaveText(
-        'would read 0 of 1 column chunk in 0 of 1 row group, 0 of 1 page'
-    );
+    // The summary follows: rows are an upper bound, so "up to".
+    await expect(summary).toContainText('up to 0 of 14');
+    await expect(summary).toContainText('0 of 1 read');
     await expect(page).toHaveURL(/q=/);
 
     // The visualizer dims the pruned row group (rect renders inside the data
@@ -132,18 +138,14 @@ test('query simulation: matrix, pruning, projection, permalink', async ({ page }
 
     // The query round-trips through the permalink (IndexedDB restore).
     await page.reload();
-    await expect(summary).toHaveText(
-        'would read 0 of 1 column chunk in 0 of 1 row group, 0 of 1 page'
-    );
+    await expect(cell).toHaveClass(/qm-pruned/);
+    await expect(summary).toContainText('up to 0 of 14');
 
-    // String = 'Hello' keeps the row group: green again.
+    // String = 'Hello' keeps the row group: green again, live.
     await page.locator('.qp-op').selectOption('eq');
     await page.locator('.qp-value').fill('Hello');
-    await page.locator('#query-run-btn').click();
     await expect(cell).toHaveClass(/qm-read/);
-    await expect(summary).toHaveText(
-        'would read 1 of 1 column chunk in 1 of 1 row group, 1 of 1 page'
-    );
+    await expect(summary).toContainText('up to 14 of 14');
 
     // Deselecting the output column while a predicate still reads it for
     // evaluation turns the cell yellow (read, but not projected) — it still
@@ -151,9 +153,7 @@ test('query simulation: matrix, pruning, projection, permalink', async ({ page }
     await page.locator('.query-columns input[data-column="String"]').uncheck();
     await expect(cell).toHaveClass(/qm-eval/);
     await expect(cell).toHaveAttribute('title', /read only to evaluate a predicate/);
-    await expect(summary).toHaveText(
-        'would read 1 of 1 column chunk in 1 of 1 row group, 1 of 1 page'
-    );
+    await expect(summary).toContainText('1 of 1 read');
 
     // Select all / Deselect all act on every return-column checkbox.
     await page.locator('#query-deselect-all').click();
@@ -163,19 +163,54 @@ test('query simulation: matrix, pruning, projection, permalink', async ({ page }
     await expect(cell).toHaveClass(/qm-read/);
 
     // With no predicate left on the column, deselecting it grays the cell
-    // out instead (not read at all).
+    // out instead (not read at all) — again live, no button.
     await page.locator('.qp-remove').click();
-    await page.locator('#query-run-btn').click();
     await page.locator('.query-columns input[data-column="String"]').uncheck();
     await expect(cell).toHaveClass(/qm-skip/);
-    await expect(cell).toHaveAttribute('title', /not selected for output — not read/);
+    await expect(cell).toHaveAttribute('title', /not read — not selected for output/);
 
-    // Clear restores the default all-green state and drops the hash param.
+    // Clear drops predicates but keeps the projection: still gray. Re-checking
+    // the column restores the default state and drops the hash param.
     await page.locator('#query-clear-btn').click();
+    await expect(cell).toHaveClass(/qm-skip/);
+    await page.locator('.query-columns input[data-column="String"]').check();
     await expect(cell).toHaveClass(/qm-read/);
-    await expect(summary).toHaveText('would read 1 of 1 column chunk in 1 of 1 row group');
+    await expect(summary).toContainText('up to 14 of 14');
     await expect(page.locator('rect.segment-dimmed')).toHaveCount(0);
     await expect(page).not.toHaveURL(/q=/);
+});
+
+test('query cell precedence: unprojected columns stay gray in a pruned row group', async ({
+    page,
+}) => {
+    // Two row groups × two columns (a INT64 [1,2], b STRING ['a','c']).
+    await loadFixture(page, 'sort_columns_expected.json');
+    const cells = page.locator('.query-matrix .qm-cell');
+    await expect(cells).toHaveCount(4);
+
+    // Uncheck b (no predicate on it), then prune everything via a > 100.
+    await page.locator('.query-columns input[data-column="b"]').uncheck();
+    await page.locator('#query-add-predicate').click();
+    await page.locator('.qp-column').selectOption('a');
+    await page.locator('.qp-op').selectOption('gt');
+    await page.locator('.qp-value').fill('100');
+
+    // Cells are row-major (RG0 a, RG0 b, RG1 a, RG1 b): a's cells go red,
+    // while b's stay gray — never read, so pruning them saves nothing.
+    await expect(cells.nth(0)).toHaveClass(/qm-pruned/);
+    await expect(cells.nth(2)).toHaveClass(/qm-pruned/);
+    await expect(cells.nth(1)).toHaveClass(/qm-skip/);
+    await expect(cells.nth(3)).toHaveClass(/qm-skip/);
+
+    // Gray tooltips never show a pruning reason.
+    await expect(cells.nth(1)).toHaveAttribute('title', /not read — not selected for output/);
+    await expect(cells.nth(1)).not.toHaveAttribute('title', /pruned/);
+
+    // Summary: red is would-have-read-but-skipped; gray is simply not read.
+    const summary = page.locator('#query-summary');
+    await expect(summary).toContainText('up to 0 of 6');
+    await expect(summary).toContainText('0 of 2 read');
+    await expect(summary).toContainText('0 of 4 read');
 });
 
 test('lens switcher: treemap renders, selection and dimming survive switching', async ({
@@ -184,12 +219,13 @@ test('lens switcher: treemap renders, selection and dimming survive switching', 
     await loadFixture(page, 'data_index_bloom_encoding_stats_expected.json');
     await expect(page.locator('#canvas-container svg rect.segment')).not.toHaveCount(0);
 
-    // Dim the only row group first so the treemap inherits the query overlay.
+    // Dim the only row group first so the treemap inherits the query overlay
+    // (the simulation is live — typing the value is enough).
     await page.locator('#query-add-predicate').click();
     await page.locator('.qp-column').selectOption('String');
     await page.locator('.qp-op').selectOption('gt');
     await page.locator('.qp-value').fill('zzz');
-    await page.locator('#query-run-btn').click();
+    await expect(page.locator('.query-matrix .qm-cell')).toHaveClass(/qm-pruned/);
 
     // Switch lens: treemap rects render over the same tree, hash gains lens=.
     await page.locator('#lens-treemap').click();
