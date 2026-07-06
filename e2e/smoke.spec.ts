@@ -50,6 +50,34 @@ test('renders a metadata-only export with the source suffix', async ({ page }) =
     await expect(page.locator('#canvas-container svg rect.segment')).not.toHaveCount(0);
 });
 
+test('permalink hash selects the node when data arrives', async ({ page }) => {
+    // The hash is read AFTER a dump loads, so it applies to data that arrives
+    // later via the file input (or an IndexedDB restore).
+    await page.goto('/#node=rg_0_col_String');
+    await page
+        .locator('#file-input')
+        .setInputFiles(fixture('data_index_bloom_encoding_stats_expected.json'));
+
+    const panel = page.locator('#info-panel-container');
+    await expect(panel).toContainText('Column Chunk String');
+    // Ancestors were drilled down: the target's own rect is rendered + selected.
+    await expect(page.locator('rect.segment[data-segment-id="rg_0_col_String"]')).toHaveClass(
+        /segment-selected/
+    );
+
+    // Flagship flow: fresh navigation restores the file from IndexedDB and the
+    // permalink re-applies to the restored dump.
+    await page.goto('/#node=rg_0_col_String');
+    await expect(panel).toContainText('Column Chunk String');
+
+    // Clicking a node rewrites the hash; reset drops it.
+    await page.locator('rect.segment[data-segment-id="magic_header"]').click();
+    await expect(page).toHaveURL(/#node=magic_header$/);
+    await page.locator('#reset-btn').click();
+    await expect(page.locator('#drop-zone')).toBeVisible();
+    expect(new URL(page.url()).hash).toBe('');
+});
+
 test('reset returns to the drop zone', async ({ page }) => {
     await loadFixture(page, 'metadata-export.json');
     await page.locator('#reset-btn').click();

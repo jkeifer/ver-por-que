@@ -7,6 +7,7 @@ import {
     projectDump,
     projectMetadataExport,
     findNode,
+    findPath,
     describe as describeNode,
     KINDS,
     type Kind,
@@ -217,6 +218,23 @@ describe('projectDump', () => {
         const root = projectDump(load(KV));
         expect(findNode(root, 'schema_root')?.kind).toBe('schema_root');
         expect(findNode(root, 'nope')).toBeNull();
+    });
+
+    it('findPath returns the root-to-node ancestor chain', () => {
+        const root = projectDump(load(INDEXED));
+        const target = findNode(root, 'rg_0')!.children[0]!;
+        const path = findPath(root, target.id)!;
+        expect(path.map(n => n.id)).toEqual(['file', 'data_region', 'rg_0', target.id]);
+        expect(findPath(root, 'nope')).toBeNull();
+    });
+
+    it('produces identical node ids across projections of the same dump (permalink stability)', () => {
+        const ids = (root: SegmentNode): string[] => {
+            const out: string[] = [];
+            walk(root, n => out.push(n.id));
+            return out;
+        };
+        expect(ids(projectDump(load(INDEXED)))).toEqual(ids(projectDump(load(INDEXED))));
     });
 });
 

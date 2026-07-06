@@ -7,6 +7,7 @@ import { isParquet, isParquetURL } from './detect';
 import { fromBuffer, fromURL, type ByteSource } from './js/byte-source';
 import { validateFile, validateMetadata, type ValidationError } from './generated/validate';
 import { fetchBytes } from './js/fetch-progress';
+import { getHashParam, setHashParam } from './js/permalink';
 import { ParquetWorkerClient } from './js/worker/client';
 import type { AnyDump } from './types';
 
@@ -316,7 +317,16 @@ class ParquetExplorer {
 
             this.infoPanelManager = new InfoPanelManager(infoPanelContainer, this.byteSource);
             this.fileStructureViz = new SvgByteVisualizer(canvasContainer, this.infoPanelManager);
+            this.fileStructureViz.onSelectionChange = id => this.syncHashNode(id);
             this.fileStructureViz.initWithData(data);
+
+            // Permalink: `#node=<id>` selects that node in whatever dump just
+            // loaded (file drop, URL, or IndexedDB restore). Ids that don't
+            // resolve in this tree are silently ignored.
+            const nodeId = getHashParam(location.hash, 'node');
+            if (nodeId) {
+                this.fileStructureViz.selectNodeById(nodeId);
+            }
         } catch (error) {
             console.error('Error creating file structure visualization:', error);
             container.innerHTML =
@@ -324,9 +334,17 @@ class ParquetExplorer {
         }
     }
 
+    /** Mirror the selected node into the permalink hash (`?url=` untouched). */
+    private syncHashNode(id: string | null): void {
+        const hash = setHashParam(location.hash, 'node', id);
+        history.replaceState(null, '', location.pathname + location.search + hash);
+    }
+
     private async handleReset(): Promise<void> {
         this.parquetData = null;
         this.byteSource = null;
+        // A permalink is meaningless with no dump loaded.
+        history.replaceState(null, '', location.pathname + location.search);
         await this.clearStorage();
         this.clearFileStructureContent();
         this.showFileInput();
