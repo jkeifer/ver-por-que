@@ -168,7 +168,7 @@ function pageSummary(dump: AnyDump): Section | null {
 
 // -- JSON value viewer (kept for key-value entries) --------------------------
 
-function escapeHtml(text: string): string {
+export function escapeHtml(text: string): string {
     return text.replace(
         /[&<>"']/g,
         c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!
@@ -622,7 +622,7 @@ export const PANEL_KINDS = new Set<Kind>(Object.keys(PANELS) as Kind[]);
 
 /** A run query-simulation result, overlaid on the panels of evaluated nodes. */
 export interface QueryOverlay {
-    predicate: Predicate;
+    predicates: Predicate[];
     evaluation: Evaluation;
 }
 
@@ -662,7 +662,7 @@ export class InfoPanelManager {
         if (!this.query) {
             return null;
         }
-        const { predicate, evaluation } = this.query;
+        const { predicates, evaluation } = this.query;
         const decision =
             node.kind === 'row_group'
                 ? evaluation.rowGroups.get(node.index)
@@ -670,13 +670,11 @@ export class InfoPanelManager {
         if (!decision) {
             return null;
         }
+        const label = predicates.map(p => `${p.column} ${OP_LABEL[p.op]} ${p.value}`).join(' AND ');
         return {
             title: 'Query Pruning',
             rows: [
-                [
-                    'Predicate',
-                    escapeHtml(`${predicate.column} ${OP_LABEL[predicate.op]} ${predicate.value}`),
-                ],
+                [predicates.length === 1 ? 'Predicate' : 'Predicates (AND)', escapeHtml(label)],
                 ['Decision', escapeHtml(decision.reason)],
             ],
         };

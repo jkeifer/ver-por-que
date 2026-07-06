@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { validateFile, validateMetadata } from '../src/generated/validate.js';
-import { evaluate, leafColumns, type Predicate } from '../src/business/pruning';
+import { evaluate, leafColumns, parseQueryState, type Predicate } from '../src/business/pruning';
 import { project, findNode } from '../src/business/segment-tree';
 import type { Dump, MetadataDump, SchemaLeaf } from '../src/types';
 
@@ -34,41 +34,45 @@ describe('evaluate — row groups (footer statistics)', () => {
     const dump = loadStats();
 
     it('keeps the row group when the query value is inside the range', () => {
-        const { rowGroups } = evaluate(dump, p('eq', 'Hello'));
+        const { rowGroups } = evaluate(dump, [p('eq', 'Hello')]);
         expect(rowGroups.size).toBe(1);
         expect(rowGroups.get(0)).toEqual({
             pruned: false,
-            reason: "kept — range ['Hello','today'] overlaps query",
+            reason: "kept — range ['Hello','today'] overlaps query (predicate on String)",
         });
     });
 
     it('prunes on > past the max, with the stated reason', () => {
-        const d = evaluate(dump, p('gt', 'zzz')).rowGroups.get(0)!;
+        const d = evaluate(dump, [p('gt', 'zzz')]).rowGroups.get(0)!;
         expect(d.pruned).toBe(true);
         expect(d.reason).toContain("max value 'today' < query value 'zzz'");
+        expect(d.reason).toContain('(predicate on String)');
     });
 
     it('covers every operator against the range', () => {
-        expect(evaluate(dump, p('eq', 'zzz')).rowGroups.get(0)!.reason).toContain(
+        expect(evaluate(dump, [p('eq', 'zzz')]).rowGroups.get(0)!.reason).toContain(
             "query value 'zzz' > max value 'today'"
         );
-        expect(evaluate(dump, p('eq', 'AAA')).rowGroups.get(0)!.reason).toContain(
+        expect(evaluate(dump, [p('eq', 'AAA')]).rowGroups.get(0)!.reason).toContain(
             "query value 'AAA' < min value 'Hello'"
         );
-        expect(evaluate(dump, p('lt', 'Hello')).rowGroups.get(0)!.pruned).toBe(true);
-        expect(evaluate(dump, p('lte', 'Hello')).rowGroups.get(0)!.pruned).toBe(false);
-        expect(evaluate(dump, p('lte', 'AAA')).rowGroups.get(0)!.pruned).toBe(true);
-        expect(evaluate(dump, p('gt', 'today')).rowGroups.get(0)!.pruned).toBe(true);
-        expect(evaluate(dump, p('gt', 'Hello')).rowGroups.get(0)!.pruned).toBe(false);
-        expect(evaluate(dump, p('gte', 'today')).rowGroups.get(0)!.pruned).toBe(false);
-        expect(evaluate(dump, p('gte', 'zzz')).rowGroups.get(0)!.pruned).toBe(true);
+        expect(evaluate(dump, [p('lt', 'Hello')]).rowGroups.get(0)!.pruned).toBe(true);
+        expect(evaluate(dump, [p('lte', 'Hello')]).rowGroups.get(0)!.pruned).toBe(false);
+        expect(evaluate(dump, [p('lte', 'AAA')]).rowGroups.get(0)!.pruned).toBe(true);
+        expect(evaluate(dump, [p('gt', 'today')]).rowGroups.get(0)!.pruned).toBe(true);
+        expect(evaluate(dump, [p('gt', 'Hello')]).rowGroups.get(0)!.pruned).toBe(false);
+        expect(evaluate(dump, [p('gte', 'today')]).rowGroups.get(0)!.pruned).toBe(false);
+        expect(evaluate(dump, [p('gte', 'zzz')]).rowGroups.get(0)!.pruned).toBe(true);
     });
 
     it('reports missing statistics honestly', () => {
         const clone = structuredClone(dump);
         clone.metadata.row_groups[0]!.column_chunks['String']!.metadata.statistics = null;
-        const d = evaluate(clone, p('eq', 'Hello')).rowGroups.get(0)!;
-        expect(d).toEqual({ pruned: false, reason: 'cannot prune — no statistics written' });
+        const d = evaluate(clone, [p('eq', 'Hello')]).rowGroups.get(0)!;
+        expect(d).toEqual({
+            pruned: false,
+            reason: 'cannot prune — no statistics written (predicate on String)',
+        });
     });
 
     it('reports an unsupported column type honestly, never guessing', () => {
@@ -77,7 +81,7 @@ describe('evaluate — row groups (footer statistics)', () => {
         const leaf = clone.metadata.schema_root.children!['String']!;
         leaf.logical_type = null;
         leaf.converted_type = null;
-        const { rowGroups, pages } = evaluate(clone, p('eq', 'Hello'));
+        const { rowGroups, pages } = evaluate(clone, [p('eq', 'Hello')]);
         expect(rowGroups.get(0)!.pruned).toBe(false);
         expect(rowGroups.get(0)!.reason).toContain('cannot prune — unsupported type');
         expect(pages.get('rg_0_col_String_data_0')!.reason).toContain(
@@ -89,11 +93,44 @@ describe('evaluate — row groups (footer statistics)', () => {
         const clone = structuredClone(dump);
         // Claim INT32 with 5-byte stat payloads: decode must refuse.
         (clone.metadata.schema_root.children!['String'] as SchemaLeaf).type = 'INT32';
-        const d = evaluate(clone, p('eq', '5')).rowGroups.get(0)!;
+        const d = evaluate(clone, [p('eq', '5')]).rowGroups.get(0)!;
         expect(d).toEqual({
             pruned: false,
-            reason: 'cannot prune — statistics could not be decoded',
+            reason: 'cannot prune — statistics could not be decoded (predicate on String)',
         });
+    });
+});
+
+describe('evaluate — AND composition', () => {
+    const dump = loadStats();
+
+    it('returns empty maps for zero predicates (nothing pruned)', () => {
+        const { rowGroups, pages } = evaluate(dump, []);
+        expect(rowGroups.size).toBe(0);
+        expect(pages.size).toBe(0);
+    });
+
+    it('prunes when any predicate excludes, preserving the pruning reason', () => {
+        const d = evaluate(dump, [p('eq', 'Hello'), p('gt', 'zzz')]).rowGroups.get(0)!;
+        expect(d.pruned).toBe(true);
+        expect(d.reason).toContain("max value 'today' < query value 'zzz'");
+        expect(d.reason).toContain('(predicate on String)');
+        // Kept reasons don't dilute a prune.
+        expect(d.reason).not.toContain('overlaps');
+    });
+
+    it('keeps only when every predicate keeps, preserving each reason', () => {
+        const d = evaluate(dump, [p('eq', 'Hello'), p('gte', 'today')]).rowGroups.get(0)!;
+        expect(d.pruned).toBe(false);
+        expect(d.reason).toContain('overlaps');
+    });
+
+    it('composes page decisions the same way', () => {
+        const d = evaluate(dump, [p('eq', 'Hello'), p('gt', 'zzz')]).pages.get(
+            'rg_0_col_String_data_0'
+        )!;
+        expect(d.pruned).toBe(true);
+        expect(d.reason).toContain("max value 'today' < query value 'zzz'");
     });
 });
 
@@ -101,7 +138,7 @@ describe('evaluate — pages (column index)', () => {
     const dump = loadStats();
 
     it('keys page decisions by the segment-tree node id of the page node', () => {
-        const { pages } = evaluate(dump, p('gt', 'zzz'));
+        const { pages } = evaluate(dump, [p('gt', 'zzz')]);
         expect(pages.size).toBe(1);
         const [key, decision] = [...pages.entries()][0]!;
         const node = findNode(project(dump), key);
@@ -112,7 +149,7 @@ describe('evaluate — pages (column index)', () => {
     });
 
     it('keeps the page when the range overlaps', () => {
-        const d = evaluate(dump, p('eq', 'Hello')).pages.get('rg_0_col_String_data_0')!;
+        const d = evaluate(dump, [p('eq', 'Hello')]).pages.get('rg_0_col_String_data_0')!;
         expect(d.pruned).toBe(false);
         expect(d.reason).toContain('overlaps');
     });
@@ -120,7 +157,7 @@ describe('evaluate — pages (column index)', () => {
     it('prunes an all-null page for any non-null-matching predicate', () => {
         const clone = structuredClone(dump);
         clone.column_chunks[0]!.column_index!.null_pages = [true];
-        const d = evaluate(clone, p('eq', 'Hello')).pages.get('rg_0_col_String_data_0')!;
+        const d = evaluate(clone, [p('eq', 'Hello')]).pages.get('rg_0_col_String_data_0')!;
         expect(d.pruned).toBe(true);
         expect(d.reason).toContain('entirely null');
     });
@@ -128,10 +165,12 @@ describe('evaluate — pages (column index)', () => {
     it('reports pages without a column index honestly', () => {
         const clone = structuredClone(dump);
         clone.column_chunks[0]!.column_index = null;
-        const d = evaluate(clone, p('eq', 'Hello')).pages.get('rg_0_col_String_data_0')!;
+        const d = evaluate(clone, [p('eq', 'Hello')]).pages.get('rg_0_col_String_data_0')!;
         expect(d).toEqual({
             pruned: false,
-            reason: 'cannot prune — no column index written for this column chunk',
+            reason:
+                'cannot prune — no column index written for this column chunk ' +
+                '(predicate on String)',
         });
     });
 });
@@ -139,7 +178,7 @@ describe('evaluate — pages (column index)', () => {
 describe('evaluate — metadata-only dumps', () => {
     it('makes row-group decisions only (no page nodes exist)', () => {
         const dump = loadMetadataExport();
-        const { rowGroups, pages } = evaluate(dump, p('gt', 'zzz'));
+        const { rowGroups, pages } = evaluate(dump, [p('gt', 'zzz')]);
         expect(rowGroups.size).toBe(dump.metadata.row_groups.length);
         expect(rowGroups.get(0)!.pruned).toBe(true);
         expect(pages.size).toBe(0);
@@ -150,7 +189,7 @@ describe('evaluate — input errors', () => {
     const dump = loadStats();
 
     it('throws on an unknown column', () => {
-        expect(() => evaluate(dump, { column: 'nope', op: 'eq', value: 'x' })).toThrow(
+        expect(() => evaluate(dump, [{ column: 'nope', op: 'eq', value: 'x' }])).toThrow(
             /unknown column/
         );
     });
@@ -158,7 +197,7 @@ describe('evaluate — input errors', () => {
     it('throws when the value does not parse for the column type', () => {
         const clone = structuredClone(dump);
         (clone.metadata.schema_root.children!['String'] as SchemaLeaf).type = 'INT32';
-        expect(() => evaluate(clone, p('eq', 'abc'))).toThrow(/not a valid INT32/);
+        expect(() => evaluate(clone, [p('eq', 'abc')])).toThrow(/not a valid INT32/);
     });
 });
 
@@ -166,5 +205,28 @@ describe('leafColumns', () => {
     it('lists leaf column paths from the schema', () => {
         expect(leafColumns(loadStats())).toEqual(['String']);
         expect(leafColumns(loadMetadataExport())).toEqual(['String']);
+    });
+});
+
+describe('parseQueryState', () => {
+    it('round-trips a valid state', () => {
+        const state = { predicates: [p('gt', 'zzz')], columns: ['String'] };
+        expect(parseQueryState(JSON.stringify(state))).toEqual(state);
+    });
+
+    it('accepts zero predicates', () => {
+        expect(parseQueryState('{"predicates":[],"columns":[]}')).toEqual({
+            predicates: [],
+            columns: [],
+        });
+    });
+
+    it('rejects malformed input', () => {
+        expect(parseQueryState('not json')).toBeNull();
+        expect(parseQueryState('null')).toBeNull();
+        expect(parseQueryState('{"predicates":[],"columns":"String"}')).toBeNull();
+        expect(parseQueryState('{"predicates":[{"column":"String"}],"columns":[]}')).toBeNull();
+        // The old single-predicate shape never shipped: no back-compat.
+        expect(parseQueryState('{"column":"String","op":"gt","value":"zzz"}')).toBeNull();
     });
 });
