@@ -84,8 +84,65 @@ export function leafColumns(dump: AnyDump): string[] {
 }
 
 /** Display form of a value in a reason sentence (strings quoted). */
-function fmt(v: StatValue): string {
+export function formatStatValue(v: StatValue): string {
     return typeof v === 'string' ? `'${v}'` : String(v);
+}
+const fmt = formatStatValue;
+
+/** File-level footer statistics for one leaf column, for building a query. */
+export interface ColumnStats {
+    physicalType: string;
+    /** Logical (or converted) type annotation, or null when plain physical. */
+    logicalType: string | null;
+    /** Why the statistics can't be decoded, or null when they can. */
+    unsupported: string | null;
+    /** Decoded range across all row groups; undefined when unavailable. */
+    min?: StatValue;
+    max?: StatValue;
+    /** Total null count across row groups; null when any chunk omits it. */
+    nullCount: number | null;
+}
+
+/** Aggregate a column's footer statistics across row groups (null: unknown column). */
+export function columnStats(dump: AnyDump, column: string): ColumnStats | null {
+    const leaf = findSchemaLeaf(dump.metadata.schema_root, column);
+    if (!leaf) {
+        return null;
+    }
+    const out: ColumnStats = {
+        physicalType: leaf.type,
+        logicalType: leaf.logical_type?.logical_type ?? leaf.converted_type ?? null,
+        unsupported: unsupportedReason(leaf),
+        nullCount: 0,
+    };
+    for (const group of dump.metadata.row_groups) {
+        const stats = group.column_chunks[column]?.metadata.statistics;
+        out.nullCount =
+            out.nullCount === null || stats?.null_count === null || stats?.null_count === undefined
+                ? null
+                : out.nullCount + stats.null_count;
+        if (
+            out.unsupported !== null ||
+            stats?.min_value === null ||
+            stats?.min_value === undefined ||
+            stats.max_value === null ||
+            stats.max_value === undefined
+        ) {
+            continue;
+        }
+        const min = decodeStatValue(stats.min_value, leaf);
+        const max = decodeStatValue(stats.max_value, leaf);
+        if (min === undefined || max === undefined) {
+            continue;
+        }
+        if (out.min === undefined || lt(min, out.min)) {
+            out.min = min;
+        }
+        if (out.max === undefined || lt(out.max, max)) {
+            out.max = max;
+        }
+    }
+    return out;
 }
 
 const NO_STATS: Decision = { pruned: false, reason: 'cannot prune — no statistics written' };

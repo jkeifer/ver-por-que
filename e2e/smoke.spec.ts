@@ -92,16 +92,27 @@ test('query simulation: matrix, pruning, projection, permalink', async ({ page }
     const summary = page.locator('#query-summary');
     await expect(summary).toHaveText('would read 1 of 1 column chunk in 1 of 1 row group');
 
+    // Column header hover shows the full name + decoded stats.
+    const header = page.locator('.query-matrix th').nth(1);
+    await expect(header).toHaveAttribute('title', /String/);
+    await expect(header).toHaveAttribute('title', /min 'Hello' · max 'today'/);
+
     // String > 'zzz' prunes the only row group: the cell turns red and its
     // tooltip carries the reason.
     await page.locator('#query-add-predicate').click();
     await page.locator('.qp-column').selectOption('String');
+    // The predicate row shows the selected column's decoded stats live.
+    await expect(page.locator('.qp-stats')).toContainText("min 'Hello' · max 'today'");
+    await expect(page.locator('.qp-stats')).toContainText('0 nulls');
     await page.locator('.qp-op').selectOption('gt');
     await page.locator('.qp-value').fill('zzz');
     await page.locator('#query-run-btn').click();
 
     await expect(cell).toHaveClass(/qm-pruned/);
     await expect(cell).toHaveAttribute('title', /max value 'today' < query value 'zzz'/);
+    // The cell tooltip also carries the full column name + its stats.
+    await expect(cell).toHaveAttribute('title', /^String\n/);
+    await expect(cell).toHaveAttribute('title', /min 'Hello' · max 'today'/);
     await expect(summary).toHaveText(
         'would read 0 of 1 column chunk in 0 of 1 row group, 0 of 1 page'
     );
@@ -134,10 +145,30 @@ test('query simulation: matrix, pruning, projection, permalink', async ({ page }
         'would read 1 of 1 column chunk in 1 of 1 row group, 1 of 1 page'
     );
 
-    // Deselecting the output column grays the cell out (not read).
+    // Deselecting the output column while a predicate still reads it for
+    // evaluation turns the cell yellow (read, but not projected) — it still
+    // counts as read in the summary.
+    await page.locator('.query-columns input[data-column="String"]').uncheck();
+    await expect(cell).toHaveClass(/qm-eval/);
+    await expect(cell).toHaveAttribute('title', /read only to evaluate a predicate/);
+    await expect(summary).toHaveText(
+        'would read 1 of 1 column chunk in 1 of 1 row group, 1 of 1 page'
+    );
+
+    // Select all / Deselect all act on every return-column checkbox.
+    await page.locator('#query-deselect-all').click();
+    await expect(page.locator('.query-columns input[data-column="String"]')).not.toBeChecked();
+    await page.locator('#query-select-all').click();
+    await expect(page.locator('.query-columns input[data-column="String"]')).toBeChecked();
+    await expect(cell).toHaveClass(/qm-read/);
+
+    // With no predicate left on the column, deselecting it grays the cell
+    // out instead (not read at all).
+    await page.locator('.qp-remove').click();
+    await page.locator('#query-run-btn').click();
     await page.locator('.query-columns input[data-column="String"]').uncheck();
     await expect(cell).toHaveClass(/qm-skip/);
-    await expect(cell).toHaveAttribute('title', 'not selected for output — not read');
+    await expect(cell).toHaveAttribute('title', /not selected for output — not read/);
 
     // Clear restores the default all-green state and drops the hash param.
     await page.locator('#query-clear-btn').click();
