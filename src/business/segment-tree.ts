@@ -227,10 +227,14 @@ function buildDataRegion(dump: Dump, start: number): SegmentNode {
     // (verified against real fixtures), so they follow the same pattern.
     for (const chunk of dump.column_chunks) {
         if (chunk.column_index) {
-            children.push(buildColumnIndex(chunk.column_index, chunk.path_in_schema));
+            children.push(
+                buildColumnIndex(chunk.column_index, chunk.path_in_schema, chunk.row_group)
+            );
         }
         if (chunk.offset_index) {
-            children.push(buildOffsetIndex(chunk.offset_index, chunk.path_in_schema));
+            children.push(
+                buildOffsetIndex(chunk.offset_index, chunk.path_in_schema, chunk.row_group)
+            );
         }
         const meta =
             dump.metadata.row_groups[chunk.row_group]?.column_chunks[chunk.path_in_schema]
@@ -283,10 +287,14 @@ function buildColumnChunk(dump: Dump, rgIndex: number, chunk: PhysicalColumnChun
 
     const pages: SegmentNode[] = [];
     if (chunk.dictionary_page) {
-        pages.push(buildDictPage(chunk.dictionary_page, chunk.path_in_schema));
+        pages.push(buildDictPage(chunk.dictionary_page, chunk.path_in_schema, rgIndex));
     }
-    chunk.data_pages.forEach((p, i) => pages.push(buildDataPage(p, chunk.path_in_schema, i)));
-    chunk.index_pages.forEach((p, i) => pages.push(buildIndexPage(p, chunk.path_in_schema, i)));
+    chunk.data_pages.forEach((p, i) =>
+        pages.push(buildDataPage(p, chunk.path_in_schema, rgIndex, i))
+    );
+    chunk.index_pages.forEach((p, i) =>
+        pages.push(buildIndexPage(p, chunk.path_in_schema, rgIndex, i))
+    );
 
     return {
         kind: 'column_chunk',
@@ -307,10 +315,10 @@ const pageEnd = (p: {
     compressed_page_size: number;
 }): number => p.start_offset + p.header_size + p.compressed_page_size;
 
-function buildDictPage(page: DictionaryPage, path: string): SegmentNode {
+function buildDictPage(page: DictionaryPage, path: string, rg: number): SegmentNode {
     return {
         kind: 'dictionary_page',
-        id: `${path}_dict`,
+        id: `rg_${rg}_col_${path}_dict`,
         name: 'DICT',
         start: page.start_offset,
         end: pageEnd(page),
@@ -320,10 +328,10 @@ function buildDictPage(page: DictionaryPage, path: string): SegmentNode {
     };
 }
 
-function buildDataPage(page: DataPage, path: string, i: number): SegmentNode {
+function buildDataPage(page: DataPage, path: string, rg: number, i: number): SegmentNode {
     return {
         kind: 'data_page',
-        id: `${path}_data_${i}`,
+        id: `rg_${rg}_col_${path}_data_${i}`,
         name: `DATA${i}`,
         start: page.start_offset,
         end: pageEnd(page),
@@ -333,10 +341,10 @@ function buildDataPage(page: DataPage, path: string, i: number): SegmentNode {
     };
 }
 
-function buildIndexPage(page: IndexPage, path: string, i: number): SegmentNode {
+function buildIndexPage(page: IndexPage, path: string, rg: number, i: number): SegmentNode {
     return {
         kind: 'index_page',
-        id: `${path}_idx_${i}`,
+        id: `rg_${rg}_col_${path}_idx_${i}`,
         name: `IDX${i}`,
         start: page.start_offset,
         end: pageEnd(page),
@@ -346,10 +354,10 @@ function buildIndexPage(page: IndexPage, path: string, i: number): SegmentNode {
     };
 }
 
-function buildColumnIndex(index: ColumnIndex, path: string): SegmentNode {
+function buildColumnIndex(index: ColumnIndex, path: string, rg: number): SegmentNode {
     return {
         kind: 'column_index',
-        id: `colidx_${path}`,
+        id: `colidx_rg${rg}_${path}`,
         name: `${path} column index`,
         start: index.start_offset,
         end: index.start_offset + index.byte_length,
@@ -359,10 +367,10 @@ function buildColumnIndex(index: ColumnIndex, path: string): SegmentNode {
     };
 }
 
-function buildOffsetIndex(index: OffsetIndex, path: string): SegmentNode {
+function buildOffsetIndex(index: OffsetIndex, path: string, rg: number): SegmentNode {
     return {
         kind: 'offset_index',
-        id: `offidx_${path}`,
+        id: `offidx_rg${rg}_${path}`,
         name: `${path} offset index`,
         start: index.start_offset,
         end: index.start_offset + index.byte_length,
@@ -430,7 +438,8 @@ function buildMetadataDataRegion(meta: FileMetadata, start: number): SegmentNode
                         'column_index',
                         cc.column_index_offset,
                         cc.column_index_length,
-                        path
+                        path,
+                        rgIndex
                     )
                 );
             }
@@ -440,7 +449,8 @@ function buildMetadataDataRegion(meta: FileMetadata, start: number): SegmentNode
                         'offset_index',
                         cc.offset_index_offset,
                         cc.offset_index_length,
-                        path
+                        path,
+                        rgIndex
                     )
                 );
             }
@@ -493,11 +503,12 @@ function buildMetadataIndex(
     kind: 'column_index' | 'offset_index',
     offset: number,
     length: number,
-    path: string
+    path: string,
+    rg: number
 ): SegmentNode {
     const isCol = kind === 'column_index';
     const base = {
-        id: `${isCol ? 'colidx' : 'offidx'}_${path}`,
+        id: `${isCol ? 'colidx' : 'offidx'}_rg${rg}_${path}`,
         name: `${path} ${isCol ? 'column' : 'offset'} index`,
         start: offset,
         end: offset + length,
