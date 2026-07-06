@@ -4,9 +4,10 @@
  * drives a raw .parquet through the pyodide worker (needs `npm run wheel` and
  * network for the pyodide CDN); everything else runs offline.
  */
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { test, expect, type Page } from '@playwright/test';
+import { validateFile } from '../src/generated/validate.js';
 
 const fixture = (name: string): string =>
     fileURLToPath(new URL(`../test/fixtures/${name}`, import.meta.url));
@@ -78,48 +79,90 @@ test('permalink hash selects the node when data arrives', async ({ page }) => {
     expect(new URL(page.url()).hash).toBe('');
 });
 
-test('query simulation dims pruned segments and reports a summary', async ({ page }) => {
+test('query simulation: matrix, pruning, projection, permalink', async ({ page }) => {
     await loadFixture(page, 'data_index_bloom_encoding_stats_expected.json');
     const viz = page.locator('#canvas-container svg');
     await expect(viz.locator('rect.segment')).not.toHaveCount(0);
 
-    // String > 'zzz' prunes the only row group and its only page.
-    await page.locator('#query-column').selectOption('String');
-    await page.locator('#query-op').selectOption('gt');
-    await page.locator('#query-value').fill('zzz');
+    // Default state: no predicates, all columns selected — the fixture's one
+    // row group × one column cell reads green.
+    const cell = page.locator('.query-matrix .qm-cell');
+    await expect(cell).toHaveCount(1);
+    await expect(cell).toHaveClass(/qm-read/);
+    const summary = page.locator('#query-summary');
+    await expect(summary).toHaveText('would read 1 of 1 column chunk in 1 of 1 row group');
+
+    // String > 'zzz' prunes the only row group: the cell turns red and its
+    // tooltip carries the reason.
+    await page.locator('#query-add-predicate').click();
+    await page.locator('.qp-column').selectOption('String');
+    await page.locator('.qp-op').selectOption('gt');
+    await page.locator('.qp-value').fill('zzz');
     await page.locator('#query-run-btn').click();
 
-    const summary = page.locator('#query-summary');
-    await expect(summary).toHaveText('would read 0 of 1 row group, 0 of 1 page');
+    await expect(cell).toHaveClass(/qm-pruned/);
+    await expect(cell).toHaveAttribute('title', /max value 'today' < query value 'zzz'/);
+    await expect(summary).toHaveText(
+        'would read 0 of 1 column chunk in 0 of 1 row group, 0 of 1 page'
+    );
     await expect(page).toHaveURL(/q=/);
 
-    // The row-group rect renders inside the data region drill-down — and
-    // arrives already dimmed.
+    // The visualizer dims the pruned row group (rect renders inside the data
+    // region drill-down, already dimmed)...
     await viz.locator('rect.segment[data-segment-id="data_region"]').click();
     const rowGroup = viz.locator('rect.segment[data-segment-id="rg_0"]');
     await expect(rowGroup).toHaveClass(/segment-dimmed/);
 
-    // The evaluated node's info panel explains the decision.
+    // ...and the evaluated node's info panel explains the decision.
     await rowGroup.click();
     const panel = page.locator('#info-panel-container');
     await expect(panel).toContainText('Query Pruning');
     await expect(panel).toContainText("max value 'today' < query value 'zzz'");
 
-    // The predicate round-trips through the permalink (IndexedDB restore).
+    // The query round-trips through the permalink (IndexedDB restore).
     await page.reload();
-    await expect(summary).toHaveText('would read 0 of 1 row group, 0 of 1 page');
+    await expect(summary).toHaveText(
+        'would read 0 of 1 column chunk in 0 of 1 row group, 0 of 1 page'
+    );
 
-    // String = 'Hello' keeps the row group.
-    await page.locator('#query-value').fill('Hello');
-    await page.locator('#query-op').selectOption('eq');
+    // String = 'Hello' keeps the row group: green again.
+    await page.locator('.qp-op').selectOption('eq');
+    await page.locator('.qp-value').fill('Hello');
     await page.locator('#query-run-btn').click();
-    await expect(summary).toHaveText('would read 1 of 1 row group, 1 of 1 page');
+    await expect(cell).toHaveClass(/qm-read/);
+    await expect(summary).toHaveText(
+        'would read 1 of 1 column chunk in 1 of 1 row group, 1 of 1 page'
+    );
 
-    // Clear drops the overlay, the summary, and the hash param.
+    // Deselecting the output column grays the cell out (not read).
+    await page.locator('.query-columns input[data-column="String"]').uncheck();
+    await expect(cell).toHaveClass(/qm-skip/);
+    await expect(cell).toHaveAttribute('title', 'not selected for output — not read');
+
+    // Clear restores the default all-green state and drops the hash param.
     await page.locator('#query-clear-btn').click();
-    await expect(summary).toHaveText('');
+    await expect(cell).toHaveClass(/qm-read/);
+    await expect(summary).toHaveText('would read 1 of 1 column chunk in 1 of 1 row group');
     await expect(page.locator('rect.segment-dimmed')).toHaveCount(0);
     await expect(page).not.toHaveURL(/q=/);
+});
+
+test('downloads the loaded dump as re-validating JSON', async ({ page }) => {
+    await loadFixture(page, 'data_index_bloom_encoding_stats_expected.json');
+    await expect(page.locator('#loaded-file-source')).toContainText('.parquet');
+
+    const downloadPromise = page.waitForEvent('download');
+    await page.locator('#download-dump-btn').click();
+    const download = await downloadPromise;
+
+    // Named after the source basename (the fixture's source is a .parquet URL).
+    expect(download.suggestedFilename()).toBe('data_index_bloom_encoding_stats.dump.json');
+    expect(download.suggestedFilename()).toMatch(/\.dump\.json$/);
+
+    // The exported JSON passes back through the ajv validation boundary.
+    const path = await download.path();
+    const dump: unknown = JSON.parse(readFileSync(path, 'utf8'));
+    expect(validateFile(dump)).toBe(true);
 });
 
 test('reset returns to the drop zone', async ({ page }) => {

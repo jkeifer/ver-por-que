@@ -1,11 +1,13 @@
 /**
  * Predicate-pushdown pruning engine (pure, no DOM).
  *
- * Simulates what a reader would skip for one predicate: row groups via footer
- * column statistics, pages via the column index. Every decision carries a
- * stated reason. Unsupported types and missing statistics report "cannot
- * prune" — the engine never guesses. Page decisions are keyed by the
- * segment-tree node id of the page node so the UI can dim rects directly.
+ * Simulates what a reader would skip for a conjunction (AND) of predicates:
+ * row groups via footer column statistics, pages via the column index. A
+ * segment is pruned when ANY predicate proves it can't match; every decision
+ * carries a stated reason, annotated with the predicate's column. Unsupported
+ * types and missing statistics report "cannot prune" — the engine never
+ * guesses. Page decisions are keyed by the segment-tree node id of the page
+ * node so the UI can dim rects directly.
  */
 import { findSchemaLeaf } from './segment-tree';
 import {
@@ -33,10 +35,38 @@ export interface Predicate {
 export type Decision = { pruned: boolean; reason: string };
 
 export interface Evaluation {
-    /** Footer-statistics decision per row group index. */
+    /** AND-composed footer-statistics decision per row group index. */
     rowGroups: Map<number, Decision>;
-    /** Column-index decision per page, keyed by segment-tree node id. */
+    /** AND-composed column-index decision per page, keyed by segment-tree node id. */
     pages: Map<string, Decision>;
+}
+
+/** A runnable query: predicates (ANDed) plus the output-column projection. */
+export interface QueryState {
+    predicates: Predicate[];
+    columns: string[];
+}
+
+/** Parse a permalink-carried query state; anything malformed returns null. */
+export function parseQueryState(text: string): QueryState | null {
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(text);
+    } catch {
+        return null;
+    }
+    const s = parsed as { predicates?: unknown; columns?: unknown } | null;
+    if (!Array.isArray(s?.predicates) || !Array.isArray(s.columns)) {
+        return null;
+    }
+    const isPredicate = (p: unknown): p is Predicate => {
+        const q = p as { column?: unknown; op?: unknown; value?: unknown } | null;
+        return typeof q?.column === 'string' && isOp(q.op) && typeof q.value === 'string';
+    };
+    if (!s.predicates.every(isPredicate) || !s.columns.every(c => typeof c === 'string')) {
+        return null;
+    }
+    return { predicates: s.predicates, columns: s.columns as string[] };
 }
 
 /** Leaf column paths in schema order (the columns a predicate can target). */
@@ -145,18 +175,8 @@ function decideStats(
     return decide(min, max, op, v);
 }
 
-/**
- * Evaluate one predicate against a dump.
- *
- * Throws on an unknown column or a value that doesn't parse for the column's
- * type (UI-level input errors). An unsupported column type is NOT an error:
- * every decision honestly reports "cannot prune".
- *
- * Metadata-only dumps get row-group decisions only — the column index exists
- * in the footer, but its parsed contents (and the page nodes) aren't in the
- * export.
- */
-export function evaluate(dump: AnyDump, p: Predicate): Evaluation {
+/** Evaluate one predicate against a dump (raw, un-annotated reasons). */
+function evaluateOne(dump: AnyDump, p: Predicate): Evaluation {
     const leaf = findSchemaLeaf(dump.metadata.schema_root, p.column);
     if (!leaf) {
         throw new Error(`unknown column '${p.column}'`);
@@ -219,5 +239,66 @@ export function evaluate(dump: AnyDump, p: Predicate): Evaluation {
         }
     }
 
+    return { rowGroups, pages };
+}
+
+type Part = { predicate: Predicate; decision: Decision };
+
+/**
+ * AND-compose per-predicate decisions for one segment: pruned when any
+ * predicate prunes. Pruning reasons win the composed reason (kept reasons
+ * don't dilute a prune); every reason names its predicate's column.
+ */
+function compose(parts: Part[]): Decision {
+    const tag = (p: Part): string => `${p.decision.reason} (predicate on ${p.predicate.column})`;
+    const pruning = parts.filter(p => p.decision.pruned);
+    return pruning.length > 0
+        ? { pruned: true, reason: pruning.map(tag).join('; ') }
+        : { pruned: false, reason: parts.map(tag).join('; ') };
+}
+
+/** Union the per-predicate decision maps into `out`, composing per key. */
+function mergeInto<K>(
+    out: Map<K, Decision>,
+    runs: { predicate: Predicate; decisions: Map<K, Decision> }[]
+): void {
+    const keys = new Set<K>();
+    runs.forEach(r => r.decisions.forEach((_, k) => keys.add(k)));
+    for (const key of keys) {
+        const parts = runs.flatMap(r => {
+            const decision = r.decisions.get(key);
+            return decision ? [{ predicate: r.predicate, decision }] : [];
+        });
+        out.set(key, compose(parts));
+    }
+}
+
+/**
+ * Evaluate a conjunction of predicates against a dump.
+ *
+ * Throws on an unknown column or a value that doesn't parse for the column's
+ * type (UI-level input errors). An unsupported column type is NOT an error:
+ * every decision honestly reports "cannot prune". Zero predicates evaluate to
+ * empty maps — nothing is pruned.
+ *
+ * Metadata-only dumps get row-group decisions only — the column index exists
+ * in the footer, but its parsed contents (and the page nodes) aren't in the
+ * export.
+ */
+export function evaluate(dump: AnyDump, predicates: Predicate[]): Evaluation {
+    const runs = predicates.map(predicate => ({
+        predicate,
+        result: evaluateOne(dump, predicate),
+    }));
+    const rowGroups = new Map<number, Decision>();
+    const pages = new Map<string, Decision>();
+    mergeInto(
+        rowGroups,
+        runs.map(r => ({ predicate: r.predicate, decisions: r.result.rowGroups }))
+    );
+    mergeInto(
+        pages,
+        runs.map(r => ({ predicate: r.predicate, decisions: r.result.pages }))
+    );
     return { rowGroups, pages };
 }
