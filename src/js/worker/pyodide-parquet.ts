@@ -41,6 +41,18 @@ export interface ParquetParserDeps {
 /** A parse input: raw parquet bytes, or a remote URL read via range requests. */
 export type ParquetSource = Uint8Array | { url: string };
 
+/** A decoded value, converted to a JSON-safe form python-side (see _json_safe). */
+export type PreviewValue = string | number | boolean | null;
+
+/**
+ * Result of a value preview: the first N decoded values of a column chunk, or
+ * a typed codec failure when the chunk's compression has no wasm build
+ * (snappy, lzo) so the values can't be decoded in-browser.
+ */
+export type PreviewResult =
+    | { values: PreviewValue[]; total: number; truncated: boolean; error?: undefined }
+    | { error: 'codec_unavailable'; codec: string };
+
 /** Parses parquet sources into por-que dump JSON, plus follow-up queries. */
 export interface ParquetParser {
     (source: ParquetSource, name: string): Promise<string>;
@@ -51,11 +63,21 @@ export interface ParquetParser {
      * file is loaded, the chunk has no bloom filter, or the type can't probe.
      */
     probeBloom(rowGroup: number, column: string, value: string): Promise<boolean>;
+    /**
+     * Decodes the first `maxValues` values of a column chunk in the most
+     * recently parsed file. Codec-unavailable failures (snappy/lzo have no
+     * wasm wheel) come back as a typed result, not a rejection.
+     */
+    preview(rowGroup: number, column: string, maxValues: number): Promise<PreviewResult>;
 }
 
 const PARSE_PY = `
+import base64
 import io
+import json
+import math
 from por_que import AsyncHttpFile, ParquetFile
+from por_que.exceptions import ParquetDataError
 from por_que.statistics import BloomFilter
 from por_que.util.async_adapter import ensure_async_reader
 
@@ -122,6 +144,57 @@ async def _probe_bloom(row_group, column, value):
     # The bytes path keeps a plain (sync) BytesIO in the slot; adapt it.
     bloom = await BloomFilter.from_reader(ensure_async_reader(reader), chunk)
     return bool(bloom.might_contain(_coerce_probe_value(value, chunk.type)))
+
+_MAX_SAFE_INTEGER = 2**53 - 1  # Number.MAX_SAFE_INTEGER
+
+def _json_safe(value):
+    # Decoded values cross to JS as JSON: keep what survives intact, stringify
+    # the rest. INT64 can exceed Number.MAX_SAFE_INTEGER; NaN/Inf aren't JSON;
+    # raw BYTE_ARRAY (no STRING logical type) goes base64; logical renderings
+    # the wheel already produced (datetime, Decimal, ...) read fine as str().
+    match value:
+        case None | bool() | str():
+            return value
+        case int():
+            return value if -_MAX_SAFE_INTEGER <= value <= _MAX_SAFE_INTEGER else str(value)
+        case float():
+            return value if math.isfinite(value) else str(value)
+        case bytes():
+            return base64.b64encode(value).decode('ascii')
+        case _:
+            return str(value)
+
+async def _preview(row_group, column, max_values):
+    if _current is None:
+        raise RuntimeError('no parquet file is loaded in this worker')
+    pf, reader = _current
+    chunk = next(
+        (
+            cc
+            for cc in pf.column_chunks
+            if cc.row_group == row_group and cc.path_in_schema == column
+        ),
+        None,
+    )
+    if chunk is None:
+        raise KeyError(f'no column chunk {column!r} in row group {row_group}')
+    values = []
+    total = 0
+    try:
+        # ponytail: decodes the whole chunk, page-targeted decode when someone
+        # loads a huge file
+        async for value, _def_level, _rep_level in chunk.parse_all_data_pages(reader):
+            total += 1
+            if len(values) < max_values:
+                values.append(_json_safe(value))
+    except ParquetDataError as error:
+        # compressors.py raises '<Codec> compression requires <pkg> package'
+        # when the codec's module can't import -- snappy and lzo have no wasm
+        # wheel, so this is expected in-browser, not an error state.
+        if 'requires' in str(error) and 'package' in str(error):
+            return json.dumps({'error': 'codec_unavailable', 'codec': chunk.codec.name})
+        raise
+    return json.dumps({'values': values, 'total': total, 'truncated': total > len(values)})
 `;
 
 /**
@@ -195,6 +268,11 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         column: string,
         value: string
     ) => Promise<boolean>;
+    const preview = pyodide.globals.get('_preview') as (
+        rowGroup: number,
+        column: string,
+        maxValues: number
+    ) => Promise<string>;
 
     // por-que's parse phases, in emission order, with human labels. The parse
     // is one process, so the status (modal title) stays put; each phase is
@@ -281,5 +359,10 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
     return Object.assign(parse, {
         probeBloom: (rowGroup: number, column: string, value: string) =>
             probeBloom(rowGroup, column, value),
+        // Values cross the boundary as a JSON string: strings/numbers survive
+        // pyodide proxying, but this keeps the conversion rules in one place
+        // (python's _json_safe) and the payload copy-free.
+        preview: async (rowGroup: number, column: string, maxValues: number) =>
+            JSON.parse(await preview(rowGroup, column, maxValues)) as PreviewResult,
     });
 }

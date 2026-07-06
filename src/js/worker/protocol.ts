@@ -1,4 +1,5 @@
 /** Message shapes exchanged between main thread and the parquet worker. */
+import type { PreviewResult } from './pyodide-parquet';
 
 interface ParseRequestBase {
     id: number;
@@ -7,6 +8,7 @@ interface ParseRequestBase {
     manifestUrl: string;
     warmup?: undefined;
     probe?: undefined;
+    preview?: undefined;
 }
 
 /**
@@ -18,6 +20,7 @@ export interface WarmupRequest {
     warmup: true;
     manifestUrl: string;
     probe?: undefined;
+    preview?: undefined;
 }
 
 /** Parse locally-provided bytes (upload/drop). */
@@ -45,18 +48,35 @@ export interface ProbeBloomRequest {
     manifestUrl: string;
     probe: { rowGroup: number; column: string; value: string };
     warmup?: undefined;
+    preview?: undefined;
+    bytes?: undefined;
+    url?: undefined;
+}
+
+/**
+ * Decode the first `maxValues` values of a column chunk in the worker's
+ * current file. Codec-unavailable failures come back as a typed success
+ * payload (PreviewResult), never an error response.
+ */
+export interface PreviewRequest {
+    id: number;
+    manifestUrl: string;
+    preview: { rowGroup: number; column: string; maxValues: number };
+    warmup?: undefined;
+    probe?: undefined;
     bytes?: undefined;
     url?: undefined;
 }
 
 /** Everything the main thread can send to the worker. */
-export type WorkerRequest = ParseRequest | ProbeBloomRequest | WarmupRequest;
+export type WorkerRequest = ParseRequest | ProbeBloomRequest | PreviewRequest | WarmupRequest;
 
 export interface ParseSuccess {
     id: number;
     ok: true;
     dump: string;
     mightContain?: undefined;
+    preview?: undefined;
 }
 
 export interface ProbeBloomSuccess {
@@ -65,6 +85,15 @@ export interface ProbeBloomSuccess {
     /** False is exact (definitely absent); true is only ever a maybe. */
     mightContain: boolean;
     dump?: undefined;
+    preview?: undefined;
+}
+
+export interface PreviewSuccess {
+    id: number;
+    ok: true;
+    preview: PreviewResult;
+    dump?: undefined;
+    mightContain?: undefined;
 }
 
 export interface ParseFailure {
@@ -101,4 +130,10 @@ export interface ProgressEvent {
 }
 
 export type WorkerResponse =
-    ParseSuccess | ProbeBloomSuccess | ParseFailure | StatusEvent | DetailEvent | ProgressEvent;
+    | ParseSuccess
+    | ProbeBloomSuccess
+    | PreviewSuccess
+    | ParseFailure
+    | StatusEvent
+    | DetailEvent
+    | ProgressEvent;

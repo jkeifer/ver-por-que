@@ -1,7 +1,11 @@
 /**
  * Main application logic for the Parquet Explorer (JSON Mode).
  */
-import { InfoPanelManager, type BloomProbe } from './components/info-panel-manager';
+import {
+    InfoPanelManager,
+    type BloomProbe,
+    type ValuePreview,
+} from './components/info-panel-manager';
 import { QueryPanel } from './components/query-panel';
 import { SvgByteVisualizer } from './components/svg-byte-visualizer';
 import { isParquet, isParquetURL } from './detect';
@@ -31,6 +35,9 @@ class ParquetExplorer {
     // loads have one (the worker keeps the parsed file alive); JSON dumps and
     // restores degrade with a note.
     private bloomProbe: BloomProbe | null = null;
+    // Value decoder against the worker's current file; same lifecycle as the
+    // bloom probe.
+    private valuePreview: ValuePreview | null = null;
     private infoPanelManager: InfoPanelManager | null = null;
     private fileStructureViz: SvgByteVisualizer | null = null;
     private queryPanel: QueryPanel | null = null;
@@ -201,7 +208,13 @@ class ParquetExplorer {
                 // The hex inspector re-reads the same URL via range requests;
                 // if the server turns out not to support them, reads reject
                 // and the panel degrades.
-                await this.parseJSON(dump, url, fromURL(url), this.workerBloomProbe());
+                await this.parseJSON(
+                    dump,
+                    url,
+                    fromURL(url),
+                    this.workerBloomProbe(),
+                    this.workerValuePreview()
+                );
                 return;
             }
 
@@ -227,7 +240,13 @@ class ParquetExplorer {
             // the original for the hex inspector; workshop files are ~22 MB,
             // holding one in memory is fine.
             const dump = await this.parseParquet(buffer.slice(0), source);
-            await this.parseJSON(dump, source, fromBuffer(buffer), this.workerBloomProbe());
+            await this.parseJSON(
+                dump,
+                source,
+                fromBuffer(buffer),
+                this.workerBloomProbe(),
+                this.workerValuePreview()
+            );
         } else {
             this.updateLoadingStatus('Parsing JSON data...');
             await this.parseJSON(new TextDecoder().decode(buffer), source);
@@ -252,6 +271,12 @@ class ParquetExplorer {
         return (rowGroup, column, value) => this.workerClient!.probeBloom(rowGroup, column, value);
     }
 
+    /** Value decoder routed at the same worker current-file slot. */
+    private workerValuePreview(): ValuePreview {
+        return (rowGroup, column, maxValues) =>
+            this.workerClient!.preview(rowGroup, column, maxValues);
+    }
+
     private ensureWorkerClient(): ParquetWorkerClient {
         if (!this.workerClient) {
             this.workerClient = new ParquetWorkerClient(
@@ -270,7 +295,8 @@ class ParquetExplorer {
         jsonText: string,
         source: string,
         byteSource: ByteSource | null = null,
-        bloomProbe: BloomProbe | null = null
+        bloomProbe: BloomProbe | null = null,
+        valuePreview: ValuePreview | null = null
     ): Promise<void> {
         const parsed: unknown = JSON.parse(jsonText);
 
@@ -307,6 +333,7 @@ class ParquetExplorer {
         this.parquetData = data;
         this.byteSource = byteSource;
         this.bloomProbe = bloomProbe;
+        this.valuePreview = valuePreview;
         await this.saveToStorage(data, source);
 
         this.showExplorer();
@@ -356,7 +383,8 @@ class ParquetExplorer {
             this.infoPanelManager = new InfoPanelManager(
                 infoPanelContainer,
                 this.byteSource,
-                this.bloomProbe
+                this.bloomProbe,
+                this.valuePreview
             );
             this.fileStructureViz = new SvgByteVisualizer(canvasContainer, this.infoPanelManager);
             this.fileStructureViz.onSelectionChange = id => this.syncHashNode(id);
@@ -433,6 +461,7 @@ class ParquetExplorer {
         this.parquetData = null;
         this.byteSource = null;
         this.bloomProbe = null;
+        this.valuePreview = null;
         // A permalink is meaningless with no dump loaded (query included).
         history.replaceState(null, '', location.pathname + location.search);
         await this.clearStorage();

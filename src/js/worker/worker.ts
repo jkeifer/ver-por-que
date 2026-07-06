@@ -90,6 +90,12 @@ ctx.addEventListener('message', event => {
                 ctx.postMessage({ id: req.id, ok: true, mightContain });
                 return;
             }
+            if (req.preview) {
+                const { rowGroup, column, maxValues } = req.preview;
+                const preview = await parser.preview(rowGroup, column, maxValues);
+                ctx.postMessage({ id: req.id, ok: true, preview });
+                return;
+            }
             const source = req.url !== undefined ? { url: req.url } : new Uint8Array(req.bytes);
             const dump = await parser(source, req.name);
             ctx.postMessage({ id: req.id, ok: true, dump });
