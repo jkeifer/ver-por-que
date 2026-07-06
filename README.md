@@ -101,14 +101,20 @@ to use the deployed version.
 
 ## Schema-generated types
 
-The dump JSON shape is defined by a JSON Schema, vendored at
-[`schema/por-que.schema.json`](./schema/por-que.schema.json) from
-[por-que](https://github.com/jkeifer/por-que) (a union of the `file` and
-`metadata` dump roots). TypeScript types and standalone runtime
-validators are generated from it into `src/generated/`
-(gitignored) by `npm run generate`. The `dev`, `build`, `test`, `typecheck`,
-and `lint` scripts all run `generate` first, so a fresh clone just works — but
-if you edit the schema, re-run `npm run generate`.
+The dump JSON shape is defined by a JSON Schema that ships inside the pinned
+[por-que](https://github.com/jkeifer/por-que) wheel (a union of the `file` and
+`metadata` dump roots). `npm run wheel` extracts it to
+`static/vendor/por-que.schema.json` (gitignored), and `npm run generate` emits
+TypeScript types and standalone runtime validators from it into
+`src/generated/` (gitignored) — so the validator can never drift from the
+parser the app actually runs. The `dev`, `build`, `test`, `typecheck`, and
+`lint` scripts all run `generate` first, so from a fresh clone:
+
+```bash
+npm ci
+npm run wheel
+npm run dev  # or test / build / typecheck / lint
+```
 
 ## License
 

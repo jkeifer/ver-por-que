@@ -20,11 +20,17 @@ help you get started with development and contributing to the project.
    cd ver-por-que
    ```
 
-2. **Install dependencies**
+2. **Install dependencies and stage the wheels**
 
    ```bash
    npm install
+   npm run wheel
    ```
+
+   `npm run wheel` downloads the pinned por-que/hctef wheels into
+   `static/vendor/` and extracts the dump JSON Schema from the por-que
+   wheel — `npm run generate` (run automatically by the other scripts)
+   needs that schema.
 
 3. **Start the development server**
 
@@ -54,7 +60,7 @@ help you get started with development and contributing to the project.
 | Command                | Description                                        |
 | ---------------------- | ------------------------------------------------- |
 | `npm run generate`     | Generate types + validator from the JSON Schema   |
-| `npm run wheel`        | Build the por-que wheel for the in-browser parser |
+| `npm run wheel`        | Stage the pinned wheels + extract the dump schema |
 | `npm run dev`          | Start development server with hot reload          |
 | `npm run build`        | Build for production                              |
 | `npm run typecheck`    | Type-check with `tsc --noEmit`                    |
@@ -65,18 +71,20 @@ help you get started with development and contributing to the project.
 | `npm run format:check` | Check code formatting                             |
 
 `dev`, `build`, `test`, `typecheck`, and `lint` each run `generate` first (via
-npm pre-hooks), so a fresh clone works without a manual step. `generate` reads
-[`schema/por-que.schema.json`](./schema/por-que.schema.json) — the canonical
+npm pre-hooks), so a fresh clone only needs `npm run wheel` before any of
+them. `generate` reads `static/vendor/por-que.schema.json` — the canonical
 contract for the dump JSON (a union of the `file` and `metadata` roots),
-vendored from [por-que](https://github.com/jkeifer/por-que) — and emits
-`src/generated/` (gitignored):
+extracted from the pinned [por-que](https://github.com/jkeifer/por-que) wheel
+by `npm run wheel` — and emits `src/generated/` (gitignored):
 
 - `por-que.d.ts` — TypeScript types ([json-schema-to-typescript])
 - `validate.js` / `validate.d.ts` — standalone AJV validators (one per root)
   used at the load boundary in `main.ts`
 
-Edit the schema, not the generated files. Re-run `npm run generate` after any
-schema change.
+The schema comes out of the exact wheel the app runs in the browser, so the
+validator cannot drift from the runtime. To change the schema, release a new
+por-que version and bump the wheel pin in `scripts/fetch-wheels.py`; never
+edit the generated files.
 
 [json-schema-to-typescript]: https://github.com/bcherny/json-schema-to-typescript
 
@@ -98,9 +106,9 @@ npm run wheel   # downloads the wheels into static/vendor/ (gitignored), once
   hash-verified by [`scripts/fetch-wheels.py`](./scripts/fetch-wheels.py). To
   bump a version, update the pins (filename, URL, sha256) at the top of that
   script.
-- Without the wheels, the JSON path still works and the pyodide integration
-  test skips. You only need `npm run wheel` to exercise browser parquet parsing
-  (dev or the integration test).
+- Without the wheels, the pyodide integration test skips — but `npm run wheel`
+  is still required once per clone, since it also extracts the dump schema
+  that `npm run generate` consumes.
 - pyodide itself loads from a CDN, pinned to one version constant in
   `src/js/worker/worker.ts` (keep it equal to the `pyodide` devDep).
 - The parse never decompresses page content, so the lack of a wasm Snappy wheel
@@ -131,7 +139,7 @@ npm run format
 ### Project Structure
 
 ```plaintext
-schema/por-que.schema.json  # Canonical contract for the dump JSON (vendored from por-que)
+static/vendor/             # STAGED (gitignored) by `npm run wheel`: wheels + dump schema
 src/
 ├── index.html             # Main HTML entry point (loads main.ts as a module)
 ├── css/                   # Styles
