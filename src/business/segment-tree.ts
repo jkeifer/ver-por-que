@@ -715,6 +715,20 @@ export function describe(node: SegmentNode): string {
     }
 }
 
+/** Root-to-node ancestor chain for an id (permalinks), or null when absent. */
+export function findPath(root: SegmentNode, id: string): SegmentNode[] | null {
+    if (root.id === id) {
+        return [root];
+    }
+    for (const child of root.children) {
+        const path = findPath(child, id);
+        if (path) {
+            return [root, ...path];
+        }
+    }
+    return null;
+}
+
 /** Recursively find a node by id (selection restore, tests). */
 export function findNode(root: SegmentNode, id: string): SegmentNode | null {
     if (root.id === id) {

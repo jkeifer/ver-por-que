@@ -9,7 +9,7 @@ import {
     type LevelLayout,
     type SegmentLayout,
 } from '../business/segment-layout-calculator';
-import { project, describe, type SegmentNode } from '../business/segment-tree';
+import { project, describe, findPath, type SegmentNode } from '../business/segment-tree';
 import type { AnyDump } from '../types';
 import type { InfoPanelManager } from './info-panel-manager';
 
@@ -42,6 +42,9 @@ export class SvgByteVisualizer {
 
     private width = 0;
     private height = 0;
+
+    /** Fired with the deepest selected node's id (null when nothing is selected). */
+    onSelectionChange: ((id: string | null) => void) | null = null;
 
     private tooltip!: HTMLDivElement;
     private infoPanelManager: InfoPanelManager | null;
@@ -220,6 +223,29 @@ export class SvgByteVisualizer {
                 this.infoPanelManager.show(this.root, this.dump);
             }
         });
+    }
+
+    /**
+     * Programmatically select a node by id, drilling down through its
+     * ancestors exactly as if each were clicked. Returns false (a silent
+     * no-op) when the id isn't in the tree — or is the root, which has no
+     * clickable segment. Deferred one frame so initWithData's pending level-0
+     * build lands first.
+     */
+    selectNodeById(id: string): boolean {
+        if (!this.root) {
+            return false;
+        }
+        const path = findPath(this.root, id);
+        if (!path || path.length < 2) {
+            return false;
+        }
+        requestAnimationFrame(() => {
+            // Skip the unrendered root; each click selects at its level and
+            // synchronously adds the next level, so the chain composes.
+            path.slice(1).forEach((node, level) => this.handleSegmentClick(node, level));
+        });
+        return true;
     }
 
     private addLevel(
@@ -768,6 +794,7 @@ export class SvgByteVisualizer {
         }
 
         this.updateSelectionDisplay();
+        this.onSelectionChange?.(this.selectionPath[this.selectionPath.length - 1]?.id ?? null);
 
         if (this.infoPanelManager && this.dump) {
             const selected = this.selectionPath[this.selectionPath.length - 1];
@@ -985,6 +1012,7 @@ export class SvgByteVisualizer {
                 this.selectionPath = [];
                 this.removeLevelsFrom(1);
                 this.updateSelectionDisplay();
+                this.onSelectionChange?.(null);
                 if (this.infoPanelManager && this.dump && this.root) {
                     this.infoPanelManager.show(this.root, this.dump);
                 }
