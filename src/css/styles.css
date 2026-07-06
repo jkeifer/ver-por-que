@@ -1353,3 +1353,35 @@ code {
 .json-unknown {
     color: var(--viz-red);
 }
+
+/* Hex inspector (Raw Bytes section) */
+.hex-header {
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-bottom: var(--spacing-sm);
+}
+
+.hex-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-sm);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+.hex-view {
+    margin: 0;
+    padding: var(--spacing-md);
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+    line-height: 1.4;
+    max-height: 400px;
+    overflow: auto;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--border-radius);
+}
