@@ -7,7 +7,6 @@ export default tseslint.config(
         ignores: [
             'node_modules/**',
             'dist/**',
-            '.parcel-cache/**',
             'coverage/**',
             'src/build-info.js',
             'src/generated/**',

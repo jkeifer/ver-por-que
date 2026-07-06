@@ -3,15 +3,15 @@
     "version": "1.0.0",
     "type": "module",
     "description": "An interactive web-based tool for exploring how parquet files are structured. Pair with the python tool por-que, dump the file structure to JSON, and then load in this UI to see how the file is put together.",
-    "source": "src/index.html",
     "scripts": {
         "prepare": "prek install -f",
         "generate": "node scripts/generate.mjs",
         "wheel": "python3 scripts/fetch-wheels.py",
         "predev": "npm run generate",
-        "dev": "parcel src/index.html",
-        "prebuild": "npm run generate && node scripts/get-git-info.js && rm -rf dist",
-        "build": "parcel build src/index.html --public-url ./",
+        "dev": "vite",
+        "prebuild": "npm run generate && node scripts/get-git-info.js",
+        "build": "vite build",
+        "preview": "vite preview",
         "pretest": "npm run generate",
         "test": "vitest run",
         "pretypecheck": "npm run generate",
@@ -19,8 +19,8 @@
         "prelint": "npm run generate",
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",
-        "format": "prettier --write src/ test/",
-        "format:check": "prettier --check src/ test/"
+        "format": "prettier --write src/ test/ index.html vite.config.ts",
+        "format:check": "prettier --check src/ test/ index.html vite.config.ts"
     },
     "repository": {
         "type": "git",
@@ -41,12 +41,11 @@
         "eslint": "^10.6.0",
         "globals": "^17.7.0",
         "json-schema-to-typescript": "^15.0.4",
-        "parcel": "^2.16.0",
-        "parcel-reporter-static-files-copy": "^1.5.3",
         "prettier": "^3.6.2",
         "pyodide": "^314.0.2",
         "typescript": "^6.0.3",
         "typescript-eslint": "^8.8.0",
+        "vite": "^8.1.3",
         "vitest": "^4.1.9"
     }
 }
