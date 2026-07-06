@@ -178,6 +178,58 @@ test('query simulation: matrix, pruning, projection, permalink', async ({ page }
     await expect(page).not.toHaveURL(/q=/);
 });
 
+test('lens switcher: treemap renders, selection and dimming survive switching', async ({
+    page,
+}) => {
+    await loadFixture(page, 'data_index_bloom_encoding_stats_expected.json');
+    await expect(page.locator('#canvas-container svg rect.segment')).not.toHaveCount(0);
+
+    // Dim the only row group first so the treemap inherits the query overlay.
+    await page.locator('#query-add-predicate').click();
+    await page.locator('.qp-column').selectOption('String');
+    await page.locator('.qp-op').selectOption('gt');
+    await page.locator('.qp-value').fill('zzz');
+    await page.locator('#query-run-btn').click();
+
+    // Switch lens: treemap rects render over the same tree, hash gains lens=.
+    await page.locator('#lens-treemap').click();
+    const treemap = page.locator('#canvas-container svg.treemap');
+    await expect(treemap.locator('rect.segment')).not.toHaveCount(0);
+    await expect(page).toHaveURL(/lens=treemap/);
+
+    // A click selects the node in the info panel and drills into its children.
+    await treemap.locator('rect.segment[data-segment-id="data_region"]').click();
+    const panel = page.locator('#info-panel-container');
+    await expect(panel).toContainText('Data Region');
+    await expect(page).toHaveURL(/node=data_region/);
+
+    // Query dimming applies in this lens too: the pruned row group is dimmed.
+    const rowGroupRect = treemap.locator('rect.segment[data-segment-id="rg_0"]');
+    await expect(rowGroupRect).toHaveClass(/segment-dimmed/);
+
+    // Drill further; the breadcrumb tracks the path back out.
+    await rowGroupRect.click();
+    await expect(panel).toContainText('Row Group');
+    await expect(page.locator('.treemap-breadcrumb')).toContainText('DATA');
+
+    // Switch back: the selection carries over (rg_0 re-selected by id) and the
+    // byte-layout rect is both selected and still dimmed; lens= drops off.
+    await page.locator('#lens-bytes').click();
+    const byteRect = page.locator(
+        '#canvas-container svg:not(.treemap) rect.segment[data-segment-id="rg_0"]'
+    );
+    await expect(byteRect).toHaveClass(/segment-selected/);
+    await expect(byteRect).toHaveClass(/segment-dimmed/);
+    await expect(page).not.toHaveURL(/lens=/);
+
+    // A lens=treemap permalink loads straight into the treemap (IndexedDB
+    // restore). goto with only a hash difference is a same-document
+    // navigation, so reload to actually re-run the app against the new hash.
+    await page.goto('/#lens=treemap');
+    await page.reload();
+    await expect(page.locator('#canvas-container svg.treemap rect.segment')).not.toHaveCount(0);
+});
+
 test('bloom filter probe degrades with a note on JSON-dump loads', async ({ page }) => {
     // This dump records bloom_filter_offset AND length, so the bloom node
     // exists -- but a JSON load has no live worker file to probe against.

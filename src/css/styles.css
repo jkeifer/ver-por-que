@@ -1186,6 +1186,53 @@ code {
     opacity: 0.2;
 }
 
+/* Lens switcher: byte layout vs treemap over the same segment tree */
+.lens-switcher {
+    display: flex;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-md);
+}
+
+.lens-btn.lens-active {
+    background: var(--viz-blue);
+    color: white;
+    border-color: var(--viz-blue);
+}
+
+/* Treemap lens: breadcrumb trail for climbing back out of a drill-down */
+.treemap-breadcrumb {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+    margin-bottom: var(--spacing-sm);
+    font-size: 0.85rem;
+}
+
+.treemap-crumb {
+    background: none;
+    border: none;
+    padding: 2px 4px;
+    font-family: var(--font-sans);
+    font-size: 0.85rem;
+    color: var(--viz-blue);
+    cursor: pointer;
+}
+
+.treemap-crumb:hover:not(:disabled) {
+    text-decoration: underline;
+}
+
+.treemap-crumb:disabled {
+    color: var(--text-primary);
+    font-weight: 600;
+    cursor: default;
+}
+
+.treemap-crumb-sep {
+    color: var(--text-secondary);
+}
+
 /* Query simulation section: read matrix + query builder */
 .query-section {
     margin-top: var(--spacing-xl);
