@@ -22,9 +22,10 @@ jobs:
           cache: npm
       - name: Install dependencies
         run: npm ci
-      # Restore via a PyPI wheel download once por-que ships the current dump
-      # format: build the wheel into static/vendor/ so the pyodide integration
-      # test runs. Until then it self-skips when static/vendor is absent.
+      # Stage the pinned por-que/hctef wheels into static/vendor/ so the
+      # pyodide integration tests run instead of self-skipping.
+      - name: Fetch wheels
+        run: npm run wheel
       - name: Lint
         run: npm run lint
       - name: Format check
