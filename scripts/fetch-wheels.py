@@ -4,9 +4,11 @@
 The webapp parses raw .parquet files in the browser via pyodide, which needs
 por-que and hctef wheels as static assets. This downloads the pinned releases
 from PyPI, verifies their hashes, and stages them, plus a tiny manifest, into
-``static/vendor/`` (gitignored). The pyodide integration test skips itself
-when the manifest is absent, so this is only required to actually run that
-test (and to serve the app).
+``static/vendor/`` (gitignored). It also extracts ``por_que/dump-schema.json``
+from the por-que wheel to ``static/vendor/por-que.schema.json``, which
+``npm run generate`` codegens types and validators from -- so the validator
+can never drift from the runtime. The pyodide integration test skips itself
+when the manifest is absent.
 
 Already-staged wheels with matching hashes are left alone, so repeat runs are
 offline-friendly. To bump a version: update WHEELS below with the new
@@ -19,6 +21,7 @@ import hashlib
 import json
 import sys
 import urllib.request
+import zipfile
 
 from pathlib import Path
 
@@ -70,6 +73,12 @@ def main() -> None:
     for old in VENDOR.glob('*.whl'):
         if old.name not in {wheel.name for wheel in staged.values()}:
             old.unlink()
+    # The dump JSON Schema ships inside the por-que wheel; extract it so
+    # `npm run generate` codegens from the exact schema the runtime uses.
+    schema = VENDOR / 'por-que.schema.json'
+    with zipfile.ZipFile(staged['wheel']) as whl:
+        schema.write_bytes(whl.read('por_que/dump-schema.json'))
+    print(f'extracted {schema.name}')  # noqa: T201
     (VENDOR / 'manifest.json').write_text(
         json.dumps({key: wheel.name for key, wheel in staged.items()}) + '\n',
     )

@@ -5,10 +5,10 @@ node_modules/
 dist/
 src/build-info.js
 
-# Generated from schema/por-que.schema.json by `npm run generate`
+# Generated from the wheel-extracted schema by `npm run generate`
 src/generated/
 
-# por-que wheel + manifest staged by `npm run wheel` for in-browser parsing
+# por-que wheels + manifest + dump schema staged by `npm run wheel`
 static/vendor/
 
 # Logs

@@ -1,8 +1,9 @@
 /**
  * App-facing aliases for the schema-generated dump types.
  *
- * The dump shapes themselves are GENERATED from schema/por-que.schema.json into
- * src/generated/por-que.d.ts (see `npm run generate`). This module only gives
+ * The dump shapes themselves are GENERATED from the pinned por-que wheel's
+ * dump schema into src/generated/por-que.d.ts (see `npm run generate`). This
+ * module only gives
  * them friendly, stable names for the rest of the app to import.
  *
  * ponytail: RowGroup1 / KeyValueMetadata1 are the generator's collision-renamed
