@@ -26,11 +26,17 @@ const ctx = globalThis as unknown as WorkerContext;
 
 let parserPromise: Promise<ParquetParser> | null = null;
 
-async function loadWheel(manifestUrl: string): Promise<WheelAsset> {
-    const manifest = (await (await fetch(manifestUrl)).json()) as { wheel: string };
-    const wheelUrl = new URL(manifest.wheel, manifestUrl).href;
-    const bytes = new Uint8Array(await (await fetch(wheelUrl)).arrayBuffer());
-    return { filename: manifest.wheel, bytes };
+async function loadWheels(manifestUrl: string): Promise<WheelAsset[]> {
+    const manifest = (await (await fetch(manifestUrl)).json()) as {
+        wheel: string;
+        hctef: string;
+    };
+    const load = async (filename: string): Promise<WheelAsset> => {
+        const wheelUrl = new URL(filename, manifestUrl).href;
+        const bytes = new Uint8Array(await (await fetch(wheelUrl)).arrayBuffer());
+        return { filename, bytes };
+    };
+    return Promise.all([manifest.hctef, manifest.wheel].map(load));
 }
 
 function getParser(manifestUrl: string): Promise<ParquetParser> {
@@ -46,7 +52,7 @@ function getParser(manifestUrl: string): Promise<ParquetParser> {
             return createParquetParser({
                 loadPyodide: mod.loadPyodide,
                 indexURL: PYODIDE_CDN,
-                loadWheel: () => loadWheel(manifestUrl),
+                loadWheels: () => loadWheels(manifestUrl),
                 onStatus: status => ctx.postMessage({ status }),
             });
         })();
@@ -55,14 +61,15 @@ function getParser(manifestUrl: string): Promise<ParquetParser> {
 }
 
 ctx.addEventListener('message', event => {
-    const { id, name, bytes, manifestUrl } = event.data;
+    const req = event.data;
     void (async () => {
         try {
-            const parser = await getParser(manifestUrl);
-            const dump = await parser(new Uint8Array(bytes), name);
-            ctx.postMessage({ id, ok: true, dump });
+            const parser = await getParser(req.manifestUrl);
+            const source = req.url !== undefined ? { url: req.url } : new Uint8Array(req.bytes);
+            const dump = await parser(source, req.name);
+            ctx.postMessage({ id: req.id, ok: true, dump });
         } catch (error) {
-            ctx.postMessage({ id, ok: false, error: (error as Error).message });
+            ctx.postMessage({ id: req.id, ok: false, error: (error as Error).message });
         }
     })();
 });

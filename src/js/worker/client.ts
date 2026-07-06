@@ -47,13 +47,29 @@ export class ParquetWorkerClient {
 
     /** Parses raw parquet bytes into a por-que dump JSON string. */
     parse(bytes: ArrayBuffer, name: string): Promise<string> {
+        return this.request({ name, bytes }, [bytes]);
+    }
+
+    /**
+     * Parses a remote parquet URL into a por-que dump JSON string. The worker
+     * reads it in place via HTTP range requests, falling back to a whole-file
+     * download when the server (or CORS) doesn't support ranges.
+     */
+    parseURL(url: string): Promise<string> {
+        return this.request({ name: url, url });
+    }
+
+    private request(
+        payload: { name: string } & ({ bytes: ArrayBuffer } | { url: string }),
+        transfer: Transferable[] = []
+    ): Promise<string> {
         const worker = this.ensureWorker();
         const id = this.nextId++;
         const manifestUrl = new URL('vendor/manifest.json', document.baseURI).href;
         return new Promise<string>((resolve, reject) => {
             this.pending.set(id, { resolve, reject });
-            const req: ParseRequest = { id, name, bytes, manifestUrl };
-            worker.postMessage(req, [bytes]);
+            const req = { id, manifestUrl, ...payload } as ParseRequest;
+            worker.postMessage(req, transfer);
         });
     }
 }
