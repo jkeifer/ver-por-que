@@ -1,19 +1,23 @@
 /**
  * Query simulation panel: a row-groups × columns matrix of what a query would
- * read (and why), with the predicate/projection builder beneath it.
+ * read (and why), a structured read summary, and the builder cards beneath it.
  *
  * Rendering and input handling only — the pruning engine lives in
  * business/pruning. The delegate owns everything outside the panel (segment
- * dimming, info-panel overlay, permalink). The matrix always reflects the
- * LAST RUN evaluation crossed with the CURRENT output projection: toggling a
- * return column redraws immediately; predicates take effect on Run.
+ * dimming, info-panel overlay, permalink). The simulation is LIVE: every
+ * change that yields a valid query state re-evaluates (value edits behind a
+ * short debounce). An incomplete predicate row — empty or unparseable value —
+ * is simply excluded from evaluation and flagged with a muted hint; it never
+ * errors and never blocks the other rows.
  */
 import {
     columnStats,
     evaluate,
     formatStatValue,
+    isValidPredicate,
     leafColumns,
     OP_LABEL,
+    rowCounts,
     type Evaluation,
     type Op,
     type Predicate,
@@ -23,14 +27,15 @@ import { escapeHtml } from './info-panel-manager';
 import type { AnyDump } from '../types';
 
 export interface QueryPanelDelegate {
-    /** A query ran: overlay the evaluation on the rest of the app. */
-    onRun(state: QueryState, evaluation: Evaluation): void;
-    /** The query was cleared (or errored): drop any overlay. */
+    /** The live query state changed: overlay the evaluation on the rest of the app. */
+    onUpdate(state: QueryState, evaluation: Evaluation): void;
+    /** The query is back to the default state (no predicates, all columns): drop any overlay. */
     onClear(): void;
 }
 
-const NOT_SELECTED = 'not selected for output — not read';
+const NOT_SELECTED = 'not read — not selected for output';
 const EVAL_ONLY = 'read only to evaluate a predicate — not in the output';
+const INCOMPLETE = 'incomplete — not applied';
 
 const emptyEvaluation = (): Evaluation => ({ rowGroups: new Map(), pages: new Map() });
 
@@ -59,13 +64,16 @@ export class QueryPanel {
     private readonly matrix: HTMLTableElement;
     private readonly rowsEl: HTMLElement;
     private readonly summaryEl: HTMLElement;
+    private readonly summaryNoteEl: HTMLElement;
     private readonly checks: HTMLInputElement[];
     /** Per-column "type · min · max · nulls" line, shared by tooltips and rows. */
     private readonly stats: Map<string, string>;
-    /** Last run's evaluation; empty until Run (nothing pruned). */
+    /** Current evaluation of the VALID predicates; empty means nothing pruned. */
     private evaluation: Evaluation = emptyEvaluation();
-    /** Columns the last run's predicates touch (read even when not projected). */
+    /** Columns the valid predicates touch (read even when not projected). */
     private predicateColumns = new Set<string>();
+    /** Debounce handle for value-input edits. */
+    private updateTimer: ReturnType<typeof setTimeout> | undefined;
 
     constructor(container: HTMLElement, dump: AnyDump, delegate: QueryPanelDelegate) {
         this.dump = dump;
@@ -80,9 +88,14 @@ export class QueryPanel {
                 <span><span class="qm-swatch qm-pruned"></span>skipped — a predicate pruned the row group</span>
                 <span><span class="qm-swatch qm-skip"></span>${NOT_SELECTED}</span>
             </div>
-            <div class="query-builder">
-                <fieldset class="query-columns">
-                    <legend>Return columns</legend>
+            <div class="info-sections query-cards">
+                <div class="info-section large-card query-summary-card">
+                    <h5 class="info-section-title">Read Summary</h5>
+                    <div id="query-summary" class="info-grid"></div>
+                    <p class="query-summary-note" hidden></p>
+                </div>
+                <div class="info-section regular-card query-columns">
+                    <h5 class="info-section-title">Return Columns</h5>
                     <div class="query-columns-actions">
                         <button type="button" id="query-select-all" class="btn btn-sm">
                             Select all
@@ -99,25 +112,25 @@ export class QueryPanel {
                             )
                             .join('')}
                     </div>
-                </fieldset>
-                <div class="query-predicates">
-                    <div class="query-predicate-rows"></div>
-                    <button type="button" id="query-add-predicate" class="btn btn-sm">
-                        Add predicate
-                    </button>
-                    <span class="query-predicates-note">predicates combine with AND</span>
                 </div>
-                <div class="query-actions">
-                    <button type="button" id="query-run-btn" class="btn btn-primary btn-sm">
-                        Run
-                    </button>
-                    <button type="button" id="query-clear-btn" class="btn btn-sm">Clear</button>
-                    <span id="query-summary" class="query-summary"></span>
+                <div class="info-section regular-card query-predicates">
+                    <h5 class="info-section-title">Predicates</h5>
+                    <div class="query-predicate-rows"></div>
+                    <div class="query-predicates-actions">
+                        <button type="button" id="query-add-predicate" class="btn btn-sm">
+                            Add predicate
+                        </button>
+                        <button type="button" id="query-clear-btn" class="btn btn-sm">Clear</button>
+                    </div>
+                    <span class="query-predicates-note">
+                        predicates combine with AND; the matrix updates as you type
+                    </span>
                 </div>
             </div>`;
         this.matrix = container.querySelector('.query-matrix')!;
         this.rowsEl = container.querySelector('.query-predicate-rows')!;
         this.summaryEl = container.querySelector('#query-summary')!;
+        this.summaryNoteEl = container.querySelector('.query-summary-note')!;
         this.checks = [...container.querySelectorAll<HTMLInputElement>('.query-columns input')];
         container
             .querySelector('#query-select-all')!
@@ -125,16 +138,19 @@ export class QueryPanel {
         container
             .querySelector('#query-deselect-all')!
             .addEventListener('click', () => this.setAllColumns(false));
-        container
-            .querySelector('#query-add-predicate')!
-            .addEventListener('click', () => this.addPredicateRow());
-        container.querySelector('#query-run-btn')!.addEventListener('click', () => this.run());
+        container.querySelector('#query-add-predicate')!.addEventListener('click', () => {
+            this.addPredicateRow();
+            this.update();
+        });
         container.querySelector('#query-clear-btn')!.addEventListener('click', () => this.clear());
-        this.checks.forEach(cb => cb.addEventListener('change', () => this.render()));
+        this.checks.forEach(cb => cb.addEventListener('change', () => this.update()));
+        // Initial paint only: the default state (no predicates, everything
+        // projected) has nothing to overlay, and calling the delegate here
+        // would clear a `q=` permalink before main.ts has read it.
         this.render();
     }
 
-    /** Restore a permalink state: rebuild the builder and run it. */
+    /** Restore a permalink state: rebuild the builder and evaluate it. */
     applyState(state: QueryState): void {
         const known = new Set(this.columns);
         this.rowsEl.innerHTML = '';
@@ -143,14 +159,14 @@ export class QueryPanel {
         this.checks.forEach(cb => {
             cb.checked = selected.has(cb.dataset['column']!);
         });
-        this.run();
+        this.update();
     }
 
     private setAllColumns(checked: boolean): void {
         this.checks.forEach(cb => {
             cb.checked = checked;
         });
-        this.render();
+        this.update();
     }
 
     private addPredicateRow(preset?: Predicate): void {
@@ -173,6 +189,7 @@ export class QueryPanel {
             <button type="button" class="qp-remove btn btn-sm" aria-label="Remove predicate">
                 &times;
             </button>
+            <span class="qp-hint"></span>
             <span class="qp-stats"></span>`;
         if (preset) {
             row.querySelector<HTMLSelectElement>('.qp-column')!.value = preset.column;
@@ -186,59 +203,84 @@ export class QueryPanel {
         const showStats = (): void => {
             statsEl.textContent = this.stats.get(columnSel.value) ?? '';
         };
-        columnSel.addEventListener('change', showStats);
-        showStats();
-        row.querySelector('.qp-remove')!.addEventListener('click', () => row.remove());
-        row.querySelector('.qp-value')!.addEventListener('keypress', e => {
-            if ((e as KeyboardEvent).key === 'Enter') {
-                this.run();
-            }
+        columnSel.addEventListener('change', () => {
+            showStats();
+            this.update();
         });
+        showStats();
+        row.querySelector('.qp-op')!.addEventListener('change', () => this.update());
+        row.querySelector('.qp-remove')!.addEventListener('click', () => {
+            row.remove();
+            this.update();
+        });
+        row.querySelector('.qp-value')!.addEventListener('input', () => this.scheduleUpdate());
         this.rowsEl.appendChild(row);
+    }
+
+    private readRow(row: Element): Predicate {
+        return {
+            column: row.querySelector<HTMLSelectElement>('.qp-column')!.value,
+            op: row.querySelector<HTMLSelectElement>('.qp-op')!.value as Op,
+            value: row.querySelector<HTMLInputElement>('.qp-value')!.value,
+        };
     }
 
     /** The builder's current predicates + projection, straight from the DOM. */
     private readState(): QueryState {
-        const predicates = [...this.rowsEl.querySelectorAll('.query-predicate')].map(row => ({
-            column: row.querySelector<HTMLSelectElement>('.qp-column')!.value,
-            op: row.querySelector<HTMLSelectElement>('.qp-op')!.value as Op,
-            value: row.querySelector<HTMLInputElement>('.qp-value')!.value,
-        }));
+        const predicates = [...this.rowsEl.querySelectorAll('.query-predicate')].map(row =>
+            this.readRow(row)
+        );
         const columns = this.checks.filter(cb => cb.checked).map(cb => cb.dataset['column']!);
         return { predicates, columns };
     }
 
-    private run(): void {
-        const state = this.readState();
-        try {
-            this.evaluation = evaluate(this.dump, state.predicates);
-            this.predicateColumns = new Set(state.predicates.map(p => p.column));
-        } catch (error) {
-            // UI-level input error (bad value / unknown column): report it and
-            // drop any previous run's overlay so nothing stale lingers.
-            this.evaluation = emptyEvaluation();
-            this.predicateColumns = new Set();
-            this.render();
-            this.summaryEl.textContent = (error as Error).message;
-            this.delegate.onClear();
-            return;
-        }
-        this.render();
-        this.delegate.onRun(state, this.evaluation);
+    /** Debounced update for value-input edits (typing re-evaluates live). */
+    private scheduleUpdate(): void {
+        clearTimeout(this.updateTimer);
+        this.updateTimer = setTimeout(() => this.update(), 150);
     }
 
+    /**
+     * Re-evaluate the live state: invalid predicate rows are excluded (and
+     * hinted), valid ones run through the engine, and the delegate follows —
+     * back to onClear when the state degenerates to the default (nothing to
+     * overlay, no `q=` permalink).
+     */
+    private update(): void {
+        clearTimeout(this.updateTimer);
+        const { columns } = this.readState();
+        const valid: Predicate[] = [];
+        for (const row of this.rowsEl.querySelectorAll('.query-predicate')) {
+            const predicate = this.readRow(row);
+            const ok = isValidPredicate(this.dump, predicate);
+            row.querySelector<HTMLElement>('.qp-hint')!.textContent = ok ? '' : INCOMPLETE;
+            if (ok) {
+                valid.push(predicate);
+            }
+        }
+        this.evaluation = evaluate(this.dump, valid);
+        this.predicateColumns = new Set(valid.map(p => p.column));
+        this.render();
+        if (valid.length === 0 && columns.length === this.columns.length) {
+            this.delegate.onClear();
+        } else {
+            this.delegate.onUpdate({ predicates: valid, columns }, this.evaluation);
+        }
+    }
+
+    /** Drop all predicates; the matrix falls back to the projection-only view. */
     private clear(): void {
         this.rowsEl.innerHTML = '';
-        this.checks.forEach(cb => {
-            cb.checked = true;
-        });
-        this.evaluation = emptyEvaluation();
-        this.predicateColumns = new Set();
-        this.render();
-        this.delegate.onClear();
+        this.update();
     }
 
-    /** Redraw the matrix + summary from the last evaluation and current projection. */
+    /**
+     * Redraw the matrix + summary. Cell precedence: a column that is neither
+     * projected nor under a valid predicate is never read (gray) — even in a
+     * pruned row group, skipping it saves nothing. Only the remaining columns
+     * show the row group's pruned (red) / kept (green or eval-only yellow)
+     * decision.
+     */
     private render(): void {
         const selected = new Set(this.readState().columns);
         const head = `<tr><th class="qm-rowhead"></th>${this.columns
@@ -251,23 +293,25 @@ export class QueryPanel {
                 const decision = this.evaluation.rowGroups.get(index);
                 const cells = this.columns
                     .map(column => {
+                        const projected = selected.has(column);
+                        const hasPredicate = this.predicateColumns.has(column);
                         let cls: string;
                         let reason: string;
-                        if (decision?.pruned) {
+                        if (!projected && !hasPredicate) {
+                            cls = 'qm-skip';
+                            reason = NOT_SELECTED;
+                        } else if (decision?.pruned) {
                             cls = 'qm-pruned';
                             reason = decision.reason;
-                        } else if (selected.has(column)) {
-                            cls = 'qm-read';
-                            reason =
-                                decision && this.predicateColumns.has(column)
-                                    ? `read and returned; ${decision.reason}`
-                                    : 'read and returned';
-                        } else if (this.predicateColumns.has(column)) {
+                        } else if (!projected) {
                             cls = 'qm-eval';
                             reason = decision ? `${EVAL_ONLY}; ${decision.reason}` : EVAL_ONLY;
                         } else {
-                            cls = 'qm-skip';
-                            reason = NOT_SELECTED;
+                            cls = 'qm-read';
+                            reason =
+                                decision && hasPredicate
+                                    ? `read and returned; ${decision.reason}`
+                                    : 'read and returned';
                         }
                         const title = `${column}\n${this.stats.get(column)}\n${reason}`;
                         return `<td class="qm-cell ${cls}" title="${escapeHtml(title)}"></td>`;
@@ -277,45 +321,73 @@ export class QueryPanel {
             })
             .join('');
         this.matrix.innerHTML = `<thead>${head}</thead><tbody>${body}</tbody>`;
-        this.summaryEl.textContent = this.summaryText(selected);
+        this.renderSummary(selected);
     }
 
-    /** "would read X of Y column chunks in N of M row groups" (+ pages on full dumps). */
-    private summaryText(selected: Set<string>): string {
+    /**
+     * Structured read summary. "Up to" on rows is deliberate: statistics
+     * pruning is an upper bound, never an exact row count. Chunk counts follow
+     * the cell precedence — a gray (never-read) chunk counts as not read, and
+     * is never attributed to pruning.
+     */
+    private renderSummary(selected: Set<string>): void {
         const groups = this.dump.metadata.row_groups;
-        let total = 0;
-        let read = 0;
-        let groupsRead = 0;
+        let chunksTotal = 0;
+        let chunksRead = 0;
+        let groupsKept = 0;
         groups.forEach((group, index) => {
             const pruned = this.evaluation.rowGroups.get(index)?.pruned ?? false;
             if (!pruned) {
-                groupsRead += 1;
+                groupsKept += 1;
             }
             for (const column of this.columns) {
                 if (!(column in group.column_chunks)) {
                     continue;
                 }
-                total += 1;
+                chunksTotal += 1;
                 if (!pruned && (selected.has(column) || this.predicateColumns.has(column))) {
-                    read += 1;
+                    chunksRead += 1;
                 }
             }
         });
-        const s = (n: number): string => (n === 1 ? '' : 's');
-        let text =
-            `would read ${read} of ${total} column chunk${s(total)} ` +
-            `in ${groupsRead} of ${groups.length} row group${s(groups.length)}`;
-        if (!('column_chunks' in this.dump)) {
-            // Metadata-only export: the column index isn't in the dump, so
-            // page-level decisions degrade to a note (once a predicate ran).
-            if (this.evaluation.rowGroups.size > 0) {
-                text += ' — page detail is not in a metadata-only dump';
-            }
-        } else if (this.evaluation.pages.size > 0) {
+        const rows = rowCounts(this.dump, this.evaluation);
+        const items: [string, string][] = [
+            ['Rows', `up to ${rows.kept} of ${rows.total}`],
+            ['Row groups', `${groupsKept} of ${groups.length} read`],
+            ['Column chunks', `${chunksRead} of ${chunksTotal} read`],
+        ];
+        if ('column_chunks' in this.dump && this.evaluation.pages.size > 0) {
+            // A page inside a pruned row group is never read, whatever its own
+            // column-index decision says (e.g. "cannot prune — no column
+            // index"): the reader skips the whole row group first.
+            const prunedGroups = new Set(
+                [...this.evaluation.rowGroups.entries()]
+                    .filter(([, d]) => d.pruned)
+                    .map(([index]) => index)
+            );
+            const inPrunedGroup = (key: string): boolean => {
+                const match = /^rg_(\d+)_/.exec(key);
+                return match !== null && prunedGroups.has(Number(match[1]));
+            };
             const pages = this.evaluation.pages;
-            const kept = [...pages.values()].filter(d => !d.pruned).length;
-            text += `, ${kept} of ${pages.size} page${s(pages.size)}`;
+            const kept = [...pages.entries()].filter(
+                ([key, d]) => !d.pruned && !inPrunedGroup(key)
+            ).length;
+            items.push(['Pages', `${kept} of ${pages.size} read`]);
         }
-        return text;
+        this.summaryEl.innerHTML = items
+            .map(
+                ([label, value]) =>
+                    `<div class="info-item"><span class="info-label">${escapeHtml(label)}</span>` +
+                    `<span class="info-value">${escapeHtml(value)}</span></div>`
+            )
+            .join('');
+        // Metadata-only export: the column index isn't in the dump, so
+        // page-level decisions degrade to a note (once a predicate applies).
+        const degraded = !('column_chunks' in this.dump) && this.evaluation.rowGroups.size > 0;
+        this.summaryNoteEl.hidden = !degraded;
+        this.summaryNoteEl.textContent = degraded
+            ? 'page detail is not in a metadata-only dump'
+            : '';
     }
 }

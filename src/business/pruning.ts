@@ -145,6 +145,37 @@ export function columnStats(dump: AnyDump, column: string): ColumnStats | null {
     return out;
 }
 
+/**
+ * Can this predicate evaluate right now? Known column and a non-empty value
+ * that parses for the column's type. Unsupported-type columns pass with any
+ * non-empty value — they evaluate honestly to "cannot prune". The live
+ * builder excludes invalid rows instead of erroring while the user types.
+ */
+export function isValidPredicate(dump: AnyDump, p: Predicate): boolean {
+    const leaf = findSchemaLeaf(dump.metadata.schema_root, p.column);
+    if (!leaf || p.value === '') {
+        return false;
+    }
+    return unsupportedReason(leaf) !== null || parsePredicateValue(p.value, leaf) !== undefined;
+}
+
+/**
+ * Row counts under an evaluation: total across all row groups, and the sum
+ * over KEPT row groups. Kept is an upper bound — statistics pruning proves
+ * rows CAN'T match, never that the remaining rows do.
+ */
+export function rowCounts(dump: AnyDump, evaluation: Evaluation): { kept: number; total: number } {
+    let kept = 0;
+    let total = 0;
+    dump.metadata.row_groups.forEach((group, index) => {
+        total += group.row_count;
+        if (!(evaluation.rowGroups.get(index)?.pruned ?? false)) {
+            kept += group.row_count;
+        }
+    });
+    return { kept, total };
+}
+
 const NO_STATS: Decision = { pruned: false, reason: 'cannot prune — no statistics written' };
 
 const cannot = (why: string): Decision => ({ pruned: false, reason: `cannot prune — ${why}` });
