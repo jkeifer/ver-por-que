@@ -111,14 +111,17 @@ npm run wheel   # builds the wheels into static/vendor/ (gitignored), once
 
 ### Pre-commit Hooks
 
-The project uses [lefthook](https://github.com/evilmartians/lefthook)
-(`lefthook.yml`) to run quality checks on staged JS/TS files before commits:
+The project uses [prek](https://prek.j178.dev) (`.pre-commit-config.yaml`),
+installed via the `@j178/prek` npm package, to run quality checks on staged
+JS/TS files before commits:
 
 - **ESLint**: Code quality and style checks (`npm run lint:fix`)
 - **Prettier**: Code formatting (`npm run format`)
 
-Install the hooks once with `npx lefthook install`. If pre-commit hooks fail,
-fix the issues before committing:
+The `prepare` script installs the git hooks automatically on `npm install`;
+run `npx prek install` to set them up manually. All hooks are
+`language: system` running the npm scripts above, so prek never builds hook
+environments. If pre-commit hooks fail, fix the issues before committing:
 
 ```bash
 npm run lint:fix

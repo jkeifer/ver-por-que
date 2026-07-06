@@ -5,6 +5,7 @@
     "description": "An interactive web-based tool for exploring how parquet files are structured. Pair with the python tool por-que, dump the file structure to JSON, and then load in this UI to see how the file is put together.",
     "source": "src/index.html",
     "scripts": {
+        "prepare": "prek install -f",
         "generate": "node scripts/generate.mjs",
         "wheel": "python3 scripts/build-wheel.py",
         "predev": "npm run generate",
@@ -34,6 +35,7 @@
     "homepage": "https://teotl.dev/ver-por-que",
     "devDependencies": {
         "@eslint/js": "^9.38.0",
+        "@j178/prek": "^0.4.8",
         "@types/node": "^26.1.0",
         "ajv": "^8.20.0",
         "eslint": "^9.38.0",

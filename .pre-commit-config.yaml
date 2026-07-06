@@ -1,0 +1,21 @@
+# Run with prek (https://prek.j178.dev), a rust reimplementation of
+# pre-commit, installed here via the @j178/prek npm package. Hooks are
+# installed automatically by the `prepare` script on `npm install`.
+#
+# Every hook is `language: system` running the repo's npm scripts, so prek
+# never builds isolated hook environments.
+repos:
+  - repo: local
+    hooks:
+      - id: eslint
+        name: eslint
+        entry: npm run lint:fix
+        language: system
+        files: \.(js|mjs|ts)$
+        pass_filenames: false
+      - id: prettier
+        name: prettier
+        entry: npm run format
+        language: system
+        files: \.(js|mjs|ts|json|md|html|css)$
+        pass_filenames: false
