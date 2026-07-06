@@ -139,7 +139,9 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
             status('Range requests unavailable; downloading whole file...');
             const response = await fetch(url);
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                throw new Error(`HTTP ${response.status}: ${response.statusText}`, {
+                    cause: error,
+                });
             }
             return parseBytes(new Uint8Array(await response.arrayBuffer()), name);
         }
