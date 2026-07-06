@@ -236,6 +236,19 @@ describe('projectDump', () => {
         };
         expect(ids(projectDump(load(INDEXED)))).toEqual(ids(projectDump(load(INDEXED))));
     });
+
+    it('produces unique node ids across row groups', () => {
+        // Synthesize a second row group holding the same columns: every
+        // per-column node (pages, dict, indexes, blooms) must stay unique.
+        const dump = load(INDEXED);
+        dump.metadata.row_groups.push(structuredClone(dump.metadata.row_groups[0]!));
+        for (const chunk of [...dump.column_chunks]) {
+            dump.column_chunks.push({ ...structuredClone(chunk), row_group: 1 });
+        }
+        const ids: string[] = [];
+        walk(projectDump(dump), n => ids.push(n.id));
+        expect(new Set(ids).size).toBe(ids.length);
+    });
 });
 
 describe('projectMetadataExport', () => {
