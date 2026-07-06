@@ -8,6 +8,7 @@
 import { formatBytes, formatNumber, formatOffset } from '../format';
 import { logicalTypeLabel, displayType } from '../domain/parquet-type-resolver';
 import { describe, type Kind, type SegmentNode } from '../business/segment-tree';
+import type { ByteSource } from '../js/byte-source';
 import type { AnyDump, ColumnStatistics, SchemaGroup, SchemaLeaf, SchemaRoot } from '../types';
 
 /** A metadata-only export lacks the physical `column_chunks` array. */
@@ -25,6 +26,28 @@ function columnChunkCount(dump: AnyDump): number {
 
 const METADATA_ONLY_NOTE =
     'Page detail is not in a metadata-only dump — load the original .parquet to see pages.';
+
+const BYTES_UNAVAILABLE_NOTE =
+    'Raw bytes are not available for this load — load the original .parquet to inspect bytes.';
+
+/** Hex inspector window: page through the span 4 KB at a time. */
+const HEX_WINDOW = 4096;
+const HEX_BYTES_PER_ROW = 16;
+
+/** Classic hex dump: offset gutter, hex bytes, ASCII. Rows start at `offset`. */
+function hexDump(bytes: Uint8Array, offset: number): string {
+    const lines: string[] = [];
+    for (let row = 0; row < bytes.length; row += HEX_BYTES_PER_ROW) {
+        const slice = bytes.subarray(row, row + HEX_BYTES_PER_ROW);
+        const hex = Array.from(slice, b => b.toString(16).padStart(2, '0')).join(' ');
+        const ascii = Array.from(slice, b =>
+            b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.'
+        ).join('');
+        const gutter = (offset + row).toString(16).padStart(8, '0');
+        lines.push(`${gutter}  ${hex.padEnd(HEX_BYTES_PER_ROW * 3 - 1)}  ${ascii}`);
+    }
+    return lines.join('\n');
+}
 
 type Row = [string, string | number];
 interface Section {
@@ -599,10 +622,16 @@ export const PANEL_KINDS = new Set<Kind>(Object.keys(PANELS) as Kind[]);
 export class InfoPanelManager {
     private container: HTMLElement;
     private infoPanel: HTMLElement;
+    private byteSource: ByteSource | null;
+    /** Hex window start (absolute file offset) for the currently shown node. */
+    private hexOffset = 0;
+    /** Invalidates in-flight hex reads when the selection or window changes. */
+    private hexToken = 0;
 
-    constructor(container: HTMLElement) {
+    constructor(container: HTMLElement, byteSource: ByteSource | null = null) {
         this.container = container;
         this.container.innerHTML = '';
+        this.byteSource = byteSource;
         this.infoPanel = document.createElement('div');
         this.infoPanel.className = 'info-panel';
         this.infoPanel.style.display = 'none';
@@ -615,13 +644,74 @@ export class InfoPanelManager {
         // the mapped type can't prove that at the call site, so widen once here.
         const handler = PANELS[node.kind] as (n: SegmentNode, d: AnyDump) => Section[];
         const heading = node.kind === 'file' ? 'File Overview' : describe(node);
+        const sections = handler(node, dump);
+        if (!this.byteSource) {
+            // No original file bytes (JSON dump, metadata export, or restore):
+            // same degradation pattern as METADATA_ONLY_NOTE.
+            sections.push({ title: 'Raw Bytes', rows: [['Detail', BYTES_UNAVAILABLE_NOTE]] });
+        }
         this.infoPanel.style.display = 'block';
-        this.infoPanel.innerHTML = `<h3>${heading}</h3><div class="info-sections">${handler(
-            node,
-            dump
-        )
+        this.infoPanel.innerHTML = `<h3>${heading}</h3><div class="info-sections">${sections
             .map(s => this.renderSection(s))
             .join('')}</div>`;
+        if (this.byteSource) {
+            this.hexOffset = node.start;
+            this.infoPanel.querySelector('.info-sections')!.appendChild(this.buildHexSection(node));
+        }
+    }
+
+    /** Interactive hex inspector over the node's byte span. */
+    private buildHexSection(node: SegmentNode): HTMLElement {
+        const section = document.createElement('div');
+        section.className = 'info-section large-card hex-section';
+        section.innerHTML =
+            `<h5 class="info-section-title">Raw Bytes</h5>` +
+            `<div class="hex-header">Bytes ${formatOffset(node.start)}–${formatOffset(
+                node.end
+            )} (${formatBytes(node.end - node.start)})</div>` +
+            `<div class="hex-controls">` +
+            `<button type="button" class="hex-prev">&#9664; Prev</button>` +
+            `<span class="hex-range"></span>` +
+            `<button type="button" class="hex-next">Next &#9654;</button>` +
+            `</div>` +
+            `<pre class="hex-view"></pre>`;
+        if (node.end - node.start <= HEX_WINDOW) {
+            section.querySelector<HTMLElement>('.hex-controls')!.style.display = 'none';
+        }
+        section.querySelector('.hex-prev')!.addEventListener('click', () => {
+            this.hexOffset = Math.max(node.start, this.hexOffset - HEX_WINDOW);
+            this.renderHexWindow(node, section);
+        });
+        section.querySelector('.hex-next')!.addEventListener('click', () => {
+            this.hexOffset = Math.min(this.hexOffset + HEX_WINDOW, node.end - 1);
+            this.renderHexWindow(node, section);
+        });
+        this.renderHexWindow(node, section);
+        return section;
+    }
+
+    private renderHexWindow(node: SegmentNode, section: HTMLElement): void {
+        const start = this.hexOffset;
+        const end = Math.min(start + HEX_WINDOW, node.end);
+        section.querySelector<HTMLButtonElement>('.hex-prev')!.disabled = start <= node.start;
+        section.querySelector<HTMLButtonElement>('.hex-next')!.disabled = end >= node.end;
+        section.querySelector('.hex-range')!.textContent =
+            `${formatOffset(start)}–${formatOffset(end)}`;
+        const view = section.querySelector<HTMLElement>('.hex-view')!;
+        view.textContent = 'Loading bytes...';
+        const token = ++this.hexToken;
+        this.byteSource!.read(start, end).then(
+            bytes => {
+                if (token === this.hexToken) {
+                    view.textContent = hexDump(bytes, start);
+                }
+            },
+            (error: unknown) => {
+                if (token === this.hexToken) {
+                    view.textContent = `Bytes unavailable: ${(error as Error).message}`;
+                }
+            }
+        );
     }
 
     hide(): void {

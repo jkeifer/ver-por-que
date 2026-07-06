@@ -4,6 +4,7 @@
 import { InfoPanelManager } from './components/info-panel-manager';
 import { SvgByteVisualizer } from './components/svg-byte-visualizer';
 import { isParquet, isParquetURL } from './detect';
+import { fromBuffer, fromURL, type ByteSource } from './js/byte-source';
 import { validateFile, validateMetadata, type ValidationError } from './generated/validate';
 import { fetchBytes } from './js/fetch-progress';
 import { ParquetWorkerClient } from './js/worker/client';
@@ -20,6 +21,9 @@ interface StoredFile {
 
 class ParquetExplorer {
     private parquetData: AnyDump | null = null;
+    // Raw-byte access for the hex inspector. Only raw-parquet loads have one;
+    // JSON dumps and IndexedDB restores don't (bytes aren't persisted).
+    private byteSource: ByteSource | null = null;
     private infoPanelManager: InfoPanelManager | null = null;
     private fileStructureViz: SvgByteVisualizer | null = null;
     // Lazily created on the first raw-parquet load so the JSON path never boots
@@ -165,7 +169,10 @@ class ParquetExplorer {
             // whole and sniffed as before.
             if (isParquetURL(url)) {
                 const dump = await this.parseParquetURL(url);
-                await this.parseJSON(dump, url);
+                // The hex inspector re-reads the same URL via range requests;
+                // if the server turns out not to support them, reads reject
+                // and the panel degrades.
+                await this.parseJSON(dump, url, fromURL(url));
                 return;
             }
 
@@ -187,8 +194,11 @@ class ParquetExplorer {
     private async ingest(buffer: ArrayBuffer, source: string): Promise<void> {
         const head = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
         if (isParquet(head, source)) {
-            const dump = await this.parseParquet(buffer, source);
-            await this.parseJSON(dump, source);
+            // Transfer a COPY to the worker (postMessage detaches it) and keep
+            // the original for the hex inspector; workshop files are ~22 MB,
+            // holding one in memory is fine.
+            const dump = await this.parseParquet(buffer.slice(0), source);
+            await this.parseJSON(dump, source, fromBuffer(buffer));
         } else {
             this.updateLoadingStatus('Parsing JSON data...');
             await this.parseJSON(new TextDecoder().decode(buffer), source);
@@ -219,7 +229,11 @@ class ParquetExplorer {
         return this.workerClient;
     }
 
-    private async parseJSON(jsonText: string, source: string): Promise<void> {
+    private async parseJSON(
+        jsonText: string,
+        source: string,
+        byteSource: ByteSource | null = null
+    ): Promise<void> {
         const parsed: unknown = JSON.parse(jsonText);
 
         // Dispatch on the self-identifying envelope, then validate against that
@@ -253,6 +267,7 @@ class ParquetExplorer {
         }
 
         this.parquetData = data;
+        this.byteSource = byteSource;
         await this.saveToStorage(data, source);
 
         this.showExplorer();
@@ -299,7 +314,7 @@ class ParquetExplorer {
             // Tear down any previous visualizer so its listeners/tooltip don't leak.
             this.fileStructureViz?.destroy();
 
-            this.infoPanelManager = new InfoPanelManager(infoPanelContainer);
+            this.infoPanelManager = new InfoPanelManager(infoPanelContainer, this.byteSource);
             this.fileStructureViz = new SvgByteVisualizer(canvasContainer, this.infoPanelManager);
             this.fileStructureViz.initWithData(data);
         } catch (error) {
@@ -311,6 +326,7 @@ class ParquetExplorer {
 
     private async handleReset(): Promise<void> {
         this.parquetData = null;
+        this.byteSource = null;
         await this.clearStorage();
         this.clearFileStructureContent();
         this.showFileInput();

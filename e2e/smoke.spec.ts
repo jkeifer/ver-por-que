@@ -40,6 +40,8 @@ test('renders a full dump and drills into a row group', async ({ page }) => {
     const panel = page.locator('#info-panel-container');
     await expect(panel).toContainText('Physical Layout');
     await expect(panel).toContainText('Row Group');
+    // A JSON-dump load has no original file bytes: hex degrades to a note.
+    await expect(panel).toContainText('Raw bytes are not available');
 });
 
 test('renders a metadata-only export with the source suffix', async ({ page }) => {
@@ -67,5 +69,12 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
     });
     // A worker-produced dump is a full dump, never a metadata-only export.
     await expect(source).not.toContainText('(metadata-only export)');
-    await expect(page.locator('#canvas-container svg rect.segment')).not.toHaveCount(0);
+    const viz = page.locator('#canvas-container svg');
+    await expect(viz.locator('rect.segment')).not.toHaveCount(0);
+
+    // Hex inspector: the header magic is readable straight off the wire.
+    await viz.locator('rect.segment[data-segment-id="magic_header"]').click();
+    const hexView = page.locator('#info-panel-container .hex-view');
+    await expect(hexView).toContainText('50 41 52 31');
+    await expect(hexView).toContainText('PAR1');
 });
