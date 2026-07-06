@@ -163,6 +163,20 @@ test('bloom filter probe degrades with a note on JSON-dump loads', async ({ page
     await expect(panel.locator('.bloom-probe-btn')).toHaveCount(0);
 });
 
+test('value preview degrades with a note on JSON-dump loads', async ({ page }) => {
+    // A JSON load has no live worker file, so nothing can decode values.
+    await page.goto('/#node=rg_0_col_String');
+    await page
+        .locator('#file-input')
+        .setInputFiles(fixture('data_index_bloom_encoding_stats_expected.json'));
+
+    const panel = page.locator('#info-panel-container');
+    await expect(panel).toContainText('Column Chunk String');
+    await expect(panel).toContainText('Value Preview');
+    await expect(panel).toContainText('Decoding values needs the file bytes');
+    await expect(panel.locator('.value-preview-btn')).toHaveCount(0);
+});
+
 test('downloads the loaded dump as re-validating JSON', async ({ page }) => {
     await loadFixture(page, 'data_index_bloom_encoding_stats_expected.json');
     await expect(page.locator('#loaded-file-source')).toContainText('.parquet');
@@ -232,4 +246,14 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
     await page.locator('.bloom-probe-value').fill('zzzzzz-not-here');
     await page.locator('.bloom-probe-btn').click();
     await expect(result).toContainText('definitely not present');
+
+    // Value preview: decode the String chunk in-browser and show real values.
+    await viz.locator('rect.segment[data-segment-id="rg_0"]').click();
+    await viz.locator('rect.segment[data-segment-id="rg_0_col_String"]').click();
+    const panel = page.locator('#info-panel-container');
+    await expect(panel).toContainText('Value Preview');
+    await page.locator('.value-preview-btn').click();
+    const preview = page.locator('.value-preview-result');
+    await expect(preview).toContainText('14 values');
+    await expect(preview).toContainText('Hello');
 });

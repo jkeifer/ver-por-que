@@ -196,6 +196,44 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         await expect(parse.probeBloom(0, 'nope', 'x')).rejects.toThrow(/KeyError|nope/);
     });
 
+    it('previews decoded values from the current-file slot', async () => {
+        const bloomFile = new Uint8Array(
+            readFileSync(fixturePath('data_index_bloom_encoding_with_length.parquet'))
+        );
+        expectValidDump(await parse(bloomFile, 'data_index_bloom_encoding_with_length.parquet'));
+
+        // Exact first values of the one String column (UNCOMPRESSED, PLAIN).
+        await expect(parse.preview(0, 'String', 3)).resolves.toEqual({
+            values: ['Hello', 'This is', 'a'],
+            total: 14,
+            truncated: true,
+        });
+
+        // maxValues past the end: everything, untruncated.
+        const all = await parse.preview(0, 'String', 100);
+        if (all.error !== undefined) {
+            throw new Error(`unexpected codec failure: ${all.codec}`);
+        }
+        expect(all).toMatchObject({ total: 14, truncated: false });
+        expect(all.values).toHaveLength(14);
+        expect(all.values[13]).toBe('dog');
+
+        // Unknown columns reject rather than guess.
+        await expect(parse.preview(0, 'nope', 3)).rejects.toThrow(/KeyError|nope/);
+    });
+
+    it('returns a typed codec failure for snappy chunks (no wasm snappy wheel)', async () => {
+        expectValidDump(await parse(data, 'alltypes_plain.snappy.parquet'));
+
+        // The structure dump above succeeded without decompressing anything;
+        // decoding values needs snappy, which pyodide cannot import -- that
+        // must surface as a typed result, not a rejection.
+        await expect(parse.preview(0, 'id', 5)).resolves.toEqual({
+            error: 'codec_unavailable',
+            codec: 'SNAPPY',
+        });
+    });
+
     it('falls back to a whole-file download when ranges are unsupported', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const server = await serveFixture(data, false);

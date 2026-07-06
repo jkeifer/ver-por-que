@@ -11,6 +11,7 @@ import { OP_LABEL, type Evaluation, type Predicate } from '../business/pruning';
 import { describe, findSchemaLeaf, type Kind, type SegmentNode } from '../business/segment-tree';
 import { parsePredicateValue } from '../business/stat-values';
 import type { ByteSource } from '../js/byte-source';
+import type { PreviewResult, PreviewValue } from '../js/worker/pyodide-parquet';
 import type { AnyDump, ColumnStatistics, SchemaGroup, SchemaLeaf, SchemaRoot } from '../types';
 
 /** A metadata-only export lacks the physical `column_chunks` array. */
@@ -35,11 +36,37 @@ const BYTES_UNAVAILABLE_NOTE =
 const BLOOM_PROBE_UNAVAILABLE_NOTE =
     'Probing needs the filter bytes — load the original .parquet to test values.';
 
+const VALUE_PREVIEW_UNAVAILABLE_NOTE =
+    'Decoding values needs the file bytes — load the original .parquet to preview values.';
+
 /**
  * Tests a value against a column chunk's bloom filter. Only raw-parquet loads
  * have one (the worker holds the file); the value crosses as a string.
  */
 export type BloomProbe = (rowGroup: number, column: string, value: string) => Promise<boolean>;
+
+/**
+ * Decodes the first `maxValues` values of a column chunk in the worker's
+ * current file. Only raw-parquet loads have one, same as BloomProbe.
+ */
+export type ValuePreview = (
+    rowGroup: number,
+    column: string,
+    maxValues: number
+) => Promise<PreviewResult>;
+
+/** How many values a preview decodes and shows. */
+const PREVIEW_MAX_VALUES = 100;
+/** Long values are cut with an ellipsis in the preview list. */
+const PREVIEW_VALUE_MAX_CHARS = 80;
+
+/** Where a value preview points: a chunk's coordinates in the worker's file. */
+interface PreviewTarget {
+    rowGroup: number;
+    column: string;
+    /** True on data_page nodes: v1 previews the whole containing chunk. */
+    pageScoped: boolean;
+}
 
 /** Hex inspector window: page through the span 4 KB at a time. */
 const HEX_WINDOW = 4096;
@@ -58,6 +85,42 @@ function hexDump(bytes: Uint8Array, offset: number): string {
         lines.push(`${gutter}  ${hex.padEnd(HEX_BYTES_PER_ROW * 3 - 1)}  ${ascii}`);
     }
     return lines.join('\n');
+}
+
+/** Friendly (not an error state) message for a codec with no wasm build. */
+function renderPreviewFailure(codec: string): string {
+    const name = escapeHtml(codec);
+    return (
+        `<div class="value-preview-codec-note">This chunk is ${name}-compressed and ` +
+        `${name.toLowerCase()} has no wasm build — values can't be decoded in-browser.</div>`
+    );
+}
+
+/** The decoded values as a scrollable index/value list, NULLs explicit. */
+function renderPreviewValues(values: PreviewValue[], total: number, truncated: boolean): string {
+    const header = truncated
+        ? `showing first ${formatNumber(values.length)} of ${formatNumber(total)} values`
+        : `${formatNumber(total)} value${total === 1 ? '' : 's'}`;
+    const items = values
+        .map((v, i) => {
+            const text =
+                v === null
+                    ? '<span class="value-preview-null">NULL</span>'
+                    : escapeHtml(
+                          String(v).length > PREVIEW_VALUE_MAX_CHARS
+                              ? `${String(v).slice(0, PREVIEW_VALUE_MAX_CHARS - 1)}…`
+                              : String(v)
+                      );
+            return (
+                `<li><span class="value-preview-index">${i}</span>` +
+                `<span class="value-preview-value">${text}</span></li>`
+            );
+        })
+        .join('');
+    return (
+        `<div class="value-preview-header">${header}</div>` +
+        `<ol class="value-preview-list">${items}</ol>`
+    );
 }
 
 type Row = [string, string | number];
@@ -642,6 +705,8 @@ export class InfoPanelManager {
     private byteSource: ByteSource | null;
     /** Live bloom-filter probe; null for JSON-dump / metadata-only loads. */
     private bloomProbe: BloomProbe | null;
+    /** Live value decoder; null for JSON-dump / metadata-only loads. */
+    private valuePreview: ValuePreview | null;
     /** Active query-simulation result, or null when no predicate has run. */
     private query: QueryOverlay | null = null;
     /** Last shown node/dump, so a query run can refresh the open panel. */
@@ -654,12 +719,14 @@ export class InfoPanelManager {
     constructor(
         container: HTMLElement,
         byteSource: ByteSource | null = null,
-        bloomProbe: BloomProbe | null = null
+        bloomProbe: BloomProbe | null = null,
+        valuePreview: ValuePreview | null = null
     ) {
         this.container = container;
         this.container.innerHTML = '';
         this.byteSource = byteSource;
         this.bloomProbe = bloomProbe;
+        this.valuePreview = valuePreview;
         this.infoPanel = document.createElement('div');
         this.infoPanel.className = 'info-panel';
         this.infoPanel.style.display = 'none';
@@ -717,6 +784,14 @@ export class InfoPanelManager {
                 rows: [['Detail', BLOOM_PROBE_UNAVAILABLE_NOTE]],
             });
         }
+        const preview = this.previewTarget(node);
+        if (preview && !this.valuePreview) {
+            // Same degradation pattern as the bloom probe above.
+            sections.push({
+                title: 'Value Preview',
+                rows: [['Detail', VALUE_PREVIEW_UNAVAILABLE_NOTE]],
+            });
+        }
         if (!this.byteSource) {
             // No original file bytes (JSON dump, metadata export, or restore):
             // same degradation pattern as METADATA_ONLY_NOTE.
@@ -731,10 +806,64 @@ export class InfoPanelManager {
                 .querySelector('.info-sections')!
                 .appendChild(this.buildBloomProbeSection(node, dump));
         }
+        if (preview && this.valuePreview) {
+            this.infoPanel
+                .querySelector('.info-sections')!
+                .appendChild(this.buildValuePreviewSection(preview));
+        }
         if (this.byteSource) {
             this.hexOffset = node.start;
             this.infoPanel.querySelector('.info-sections')!.appendChild(this.buildHexSection(node));
         }
+    }
+
+    /** The chunk coordinates a node previews, or null when it has none. */
+    private previewTarget(node: SegmentNode): PreviewTarget | null {
+        if (node.kind === 'column_chunk') {
+            // chunk is null only in metadata-only exports, which never carry a
+            // live valuePreview -- the note path renders and rowGroup is unused.
+            return { rowGroup: node.chunk?.row_group ?? 0, column: node.name, pageScoped: false };
+        }
+        if (node.kind === 'data_page') {
+            return { rowGroup: node.rowGroup, column: node.path, pageScoped: true };
+        }
+        return null;
+    }
+
+    /** Interactive value preview: decode the chunk's first N values on demand. */
+    private buildValuePreviewSection(target: PreviewTarget): HTMLElement {
+        const section = document.createElement('div');
+        section.className = 'info-section large-card value-preview-section';
+        // Honest labeling on pages: v1 decodes the whole containing chunk,
+        // it does not slice to this page's exact rows.
+        const scope = target.pageScoped
+            ? `<div class="value-preview-scope">Shows the first values of this page's ` +
+              `column chunk, not just this page.</div>`
+            : '';
+        section.innerHTML =
+            `<h5 class="info-section-title">Value Preview</h5>` +
+            scope +
+            `<button type="button" class="value-preview-btn">Preview values</button>` +
+            `<div class="value-preview-result"></div>`;
+        const result = section.querySelector<HTMLElement>('.value-preview-result')!;
+        section.querySelector('.value-preview-btn')!.addEventListener('click', () => {
+            result.textContent = 'Decoding values...';
+            this.valuePreview!(target.rowGroup, target.column, PREVIEW_MAX_VALUES).then(
+                res => {
+                    result.innerHTML =
+                        res.error !== undefined
+                            ? renderPreviewFailure(res.codec)
+                            : renderPreviewValues(res.values, res.total, res.truncated);
+                },
+                (error: unknown) => {
+                    // Pyodide errors embed the python traceback; the last line
+                    // is the actual exception.
+                    const message = (error as Error).message.trim();
+                    result.textContent = `Preview failed: ${message.split('\n').pop()!}`;
+                }
+            );
+        });
+        return section;
     }
 
     /** Interactive bloom-filter probe: type a value, ask the worker's filter. */

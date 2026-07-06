@@ -13,10 +13,13 @@ function fakePyodide() {
     const dump = vi.fn().mockResolvedValue('{"dumped":true}');
     const dumpUrl = vi.fn().mockResolvedValue('{"dumped":"url"}');
     const probeBloom = vi.fn().mockResolvedValue(false);
+    // The python side returns preview results as a JSON string.
+    const preview = vi.fn().mockResolvedValue('{"values":["Hello"],"total":14,"truncated":true}');
     const globals = new Map<string, unknown>([
         ['_dump', dump],
         ['_dump_url', dumpUrl],
         ['_probe_bloom', probeBloom],
+        ['_preview', preview],
     ]);
     return {
         loadPackage: vi.fn().mockResolvedValue(undefined),
@@ -28,6 +31,7 @@ function fakePyodide() {
         _dump: dump,
         _dumpUrl: dumpUrl,
         _probeBloom: probeBloom,
+        _preview: preview,
     };
 }
 
@@ -130,6 +134,27 @@ describe('createParquetParser (mocked pyodide)', () => {
         // the python side coerces it per the column's physical type.
         await expect(parse.probeBloom(2, 'id', '9007199254740993')).resolves.toBe(true);
         expect(py._probeBloom).toHaveBeenCalledWith(2, 'id', '9007199254740993');
+    });
+
+    it('parses preview JSON off the python side, typed either way', async () => {
+        const py = fakePyodide();
+        const parse = await boot(py);
+
+        // Success payload: the JSON string becomes a typed result object.
+        await expect(parse.preview(0, 'String', 100)).resolves.toEqual({
+            values: ['Hello'],
+            total: 14,
+            truncated: true,
+        });
+        expect(py._preview).toHaveBeenCalledWith(0, 'String', 100);
+
+        // Codec failure is a typed RESULT (snappy/lzo have no wasm wheel),
+        // never a rejection: the UI renders a friendly note, not an error.
+        py._preview.mockResolvedValueOnce('{"error":"codec_unavailable","codec":"SNAPPY"}');
+        await expect(parse.preview(1, 'col', 5)).resolves.toEqual({
+            error: 'codec_unavailable',
+            codec: 'SNAPPY',
+        });
     });
 
     it('routes URL sources through the range-request path', async () => {
