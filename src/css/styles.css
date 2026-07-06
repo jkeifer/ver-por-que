@@ -12,6 +12,7 @@
     --viz-blue: #1f77b4;
     --viz-orange: #ff7f0e;
     --viz-green: #2ca02c;
+    --viz-yellow: #f0c419;
     --viz-red: #d62728;
     --viz-purple: #9467bd;
     --viz-brown: #8c564b;
@@ -1197,13 +1198,16 @@ code {
     max-width: 70ch;
 }
 
-/* Matrix scrolls horizontally when columns overflow; never breaks the page. */
+/* Fixed table layout: columns share the available width equally and never
+ * force horizontal scroll — long names ellipsize instead (title carries the
+ * full name + stats + reason). */
 .query-matrix-wrap {
-    overflow-x: auto;
     margin-bottom: var(--spacing-sm);
 }
 
 .query-matrix {
+    table-layout: fixed;
+    width: 100%;
     border-collapse: collapse;
     font-family: var(--font-mono);
     font-size: 0.8rem;
@@ -1214,11 +1218,17 @@ code {
     color: var(--text-secondary);
     font-weight: 500;
     text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
     white-space: nowrap;
 }
 
+.query-matrix th.qm-rowhead,
+.query-matrix td.qm-rowhead {
+    width: 3.5rem;
+}
+
 .qm-cell {
-    min-width: 2.5rem;
     height: 1.5rem;
     border: 2px solid var(--bg-primary);
     border-radius: var(--border-radius);
@@ -1226,6 +1236,10 @@ code {
 
 .qm-read {
     background: var(--viz-green);
+}
+
+.qm-eval {
+    background: var(--viz-yellow);
 }
 
 .qm-pruned {
@@ -1265,9 +1279,8 @@ code {
     border: 1px solid var(--border-light);
     border-radius: var(--border-radius);
     padding: var(--spacing-sm) var(--spacing-md);
-    display: flex;
-    flex-wrap: wrap;
-    gap: var(--spacing-md);
+    width: 100%;
+    max-width: 60rem;
 }
 
 .query-columns legend {
@@ -1277,10 +1290,35 @@ code {
     padding: 0 var(--spacing-xs);
 }
 
-.query-columns label {
+.query-columns-actions {
+    display: flex;
+    gap: var(--spacing-sm);
+    margin-bottom: var(--spacing-sm);
+}
+
+/* Scrollable multi-column checklist: holds up to 60+ names without pushing
+ * the page height around. Each label ellipsizes; the title attr carries the
+ * full name. */
+.query-columns-grid {
+    max-height: 12rem;
+    overflow-y: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr));
+    gap: var(--spacing-xs) var(--spacing-md);
+    border-top: 1px solid var(--border-light);
+    padding-top: var(--spacing-sm);
+}
+
+.query-columns-grid label {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
     font-family: var(--font-mono);
     font-size: 0.85rem;
     color: var(--text-primary);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
 }
 
 .query-predicates {
@@ -1301,6 +1339,11 @@ code {
     flex-wrap: wrap;
     gap: var(--spacing-sm);
     margin-bottom: var(--spacing-xs);
+}
+
+.qp-stats {
+    font-size: 0.8rem;
+    color: var(--text-muted);
 }
 
 .query-predicate select,

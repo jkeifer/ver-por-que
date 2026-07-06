@@ -9,7 +9,9 @@
  * return column redraws immediately; predicates take effect on Run.
  */
 import {
+    columnStats,
     evaluate,
+    formatStatValue,
     leafColumns,
     OP_LABEL,
     type Evaluation,
@@ -28,8 +30,27 @@ export interface QueryPanelDelegate {
 }
 
 const NOT_SELECTED = 'not selected for output — not read';
+const EVAL_ONLY = 'read only to evaluate a predicate — not in the output';
 
 const emptyEvaluation = (): Evaluation => ({ rowGroups: new Map(), pages: new Map() });
+
+/** One-line footer-statistics summary for a column ("type · min · max · nulls"). */
+function statsLine(dump: AnyDump, column: string): string {
+    const s = columnStats(dump, column);
+    if (!s) {
+        return '';
+    }
+    const type = s.logicalType ? `${s.physicalType} (${s.logicalType})` : s.physicalType;
+    if (s.unsupported) {
+        return `${type} — statistics not comparable: ${s.unsupported}`;
+    }
+    const range =
+        s.min === undefined || s.max === undefined
+            ? 'no statistics written'
+            : `min ${formatStatValue(s.min)} · max ${formatStatValue(s.max)}`;
+    const nulls = s.nullCount === null ? 'null count unknown' : `${s.nullCount} nulls`;
+    return `${type} · ${range} · ${nulls}`;
+}
 
 export class QueryPanel {
     private readonly dump: AnyDump;
@@ -39,29 +60,45 @@ export class QueryPanel {
     private readonly rowsEl: HTMLElement;
     private readonly summaryEl: HTMLElement;
     private readonly checks: HTMLInputElement[];
+    /** Per-column "type · min · max · nulls" line, shared by tooltips and rows. */
+    private readonly stats: Map<string, string>;
     /** Last run's evaluation; empty until Run (nothing pruned). */
     private evaluation: Evaluation = emptyEvaluation();
+    /** Columns the last run's predicates touch (read even when not projected). */
+    private predicateColumns = new Set<string>();
 
     constructor(container: HTMLElement, dump: AnyDump, delegate: QueryPanelDelegate) {
         this.dump = dump;
         this.delegate = delegate;
         this.columns = leafColumns(dump);
+        this.stats = new Map(this.columns.map(c => [c, statsLine(dump, c)]));
         container.innerHTML = `
             <div class="query-matrix-wrap"><table class="query-matrix"></table></div>
             <div class="query-legend">
-                <span><span class="qm-swatch qm-read"></span>column chunk read</span>
+                <span><span class="qm-swatch qm-read"></span>read and returned</span>
+                <span><span class="qm-swatch qm-eval"></span>${EVAL_ONLY}</span>
                 <span><span class="qm-swatch qm-pruned"></span>skipped — a predicate pruned the row group</span>
                 <span><span class="qm-swatch qm-skip"></span>${NOT_SELECTED}</span>
             </div>
             <div class="query-builder">
                 <fieldset class="query-columns">
                     <legend>Return columns</legend>
-                    ${this.columns
-                        .map(
-                            c =>
-                                `<label><input type="checkbox" checked data-column="${escapeHtml(c)}" /> ${escapeHtml(c)}</label>`
-                        )
-                        .join('')}
+                    <div class="query-columns-actions">
+                        <button type="button" id="query-select-all" class="btn btn-sm">
+                            Select all
+                        </button>
+                        <button type="button" id="query-deselect-all" class="btn btn-sm">
+                            Deselect all
+                        </button>
+                    </div>
+                    <div class="query-columns-grid">
+                        ${this.columns
+                            .map(
+                                c =>
+                                    `<label title="${escapeHtml(c)}"><input type="checkbox" checked data-column="${escapeHtml(c)}" /> ${escapeHtml(c)}</label>`
+                            )
+                            .join('')}
+                    </div>
                 </fieldset>
                 <div class="query-predicates">
                     <div class="query-predicate-rows"></div>
@@ -83,6 +120,12 @@ export class QueryPanel {
         this.summaryEl = container.querySelector('#query-summary')!;
         this.checks = [...container.querySelectorAll<HTMLInputElement>('.query-columns input')];
         container
+            .querySelector('#query-select-all')!
+            .addEventListener('click', () => this.setAllColumns(true));
+        container
+            .querySelector('#query-deselect-all')!
+            .addEventListener('click', () => this.setAllColumns(false));
+        container
             .querySelector('#query-add-predicate')!
             .addEventListener('click', () => this.addPredicateRow());
         container.querySelector('#query-run-btn')!.addEventListener('click', () => this.run());
@@ -103,6 +146,13 @@ export class QueryPanel {
         this.run();
     }
 
+    private setAllColumns(checked: boolean): void {
+        this.checks.forEach(cb => {
+            cb.checked = checked;
+        });
+        this.render();
+    }
+
     private addPredicateRow(preset?: Predicate): void {
         const row = document.createElement('div');
         row.className = 'query-predicate';
@@ -114,7 +164,7 @@ export class QueryPanel {
                 .join('');
         row.innerHTML = `
             <select class="qp-column" aria-label="Column">
-                ${options(this.columns.map(c => [c, c]))}
+                ${options([...this.columns].sort((a, b) => a.localeCompare(b)).map(c => [c, c]))}
             </select>
             <select class="qp-op" aria-label="Operator">
                 ${options(Object.entries(OP_LABEL))}
@@ -122,12 +172,22 @@ export class QueryPanel {
             <input type="text" class="qp-value" placeholder="value" />
             <button type="button" class="qp-remove btn btn-sm" aria-label="Remove predicate">
                 &times;
-            </button>`;
+            </button>
+            <span class="qp-stats"></span>`;
         if (preset) {
             row.querySelector<HTMLSelectElement>('.qp-column')!.value = preset.column;
             row.querySelector<HTMLSelectElement>('.qp-op')!.value = preset.op;
             row.querySelector<HTMLInputElement>('.qp-value')!.value = preset.value;
         }
+        // Show the selected column's stats (the range a predicate prunes
+        // against), live on column change.
+        const columnSel = row.querySelector<HTMLSelectElement>('.qp-column')!;
+        const statsEl = row.querySelector<HTMLElement>('.qp-stats')!;
+        const showStats = (): void => {
+            statsEl.textContent = this.stats.get(columnSel.value) ?? '';
+        };
+        columnSel.addEventListener('change', showStats);
+        showStats();
         row.querySelector('.qp-remove')!.addEventListener('click', () => row.remove());
         row.querySelector('.qp-value')!.addEventListener('keypress', e => {
             if ((e as KeyboardEvent).key === 'Enter') {
@@ -152,10 +212,12 @@ export class QueryPanel {
         const state = this.readState();
         try {
             this.evaluation = evaluate(this.dump, state.predicates);
+            this.predicateColumns = new Set(state.predicates.map(p => p.column));
         } catch (error) {
             // UI-level input error (bad value / unknown column): report it and
             // drop any previous run's overlay so nothing stale lingers.
             this.evaluation = emptyEvaluation();
+            this.predicateColumns = new Set();
             this.render();
             this.summaryEl.textContent = (error as Error).message;
             this.delegate.onClear();
@@ -171,6 +233,7 @@ export class QueryPanel {
             cb.checked = true;
         });
         this.evaluation = emptyEvaluation();
+        this.predicateColumns = new Set();
         this.render();
         this.delegate.onClear();
     }
@@ -178,25 +241,39 @@ export class QueryPanel {
     /** Redraw the matrix + summary from the last evaluation and current projection. */
     private render(): void {
         const selected = new Set(this.readState().columns);
-        const head = `<tr><th></th>${this.columns.map(c => `<th>${escapeHtml(c)}</th>`).join('')}</tr>`;
+        const head = `<tr><th class="qm-rowhead"></th>${this.columns
+            .map(
+                c => `<th title="${escapeHtml(`${c}\n${this.stats.get(c)}`)}">${escapeHtml(c)}</th>`
+            )
+            .join('')}</tr>`;
         const body = this.dump.metadata.row_groups
             .map((_, index) => {
                 const decision = this.evaluation.rowGroups.get(index);
                 const cells = this.columns
                     .map(column => {
-                        let cls = 'qm-read';
-                        let title = 'read';
-                        if (!selected.has(column)) {
-                            cls = 'qm-skip';
-                            title = NOT_SELECTED;
-                        } else if (decision?.pruned) {
+                        let cls: string;
+                        let reason: string;
+                        if (decision?.pruned) {
                             cls = 'qm-pruned';
-                            title = decision.reason;
+                            reason = decision.reason;
+                        } else if (selected.has(column)) {
+                            cls = 'qm-read';
+                            reason =
+                                decision && this.predicateColumns.has(column)
+                                    ? `read and returned; ${decision.reason}`
+                                    : 'read and returned';
+                        } else if (this.predicateColumns.has(column)) {
+                            cls = 'qm-eval';
+                            reason = decision ? `${EVAL_ONLY}; ${decision.reason}` : EVAL_ONLY;
+                        } else {
+                            cls = 'qm-skip';
+                            reason = NOT_SELECTED;
                         }
+                        const title = `${column}\n${this.stats.get(column)}\n${reason}`;
                         return `<td class="qm-cell ${cls}" title="${escapeHtml(title)}"></td>`;
                     })
                     .join('');
-                return `<tr><th>RG${index}</th>${cells}</tr>`;
+                return `<tr><th class="qm-rowhead">RG${index}</th>${cells}</tr>`;
             })
             .join('');
         this.matrix.innerHTML = `<thead>${head}</thead><tbody>${body}</tbody>`;
@@ -219,7 +296,7 @@ export class QueryPanel {
                     continue;
                 }
                 total += 1;
-                if (!pruned && selected.has(column)) {
+                if (!pruned && (selected.has(column) || this.predicateColumns.has(column))) {
                     read += 1;
                 }
             }

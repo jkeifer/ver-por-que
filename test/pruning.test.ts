@@ -2,7 +2,13 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { validateFile, validateMetadata } from '../src/generated/validate.js';
-import { evaluate, leafColumns, parseQueryState, type Predicate } from '../src/business/pruning';
+import {
+    columnStats,
+    evaluate,
+    leafColumns,
+    parseQueryState,
+    type Predicate,
+} from '../src/business/pruning';
 import { project, findNode } from '../src/business/segment-tree';
 import type { Dump, MetadataDump, SchemaLeaf } from '../src/types';
 
@@ -228,5 +234,42 @@ describe('parseQueryState', () => {
         expect(parseQueryState('{"predicates":[{"column":"String"}],"columns":[]}')).toBeNull();
         // The old single-predicate shape never shipped: no back-compat.
         expect(parseQueryState('{"column":"String","op":"gt","value":"zzz"}')).toBeNull();
+    });
+});
+
+describe('columnStats', () => {
+    const dump = loadStats();
+
+    it('decodes the file-level range, null count, and type for a supported column', () => {
+        expect(columnStats(dump, 'String')).toEqual({
+            physicalType: 'BYTE_ARRAY',
+            logicalType: 'STRING',
+            unsupported: null,
+            min: 'Hello',
+            max: 'today',
+            nullCount: 0,
+        });
+    });
+
+    it('returns null for an unknown column', () => {
+        expect(columnStats(dump, 'nope')).toBeNull();
+    });
+
+    it('reports an unsupported type honestly, with no decoded range', () => {
+        const clone = structuredClone(dump);
+        const leaf = clone.metadata.schema_root.children!['String']!;
+        leaf.logical_type = null;
+        leaf.converted_type = null;
+        const stats = columnStats(clone, 'String')!;
+        expect(stats.unsupported).toContain('raw binary');
+        expect(stats.min).toBeUndefined();
+        expect(stats.max).toBeUndefined();
+    });
+
+    it('sums null counts across row groups, or reports unknown when any chunk omits it', () => {
+        const clone = structuredClone(dump);
+        clone.metadata.row_groups[0]!.column_chunks['String']!.metadata.statistics!.null_count =
+            null;
+        expect(columnStats(clone, 'String')!.nullCount).toBeNull();
     });
 });
