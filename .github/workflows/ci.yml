@@ -36,3 +36,23 @@ jobs:
         run: npm test
       - name: Build
         run: npm run build
+
+  e2e:
+    name: E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      # Wheels + schema: generate/build need the schema, and the @slow
+      # pyodide test self-skips without the vendor manifest.
+      - name: Fetch wheels
+        run: npm run wheel
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+      - name: Run e2e smoke suite
+        run: npm run e2e
