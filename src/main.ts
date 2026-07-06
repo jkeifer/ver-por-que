@@ -8,6 +8,7 @@ import { fromBuffer, fromURL, type ByteSource } from './js/byte-source';
 import { validateFile, validateMetadata, type ValidationError } from './generated/validate';
 import { fetchBytes } from './js/fetch-progress';
 import { getHashParam, setHashParam } from './js/permalink';
+import { evaluate, isOp, leafColumns, type Evaluation, type Predicate } from './business/pruning';
 import { ParquetWorkerClient } from './js/worker/client';
 import type { AnyDump } from './types';
 
@@ -101,6 +102,16 @@ class ParquetExplorer {
         document
             .getElementById('error-reset-btn')!
             .addEventListener('click', () => this.handleReset());
+
+        document.getElementById('query-run-btn')!.addEventListener('click', () => this.runQuery());
+        document
+            .getElementById('query-clear-btn')!
+            .addEventListener('click', () => this.clearQuery());
+        document.getElementById('query-value')!.addEventListener('keypress', e => {
+            if ((e as KeyboardEvent).key === 'Enter') {
+                this.runQuery();
+            }
+        });
     }
 
     private handleDragOver(e: DragEvent): void {
@@ -327,6 +338,14 @@ class ParquetExplorer {
             if (nodeId) {
                 this.fileStructureViz.selectNodeById(nodeId);
             }
+
+            // Permalink: `#q=<json predicate>` re-runs the query simulation
+            // against the dump that just loaded (applied after `node`).
+            this.populateQueryBar(data);
+            const q = getHashParam(location.hash, 'q');
+            if (q) {
+                this.applyQueryParam(q);
+            }
         } catch (error) {
             console.error('Error creating file structure visualization:', error);
             container.innerHTML =
@@ -340,10 +359,122 @@ class ParquetExplorer {
         history.replaceState(null, '', location.pathname + location.search + hash);
     }
 
+    /** Mirror the active predicate (JSON) into the permalink hash. */
+    private syncHashQuery(predicate: Predicate | null): void {
+        const hash = setHashParam(location.hash, 'q', predicate ? JSON.stringify(predicate) : null);
+        history.replaceState(null, '', location.pathname + location.search + hash);
+    }
+
+    // Query simulation (predicate pushdown visualization)
+
+    /** Fill the column select with the loaded dump's leaf columns. */
+    private populateQueryBar(data: AnyDump): void {
+        const select = document.getElementById('query-column') as HTMLSelectElement;
+        select.innerHTML = '';
+        for (const column of leafColumns(data)) {
+            const option = document.createElement('option');
+            option.value = column;
+            option.textContent = column;
+            select.appendChild(option);
+        }
+        (document.getElementById('query-value') as HTMLInputElement).value = '';
+        this.setQuerySummary('');
+    }
+
+    /** Restore a predicate from the permalink `q` param (invalid = ignored). */
+    private applyQueryParam(q: string): void {
+        let parsed: unknown;
+        try {
+            parsed = JSON.parse(q);
+        } catch {
+            return;
+        }
+        const p = parsed as { column?: unknown; op?: unknown; value?: unknown } | null;
+        if (typeof p?.column !== 'string' || !isOp(p.op) || typeof p.value !== 'string') {
+            return;
+        }
+        (document.getElementById('query-column') as HTMLSelectElement).value = p.column;
+        (document.getElementById('query-op') as HTMLSelectElement).value = p.op;
+        (document.getElementById('query-value') as HTMLInputElement).value = p.value;
+        this.runQuery({ column: p.column, op: p.op, value: p.value });
+    }
+
+    /** Evaluate the predicate: dim pruned segments, summarize, sync the hash. */
+    private runQuery(predicate?: Predicate): void {
+        if (!this.parquetData || !this.fileStructureViz) {
+            return;
+        }
+        const p = predicate ?? {
+            column: (document.getElementById('query-column') as HTMLSelectElement).value,
+            op: (document.getElementById('query-op') as HTMLSelectElement).value as Predicate['op'],
+            value: (document.getElementById('query-value') as HTMLInputElement).value,
+        };
+        if (!p.column) {
+            return;
+        }
+
+        let evaluation: Evaluation;
+        try {
+            evaluation = evaluate(this.parquetData, p);
+        } catch (error) {
+            // A UI-level input error (bad value / unknown column): report it
+            // and drop any previous run's overlay so nothing stale lingers.
+            this.clearQuery();
+            this.setQuerySummary((error as Error).message);
+            return;
+        }
+
+        const dimmed = new Set<string>();
+        evaluation.rowGroups.forEach((decision, index) => {
+            if (decision.pruned) {
+                dimmed.add(`rg_${index}`);
+            }
+        });
+        evaluation.pages.forEach((decision, nodeId) => {
+            if (decision.pruned) {
+                dimmed.add(nodeId);
+            }
+        });
+        this.fileStructureViz.setDimmed(dimmed);
+        this.infoPanelManager?.setQuery({ predicate: p, evaluation });
+        this.setQuerySummary(this.querySummary(evaluation));
+        this.syncHashQuery(p);
+    }
+
+    /** "would read 2 of 5 row groups, 3 of 41 pages" (cannot-prune = read). */
+    private querySummary(evaluation: Evaluation): string {
+        const kept = (decisions: Iterable<{ pruned: boolean }>): number =>
+            [...decisions].filter(d => !d.pruned).length;
+        const rg = evaluation.rowGroups;
+        const text = `would read ${kept(rg.values())} of ${rg.size} row group${rg.size === 1 ? '' : 's'}`;
+        if (this.parquetData && !('column_chunks' in this.parquetData)) {
+            // Metadata-only export: the column index isn't in the dump, so
+            // page-level decisions degrade to a note.
+            return `${text} — page detail is not in a metadata-only dump`;
+        }
+        const pages = evaluation.pages;
+        return `${text}, ${kept(pages.values())} of ${pages.size} page${pages.size === 1 ? '' : 's'}`;
+    }
+
+    /** Drop the query overlay, summary, and the `q` permalink param. */
+    private clearQuery(): void {
+        (document.getElementById('query-value') as HTMLInputElement).value = '';
+        this.setQuerySummary('');
+        this.fileStructureViz?.setDimmed(new Set());
+        this.infoPanelManager?.setQuery(null);
+        this.syncHashQuery(null);
+    }
+
+    private setQuerySummary(text: string): void {
+        document.getElementById('query-summary')!.textContent = text;
+    }
+
     private async handleReset(): Promise<void> {
+        (document.getElementById('query-value') as HTMLInputElement).value = '';
+        this.setQuerySummary('');
         this.parquetData = null;
         this.byteSource = null;
-        // A permalink is meaningless with no dump loaded.
+        // A permalink is meaningless with no dump loaded (query included).
         history.replaceState(null, '', location.pathname + location.search);
         await this.clearStorage();
         this.clearFileStructureContent();

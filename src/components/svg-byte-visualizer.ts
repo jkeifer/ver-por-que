@@ -39,6 +39,8 @@ export class SvgByteVisualizer {
     private selectedSegments = new Map<number, string>();
     private selectionPath: SegmentNode[] = [];
     private hoveredSegment: string | null = null;
+    /** Node ids whose rects render dimmed (query-pruned segments). */
+    private dimmedIds = new Set<string>();
 
     private width = 0;
     private height = 0;
@@ -314,7 +316,7 @@ export class SvgByteVisualizer {
             height: segmentLayout.height,
             fill: fillColor,
             rx: this.config.CORNER_RADIUS || 0,
-            class: `segment ${contrastClass}`,
+            class: `segment ${contrastClass}${this.dimmedIds.has(segment.id) ? ' segment-dimmed' : ''}`,
             'data-segment-id': segment.id,
             'data-level-index': levelIndex,
         }) as SegmentRect;
@@ -902,6 +904,17 @@ export class SvgByteVisualizer {
             if (rect) {
                 rect.classList.add('segment-selected');
             }
+        });
+    }
+
+    /**
+     * Dim the rects for these node ids (and any rendered later by drill-down).
+     * Pass an empty set to clear.
+     */
+    setDimmed(ids: Set<string>): void {
+        this.dimmedIds = ids;
+        this.svg.querySelectorAll('.segment').forEach(rect => {
+            rect.classList.toggle('segment-dimmed', ids.has(rect.getAttribute('data-segment-id')!));
         });
     }
 

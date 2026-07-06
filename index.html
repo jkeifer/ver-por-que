@@ -85,6 +85,21 @@
                 <!-- File Structure Explorer -->
                 <section id="file-structure-section" class="file-structure-section">
                     <h2>Physical File Structure</h2>
+                    <div id="query-bar" class="query-bar">
+                        <label for="query-column">Query simulation:</label>
+                        <select id="query-column" aria-label="Column"></select>
+                        <select id="query-op" aria-label="Operator">
+                            <option value="eq">=</option>
+                            <option value="lt">&lt;</option>
+                            <option value="lte">&le;</option>
+                            <option value="gt">&gt;</option>
+                            <option value="gte">&ge;</option>
+                        </select>
+                        <input type="text" id="query-value" placeholder="value" />
+                        <button id="query-run-btn" class="btn btn-primary btn-sm">Run</button>
+                        <button id="query-clear-btn" class="btn btn-sm">Clear</button>
+                        <span id="query-summary" class="query-summary"></span>
+                    </div>
                     <div id="rowgroup-chart">
                         <div id="canvas-container"></div>
                         <div id="info-panel-container"></div>
