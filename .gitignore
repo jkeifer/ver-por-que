@@ -11,6 +11,10 @@ src/generated/
 # por-que wheels + manifest + dump schema staged by `npm run wheel`
 static/vendor/
 
+# Playwright
+test-results/
+playwright-report/
+
 # Logs
 *.log
 npm-debug.log*

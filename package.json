@@ -14,13 +14,14 @@
         "preview": "vite preview",
         "pretest": "npm run generate",
         "test": "vitest run",
+        "e2e": "playwright test",
         "pretypecheck": "npm run generate",
         "typecheck": "tsc --noEmit",
         "prelint": "npm run generate",
         "lint": "eslint .",
         "lint:fix": "eslint . --fix",
-        "format": "prettier --write src/ test/ index.html vite.config.ts",
-        "format:check": "prettier --check src/ test/ index.html vite.config.ts"
+        "format": "prettier --write src/ test/ e2e/ index.html vite.config.ts playwright.config.ts",
+        "format:check": "prettier --check src/ test/ e2e/ index.html vite.config.ts playwright.config.ts"
     },
     "repository": {
         "type": "git",
@@ -36,6 +37,7 @@
     "devDependencies": {
         "@eslint/js": "^10.0.1",
         "@j178/prek": "^0.4.8",
+        "@playwright/test": "^1.61.1",
         "@types/node": "^26.1.0",
         "ajv": "^8.20.0",
         "eslint": "^10.6.0",
