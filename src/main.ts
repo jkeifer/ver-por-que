@@ -5,6 +5,7 @@ import { InfoPanelManager } from './components/info-panel-manager';
 import { SvgByteVisualizer } from './components/svg-byte-visualizer';
 import { isParquet, isParquetURL } from './detect';
 import { validateFile, validateMetadata, type ValidationError } from './generated/validate';
+import { fetchBytes } from './js/fetch-progress';
 import { ParquetWorkerClient } from './js/worker/client';
 import type { AnyDump } from './types';
 
@@ -39,6 +40,12 @@ class ParquetExplorer {
                 await this.tryLoadFromStorage();
             }
             this.hideLoadingScreen();
+
+            // Boot pyodide in the background so the runtime is warm -- or
+            // already up -- by the time the user provides a parquet file.
+            // This costs JSON-only visitors the runtime download too; the
+            // browser cache makes that a one-time hit.
+            this.ensureWorkerClient().warmUp();
         } catch (error) {
             this.showError(`Initialization failed: ${(error as Error).message}`);
         }
@@ -163,12 +170,9 @@ class ParquetExplorer {
             }
 
             this.updateLoadingStatus('Fetching remote file...');
-            const response = await fetch(url);
-            if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-            }
-
-            await this.ingest(await response.arrayBuffer(), url);
+            this.updateLoadingDetail(url);
+            const bytes = await fetchBytes(url, fraction => this.updateLoadingProgress(fraction));
+            await this.ingest(bytes.buffer as ArrayBuffer, url);
         } catch (error) {
             this.showError(`Failed to load URL: ${(error as Error).message}`);
         }
@@ -203,7 +207,11 @@ class ParquetExplorer {
 
     private ensureWorkerClient(): ParquetWorkerClient {
         if (!this.workerClient) {
-            this.workerClient = new ParquetWorkerClient(status => this.updateLoadingStatus(status));
+            this.workerClient = new ParquetWorkerClient(
+                status => this.updateLoadingStatus(status),
+                detail => this.updateLoadingDetail(detail),
+                fraction => this.updateLoadingProgress(fraction)
+            );
         }
         // First parse downloads the ~12MB python runtime; the worker emits
         // status events that updateLoadingStatus surfaces.
@@ -339,6 +347,30 @@ class ParquetExplorer {
         const el = document.getElementById('loading-status');
         if (el) {
             el.textContent = status;
+        }
+        // A new phase invalidates the previous phase's sub-step and progress.
+        this.updateLoadingDetail('');
+        this.updateLoadingProgress(null);
+    }
+
+    private updateLoadingDetail(detail: string): void {
+        const el = document.getElementById('loading-detail');
+        if (el) {
+            el.textContent = detail;
+        }
+    }
+
+    /** A fraction (0..1) swaps the spinner for a progress bar; null restores it. */
+    private updateLoadingProgress(fraction: number | null): void {
+        const spinner = document.querySelector<HTMLElement>('#loading-screen .spinner');
+        const bar = document.getElementById('loading-progress') as HTMLProgressElement | null;
+        if (!spinner || !bar) {
+            return;
+        }
+        bar.hidden = fraction === null;
+        spinner.style.display = fraction === null ? '' : 'none';
+        if (fraction !== null) {
+            bar.value = fraction;
         }
     }
 

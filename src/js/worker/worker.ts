@@ -8,7 +8,7 @@ import {
     type ParquetParser,
     type WheelAsset,
 } from './pyodide-parquet';
-import type { ParseRequest, WorkerResponse } from './protocol';
+import type { WorkerRequest, WorkerResponse } from './protocol';
 
 // Keep this equal to the `pyodide` devDep version in package.json: the worker
 // loads the runtime from the CDN, the integration test loads it from the npm
@@ -20,7 +20,7 @@ const PYODIDE_CDN = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`
 // (whose postMessage signature is wrong for workers) nor the WebWorker lib.
 interface WorkerContext {
     postMessage(msg: WorkerResponse): void;
-    addEventListener(type: 'message', handler: (event: MessageEvent<ParseRequest>) => void): void;
+    addEventListener(type: 'message', handler: (event: MessageEvent<WorkerRequest>) => void): void;
 }
 const ctx = globalThis as unknown as WorkerContext;
 
@@ -36,12 +36,16 @@ async function loadWheels(manifestUrl: string): Promise<WheelAsset[]> {
         const bytes = new Uint8Array(await (await fetch(wheelUrl)).arrayBuffer());
         return { filename, bytes };
     };
-    return Promise.all([manifest.hctef, manifest.wheel].map(load));
+    const filenames = [manifest.hctef, manifest.wheel];
+    // One combined line: the downloads run concurrently, so per-file details
+    // would just overwrite each other at kickoff.
+    ctx.postMessage({ detail: `downloading ${filenames.join(', ')}` });
+    return Promise.all(filenames.map(load));
 }
 
 function getParser(manifestUrl: string): Promise<ParquetParser> {
     if (!parserPromise) {
-        parserPromise = (async () => {
+        const boot = (parserPromise = (async () => {
             // Module worker: pull pyodide's ESM straight from the CDN at
             // runtime. The URL is non-analyzable so the bundler leaves it as a
             // real dynamic import instead of trying to bundle 12MB of runtime.
@@ -54,14 +58,29 @@ function getParser(manifestUrl: string): Promise<ParquetParser> {
                 indexURL: PYODIDE_CDN,
                 loadWheels: () => loadWheels(manifestUrl),
                 onStatus: status => ctx.postMessage({ status }),
+                onDetail: detail => ctx.postMessage({ detail }),
+                onProgress: fraction => ctx.postMessage({ progress: fraction }),
             });
-        })();
+        })());
+        // A failed boot (e.g. flaky network during page-load warmup) must not
+        // poison the worker forever: drop the cached promise so the next
+        // request retries from scratch.
+        boot.catch(() => {
+            if (parserPromise === boot) {
+                parserPromise = null;
+            }
+        });
     }
     return parserPromise;
 }
 
 ctx.addEventListener('message', event => {
     const req = event.data;
+    if (req.warmup) {
+        // Fire-and-forget pre-boot; errors surface on the first real parse.
+        getParser(req.manifestUrl).catch(() => {});
+        return;
+    }
     void (async () => {
         try {
             const parser = await getParser(req.manifestUrl);
