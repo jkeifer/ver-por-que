@@ -185,11 +185,10 @@ export class TreemapVisualizer implements Visualizer {
         placed: { x: number; y: number; width: number; height: number },
         index: number
     ): void {
-        const colorVar = VisualizationConfig.getSegmentColor(node.kind, index);
-        const fillColor =
-            this.getCSSVariable(colorVar) ||
-            this.getCSSVariable(VisualizationConfig.COLORS.DEFAULT);
-        const contrastClass = VisualizationConfig.getContrastClass(fillColor);
+        const { fillColor, contrastClass } = VisualizationConfig.resolveSegmentStyle(
+            node.kind,
+            index
+        );
 
         const group = document.createElementNS('http://www.w3.org/2000/svg', 'g');
         group.setAttribute('class', contrastClass);
@@ -239,9 +238,5 @@ export class TreemapVisualizer implements Visualizer {
         }
 
         this.svg!.appendChild(group);
-    }
-
-    private getCSSVariable(name: string): string {
-        return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
     }
 }
