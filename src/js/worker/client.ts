@@ -106,11 +106,11 @@ export class ParquetWorkerClient {
     }
 
     /**
-     * Decodes the first `maxValues` values of a column chunk in the worker's
-     * current file. Codec-unavailable results resolve (typed), never reject.
+     * Decodes every value of a single data page in the worker's current file.
+     * Codec-unavailable results resolve (typed), never reject.
      */
-    preview(rowGroup: number, column: string, maxValues: number): Promise<PreviewResult> {
-        return this.request({ preview: { rowGroup, column, maxValues } }).then(msg => msg.preview!);
+    preview(rowGroup: number, column: string, pageIndex: number): Promise<PreviewResult> {
+        return this.request({ preview: { rowGroup, column, pageIndex } }).then(msg => msg.preview!);
     }
 
     /**

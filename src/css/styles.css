@@ -1143,7 +1143,6 @@ code {
 }
 
 /* Value preview (Value Preview section) */
-.value-preview-scope,
 .value-preview-codec-note,
 .value-preview-header {
     font-size: 0.85rem;
@@ -1168,9 +1167,29 @@ code {
     border-radius: var(--border-radius);
 }
 
+.value-preview-list li {
+    display: flex;
+    gap: var(--spacing-sm);
+    align-items: baseline;
+}
+
 .value-preview-index {
-    display: inline-block;
+    flex: none;
     min-width: 3em;
+    color: var(--text-muted);
+}
+
+.value-preview-value {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Dremel definition/repetition levels, pushed to the row's right edge. */
+.value-preview-levels {
+    flex: none;
+    margin-left: auto;
     color: var(--text-muted);
 }
 

@@ -11,7 +11,7 @@ import { OP_LABEL } from '../business/pruning';
 import type { Resolution } from '../business/query-model';
 import { describe, findSchemaLeaf, type Kind, type SegmentNode } from '../business/segment-tree';
 import { decodeStatValue, parsePredicateValue } from '../business/stat-values';
-import type { PreviewResult, PreviewValue } from '../js/worker/pyodide-parquet';
+import type { PreviewEntry, PreviewResult } from '../js/worker/pyodide-parquet';
 import type { AnyDump, ColumnStatistics, SchemaGroup, SchemaLeaf, SchemaRoot } from '../types';
 
 /** A metadata-only export lacks the physical `column_chunks` array. */
@@ -67,26 +67,23 @@ export interface RecoveryActions {
 export type BloomProbe = (rowGroup: number, column: string, value: string) => Promise<boolean>;
 
 /**
- * Decodes the first `maxValues` values of a column chunk in the worker's
- * current file. Only raw-parquet loads have one, same as BloomProbe.
+ * Decodes every value of a single data page in the worker's current file. Only
+ * raw-parquet loads have one, same as BloomProbe.
  */
 export type ValuePreview = (
     rowGroup: number,
     column: string,
-    maxValues: number
+    pageIndex: number
 ) => Promise<PreviewResult>;
 
-/** How many values a preview decodes and shows. */
-const PREVIEW_MAX_VALUES = 100;
 /** Long values are cut with an ellipsis in the preview list. */
 const PREVIEW_VALUE_MAX_CHARS = 80;
 
-/** Where a value preview points: a chunk's coordinates in the worker's file. */
+/** Where a value preview points: a data page's coordinates in the worker's file. */
 interface PreviewTarget {
     rowGroup: number;
     column: string;
-    /** True on data_page nodes: v1 previews the whole containing chunk. */
-    pageScoped: boolean;
+    pageIndex: number;
 }
 
 /** Friendly (not an error state) message for a codec with no in-browser decoder. */
@@ -98,24 +95,26 @@ function renderPreviewFailure(codec: string): string {
     );
 }
 
-/** The decoded values as a scrollable index/value list, NULLs explicit. */
-function renderPreviewValues(values: PreviewValue[], total: number, truncated: boolean): string {
-    const header = truncated
-        ? `showing first ${formatNumber(values.length)} of ${formatNumber(total)} values`
-        : `${formatNumber(total)} value${total === 1 ? '' : 's'}`;
-    const items = values
-        .map((v, i) => {
+/**
+ * The page's decoded values as a scrollable index/value list — NULLs explicit,
+ * each row tagged with its Dremel definition (d) and repetition (r) levels.
+ */
+function renderPreviewValues(entries: PreviewEntry[]): string {
+    const header = `${formatNumber(entries.length)} value${entries.length === 1 ? '' : 's'}`;
+    const items = entries
+        .map(({ value, def, rep }, i) => {
             const text =
-                v === null
+                value === null
                     ? '<span class="value-preview-null">NULL</span>'
                     : escapeHtml(
-                          String(v).length > PREVIEW_VALUE_MAX_CHARS
-                              ? `${String(v).slice(0, PREVIEW_VALUE_MAX_CHARS - 1)}…`
-                              : String(v)
+                          String(value).length > PREVIEW_VALUE_MAX_CHARS
+                              ? `${String(value).slice(0, PREVIEW_VALUE_MAX_CHARS - 1)}…`
+                              : String(value)
                       );
             return (
                 `<li><span class="value-preview-index">${i}</span>` +
-                `<span class="value-preview-value">${text}</span></li>`
+                `<span class="value-preview-value">${text}</span>` +
+                `<span class="value-preview-levels">d${def} r${rep}</span></li>`
             );
         })
         .join('');
@@ -822,43 +821,31 @@ export class InfoPanelManager {
         }
     }
 
-    /** The chunk coordinates a node previews, or null when it has none. */
+    /** The page a node previews, or null when it has none (only data pages do). */
     private previewTarget(node: SegmentNode): PreviewTarget | null {
-        if (node.kind === 'column_chunk') {
-            // chunk is null only in metadata-only exports, which never carry a
-            // live valuePreview -- the note path renders and rowGroup is unused.
-            return { rowGroup: node.chunk?.row_group ?? 0, column: node.name, pageScoped: false };
-        }
         if (node.kind === 'data_page') {
-            return { rowGroup: node.rowGroup, column: node.path, pageScoped: true };
+            return { rowGroup: node.rowGroup, column: node.path, pageIndex: node.pageIndex };
         }
         return null;
     }
 
-    /** Interactive value preview: decode the chunk's first N values on demand. */
+    /** Interactive value preview: decode this page's values on demand. */
     private buildValuePreviewSection(target: PreviewTarget): HTMLElement {
         const section = document.createElement('div');
         section.className = 'info-section large-card value-preview-section';
-        // Honest labeling on pages: v1 decodes the whole containing chunk,
-        // it does not slice to this page's exact rows.
-        const scope = target.pageScoped
-            ? `<div class="value-preview-scope">Shows the first values of this page's ` +
-              `column chunk, not just this page.</div>`
-            : '';
         section.innerHTML =
             `<h5 class="info-section-title">Value Preview</h5>` +
-            scope +
             `<button type="button" class="value-preview-btn">Preview values</button>` +
             `<div class="value-preview-result"></div>`;
         const result = section.querySelector<HTMLElement>('.value-preview-result')!;
         section.querySelector('.value-preview-btn')!.addEventListener('click', () => {
             result.textContent = 'Decoding values...';
-            this.valuePreview!(target.rowGroup, target.column, PREVIEW_MAX_VALUES).then(
+            this.valuePreview!(target.rowGroup, target.column, target.pageIndex).then(
                 res => {
                     result.innerHTML =
                         res.error !== undefined
                             ? renderPreviewFailure(res.codec)
-                            : renderPreviewValues(res.values, res.total, res.truncated);
+                            : renderPreviewValues(res.values);
                 },
                 (error: unknown) => {
                     if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
