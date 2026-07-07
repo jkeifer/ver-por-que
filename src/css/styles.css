@@ -753,41 +753,80 @@ code {
     margin-top: var(--spacing-xl);
 }
 
+/* Gray backdrop holding the query controls + read summary as white cards —
+ * the same idiom as .info-panel. Description and controls first, summary
+ * beneath (large-card wraps full width); the read matrix follows outside it. */
+.query-controls-wrap {
+    padding: var(--spacing-lg);
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-light);
+    border-radius: var(--border-radius);
+}
+
 .query-intro {
     font-size: 0.9rem;
     color: var(--text-secondary);
-    margin-bottom: var(--spacing-md);
+    margin: 0 0 var(--spacing-md);
     max-width: 70ch;
 }
 
-/* Fixed table layout: columns share the available width equally and never
- * force horizontal scroll — long names ellipsize instead (title carries the
- * full name + stats + reason). */
+.query-matrix-section {
+    margin-top: var(--spacing-xl);
+}
+
+/* Fixed layout with narrow per-column widths (from the thead th) — full column
+ * names ride diagonally above the cells and the wrap scrolls if they overflow
+ * the page width. */
 .query-matrix-wrap {
     margin-bottom: var(--spacing-sm);
+    overflow-x: auto;
 }
 
 .query-matrix {
     table-layout: fixed;
-    width: 100%;
+    width: auto;
     border-collapse: collapse;
     font-family: var(--font-mono);
     font-size: 0.8rem;
 }
 
-.query-matrix th {
-    padding: var(--spacing-xs) var(--spacing-sm);
-    color: var(--text-secondary);
-    font-weight: 500;
-    text-align: left;
+/* Diagonal, full-length column labels: 30° off vertical, ascending to the
+ * right. The label is absolutely positioned so its (untransformed) width never
+ * widens the column; the th just reserves height + a narrow width. */
+.query-matrix thead th:not(.qm-rowhead) {
+    position: relative;
+    width: 1.9rem;
+    height: 7rem;
+    padding: 0;
+    vertical-align: bottom;
+}
+
+/* Capped diagonal length: max-width bounds the label's own (untransformed)
+ * length, so it never rises past the fixed header height — longer names clip
+ * with an ellipsis instead. */
+.query-matrix thead th:not(.qm-rowhead) > span {
+    position: absolute;
+    bottom: 0.35rem;
+    left: 50%;
+    display: block;
+    max-width: 7rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    transform-origin: bottom left;
+    transform: rotate(-60deg);
+    color: var(--text-secondary);
+    font-weight: 500;
 }
 
 .query-matrix th.qm-rowhead,
 .query-matrix td.qm-rowhead {
     width: 3.5rem;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    color: var(--text-secondary);
+    font-weight: 500;
+    text-align: left;
+    white-space: nowrap;
 }
 
 .qm-cell {

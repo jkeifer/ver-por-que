@@ -104,50 +104,63 @@ export class QueryPanel {
         this.columns = leafColumns(dump);
         this.stats = new Map(this.columns.map(c => [c, statsLine(dump, c)]));
         container.innerHTML = `
-            <div class="query-matrix-wrap"><table class="query-matrix"></table></div>
-            <div class="query-legend">
-                <span><span class="qm-swatch qm-read"></span>read and returned</span>
-                <span><span class="qm-swatch qm-eval"></span>read only to evaluate a predicate — not in the output</span>
-                <span><span class="qm-swatch qm-pruned"></span>skipped — a predicate pruned the row group</span>
-                <span><span class="qm-swatch qm-skip"></span>not read — not selected for output</span>
+            <div class="query-controls-wrap">
+                <p class="query-intro">
+                    Predicates combine with AND — a row group is skipped when any predicate proves
+                    it can't match. Pick the return columns and predicates below; everything
+                    updates live, dimming what the query never reads in both the Physical File
+                    Structure above and the Read Matrix below to show what is and isn't accessed.
+                </p>
+                <div class="info-sections query-cards">
+                    <div class="info-section regular-card query-columns">
+                        <h5 class="info-section-title">Return Columns</h5>
+                        <div class="query-columns-actions">
+                            <button type="button" id="query-select-all" class="btn btn-sm">
+                                Select all
+                            </button>
+                            <button type="button" id="query-deselect-all" class="btn btn-sm">
+                                Deselect all
+                            </button>
+                        </div>
+                        <div class="query-columns-grid">
+                            ${this.columns
+                                .map(
+                                    c =>
+                                        `<label title="${escapeHtml(c)}"><input type="checkbox" checked data-column="${escapeHtml(c)}" /> ${escapeHtml(c)}</label>`
+                                )
+                                .join('')}
+                        </div>
+                    </div>
+                    <div class="info-section regular-card query-predicates">
+                        <h5 class="info-section-title">Predicates</h5>
+                        <div class="query-predicate-rows"></div>
+                        <div class="query-predicates-actions">
+                            <button type="button" id="query-add-predicate" class="btn btn-sm">
+                                Add predicate
+                            </button>
+                            <button type="button" id="query-clear-btn" class="btn btn-sm">
+                                Clear
+                            </button>
+                        </div>
+                        <span class="query-predicates-note">
+                            predicates combine with AND; the matrix updates as you type
+                        </span>
+                    </div>
+                    <div class="info-section large-card query-summary-card">
+                        <h5 class="info-section-title">Read Summary</h5>
+                        <div id="query-summary" class="info-grid"></div>
+                        <p class="query-summary-note" hidden></p>
+                    </div>
+                </div>
             </div>
-            <div class="info-sections query-cards">
-                <div class="info-section large-card query-summary-card">
-                    <h5 class="info-section-title">Read Summary</h5>
-                    <div id="query-summary" class="info-grid"></div>
-                    <p class="query-summary-note" hidden></p>
-                </div>
-                <div class="info-section regular-card query-columns">
-                    <h5 class="info-section-title">Return Columns</h5>
-                    <div class="query-columns-actions">
-                        <button type="button" id="query-select-all" class="btn btn-sm">
-                            Select all
-                        </button>
-                        <button type="button" id="query-deselect-all" class="btn btn-sm">
-                            Deselect all
-                        </button>
-                    </div>
-                    <div class="query-columns-grid">
-                        ${this.columns
-                            .map(
-                                c =>
-                                    `<label title="${escapeHtml(c)}"><input type="checkbox" checked data-column="${escapeHtml(c)}" /> ${escapeHtml(c)}</label>`
-                            )
-                            .join('')}
-                    </div>
-                </div>
-                <div class="info-section regular-card query-predicates">
-                    <h5 class="info-section-title">Predicates</h5>
-                    <div class="query-predicate-rows"></div>
-                    <div class="query-predicates-actions">
-                        <button type="button" id="query-add-predicate" class="btn btn-sm">
-                            Add predicate
-                        </button>
-                        <button type="button" id="query-clear-btn" class="btn btn-sm">Clear</button>
-                    </div>
-                    <span class="query-predicates-note">
-                        predicates combine with AND; the matrix updates as you type
-                    </span>
+            <div class="query-matrix-section">
+                <h2>Read Matrix</h2>
+                <div class="query-matrix-wrap"><table class="query-matrix"></table></div>
+                <div class="query-legend">
+                    <span><span class="qm-swatch qm-read"></span>read and returned</span>
+                    <span><span class="qm-swatch qm-eval"></span>read only to evaluate a predicate — not in the output</span>
+                    <span><span class="qm-swatch qm-pruned"></span>skipped — a predicate pruned the row group</span>
+                    <span><span class="qm-swatch qm-skip"></span>not read — not selected for output</span>
                 </div>
             </div>`;
         this.matrix = container.querySelector('.query-matrix')!;
@@ -319,7 +332,8 @@ export class QueryPanel {
     private render(): void {
         const head = `<tr><th class="qm-rowhead"></th>${this.columns
             .map(
-                c => `<th title="${escapeHtml(`${c}\n${this.stats.get(c)}`)}">${escapeHtml(c)}</th>`
+                c =>
+                    `<th title="${escapeHtml(`${c}\n${this.stats.get(c)}`)}"><span>${escapeHtml(c)}</span></th>`
             )
             .join('')}</tr>`;
         const body = this.dump.metadata.row_groups
