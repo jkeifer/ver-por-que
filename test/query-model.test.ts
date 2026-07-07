@@ -77,7 +77,8 @@ describe('precedence — chunkStatus / pageStatus', () => {
         const c = ctx(['String'], [], evaluation);
         const s = pageStatus(c, 0, 'String', PAGE_ID);
         expect(s.kind).toBe('pruned');
-        expect(s.reason).toContain('page pruned by column index');
+        expect(s.reason).toContain('Skipped —');
+        expect(s.reason).toContain('page x');
         // The chunk cell has no page rung, so it reads.
         expect(chunkStatus(c, 0, 'String').kind).toBe('read');
     });
@@ -107,7 +108,7 @@ describe('precedence — chunkStatus / pageStatus', () => {
         const c = buildContext(dump, state([p('eq', 'Hello')], ['String']));
         const s = chunkStatus(c, 0, 'String');
         expect(s.kind).toBe('read');
-        expect(s.reason).toContain('Read and returned.');
+        expect(s.reason).toContain('Read and returned —');
         expect(s.reason).toContain('overlaps');
     });
 
