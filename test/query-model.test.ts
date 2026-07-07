@@ -8,7 +8,7 @@ import {
     type Predicate,
     type QueryState,
 } from '../src/business/pruning';
-import { project, prunedClosure, type SegmentNode } from '../src/business/segment-tree';
+import { project, findNode, type SegmentNode } from '../src/business/segment-tree';
 import {
     buildContext,
     chunkStatus,
@@ -141,17 +141,25 @@ describe('resolve / Resolution — status assignment', () => {
     });
 });
 
-describe('resolve / Resolution — dimmed (prunedClosure parity)', () => {
+describe('resolve / Resolution — dimmed', () => {
     const dump = loadStats();
     const tree = project(dump);
 
-    it('dims a pruned RG plus its chunk and pages — matching the old prunedClosure', () => {
+    it('dims a pruned RG plus every data-bearing descendant', () => {
         const r = resolve(dump, tree, state([p('gt', 'zzz')], ['String']));
         expect(r.dimmed.has('rg_0')).toBe(true);
         expect(r.dimmed.has('rg_0_col_String')).toBe(true);
         expect(r.dimmed.has(PAGE_ID)).toBe(true);
-        // Every descendant the old closure would dim is dimmed here too.
-        for (const id of prunedClosure(tree, new Set(['rg_0']))) {
+        // Every chunk/page under the pruned row group is dimmed (the resolve
+        // walk assigns each descendant its own pruned status).
+        const rg = findNode(tree, 'rg_0')!;
+        const descendants: string[] = [];
+        const collect = (n: SegmentNode): void => {
+            descendants.push(n.id);
+            n.children.forEach(collect);
+        };
+        rg.children.forEach(collect);
+        for (const id of descendants) {
             expect(r.dimmed.has(id), id).toBe(true);
         }
     });

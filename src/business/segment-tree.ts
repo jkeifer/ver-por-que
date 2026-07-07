@@ -743,24 +743,6 @@ export function findPath(root: SegmentNode, id: string): SegmentNode[] | null {
     return null;
 }
 
-/**
- * Expand a set of pruned node ids to include every descendant. A pruned row
- * group is skipped in its entirety, so its column chunks and pages dim with
- * it; a node is included when it — or any ancestor — is in `pruned`.
- */
-export function prunedClosure(root: SegmentNode, pruned: Set<string>): Set<string> {
-    const out = new Set<string>();
-    const walk = (node: SegmentNode, ancestorPruned: boolean): void => {
-        const dimmed = ancestorPruned || pruned.has(node.id);
-        if (dimmed) {
-            out.add(node.id);
-        }
-        node.children.forEach(child => walk(child, dimmed));
-    };
-    walk(root, false);
-    return out;
-}
-
 /** Recursively find a node by id (selection restore, tests). */
 export function findNode(root: SegmentNode, id: string): SegmentNode | null {
     if (root.id === id) {
