@@ -463,6 +463,50 @@ code {
     box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.1);
 }
 
+.samples-section {
+    max-width: 500px;
+    margin: var(--spacing-lg) auto 0;
+    text-align: left;
+}
+
+.samples-label {
+    margin-bottom: var(--spacing-sm);
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.samples-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--spacing-sm);
+}
+
+.sample-link {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: var(--spacing-sm) var(--spacing-md);
+    border: 1px solid var(--border-medium);
+    border-radius: var(--border-radius);
+    background: none;
+    font-family: var(--font-mono);
+    text-align: left;
+    cursor: pointer;
+    transition:
+        border-color 0.3s ease,
+        background-color 0.3s ease;
+}
+
+.sample-link:hover {
+    border-color: var(--viz-blue);
+    background-color: rgba(var(--accent-rgb), 0.05);
+}
+
+.sample-meta {
+    color: var(--text-secondary);
+    font-size: 0.85rem;
+}
+
 /* Buttons */
 .btn {
     padding: var(--spacing-sm) var(--spacing-lg);
