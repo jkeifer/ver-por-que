@@ -110,6 +110,17 @@ test('query simulation: live matrix, pruning, projection, permalink', async ({ p
     await expect(header).toHaveAttribute('title', /String/);
     await expect(header).toHaveAttribute('title', /min 'Hello' · max 'today'/);
 
+    // Hovering a cell shows the instant floating tooltip (native `title` is too
+    // slow on these tiny targets); leaving hides it and restores the title.
+    const tip = page.locator('.qm-tip');
+    await cell.hover();
+    await expect(tip).toBeVisible();
+    await expect(tip).toContainText('String');
+    await expect(tip).toContainText('Read and returned');
+    await page.locator('.query-matrix-section h2').hover();
+    await expect(tip).toBeHidden();
+    await expect(cell).toHaveAttribute('title', /String/);
+
     // A fresh predicate row is incomplete (empty value): it's flagged with a
     // muted hint, excluded from evaluation, and nothing breaks.
     await page.locator('#query-add-predicate').click();
@@ -127,9 +138,9 @@ test('query simulation: live matrix, pruning, projection, permalink', async ({ p
     await expect(cell).toHaveClass(/qm-pruned/);
     await expect(page.locator('.qp-hint')).toHaveText('');
     await expect(cell).toHaveAttribute('title', /max value 'today' < query value 'zzz'/);
-    // The cell tooltip also carries the full column name + its stats.
+    // The cell tooltip carries the column name, then the status + its rationale.
     await expect(cell).toHaveAttribute('title', /^String\n/);
-    await expect(cell).toHaveAttribute('title', /min 'Hello' · max 'today'/);
+    await expect(cell).toHaveAttribute('title', /Skipped — max value 'today' < query value 'zzz'/);
     // The summary follows: rows are an upper bound, so "up to".
     await expect(summary).toContainText('up to 0 of 14');
     await expect(summary).toContainText('0 of 1 read');
