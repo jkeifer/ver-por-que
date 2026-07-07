@@ -11,7 +11,7 @@ import { OP_LABEL } from '../business/pruning';
 import type { Resolution } from '../business/query-model';
 import { describe, findSchemaLeaf, type Kind, type SegmentNode } from '../business/segment-tree';
 import { decodeStatValue, parsePredicateValue } from '../business/stat-values';
-import type { PreviewEntry, PreviewResult } from '../js/worker/pyodide-parquet';
+import type { PreviewEntry, PreviewResult, PreviewValue } from '../js/worker/pyodide-parquet';
 import type { AnyDump, ColumnStatistics, SchemaGroup, SchemaLeaf, SchemaRoot } from '../types';
 
 /** A metadata-only export lacks the physical `column_chunks` array. */
@@ -95,33 +95,60 @@ function renderPreviewFailure(codec: string): string {
     );
 }
 
-/**
- * The page's decoded values as a scrollable index/value list — NULLs explicit,
- * each row tagged with its Dremel definition (d) and repetition (r) levels.
- */
-function renderPreviewValues(entries: PreviewEntry[]): string {
-    const header = `${formatNumber(entries.length)} value${entries.length === 1 ? '' : 's'}`;
-    const items = entries
-        .map(({ value, def, rep }, i) => {
-            const text =
-                value === null
-                    ? '<span class="value-preview-null">NULL</span>'
-                    : escapeHtml(
-                          String(value).length > PREVIEW_VALUE_MAX_CHARS
-                              ? `${String(value).slice(0, PREVIEW_VALUE_MAX_CHARS - 1)}…`
-                              : String(value)
-                      );
-            return (
-                `<li><span class="value-preview-index">${i}</span>` +
-                `<span class="value-preview-value">${text}</span>` +
-                `<span class="value-preview-levels">d${def} r${rep}</span></li>`
-            );
-        })
-        .join('');
-    return (
-        `<div class="value-preview-header">${header}</div>` +
-        `<ol class="value-preview-list">${items}</ol>`
+/** A single value cell: NULL is explicit; long values ellipsize. */
+function previewValueCell(value: PreviewValue): string {
+    if (value === null) {
+        return '<span class="value-preview-null">NULL</span>';
+    }
+    const s = String(value);
+    return escapeHtml(
+        s.length > PREVIEW_VALUE_MAX_CHARS ? `${s.slice(0, PREVIEW_VALUE_MAX_CHARS - 1)}…` : s
     );
+}
+
+/**
+ * tbody rows for the current null-filter state. The `#` column keeps each
+ * value's true page index even when nulls are filtered out.
+ */
+function renderPreviewRows(entries: PreviewEntry[], hideNulls: boolean): string {
+    return entries
+        .map((entry, index) => ({ entry, index }))
+        .filter(({ entry }) => !hideNulls || entry.value !== null)
+        .map(
+            ({ entry, index }) =>
+                `<tr><td class="value-preview-index">${index}</td>` +
+                `<td class="value-preview-value">${previewValueCell(entry.value)}</td>` +
+                `<td class="value-preview-level">${entry.def}</td>` +
+                `<td class="value-preview-level">${entry.rep}</td></tr>`
+        )
+        .join('');
+}
+
+/**
+ * Fills `result` with the page's values as a scrollable table (frozen header,
+ * zebra rows) plus a "hide nulls" toggle when the page actually has nulls.
+ */
+function renderPreviewTable(result: HTMLElement, entries: PreviewEntry[]): void {
+    const nulls = entries.reduce((n, e) => n + (e.value === null ? 1 : 0), 0);
+    const count = `${formatNumber(entries.length)} value${entries.length === 1 ? '' : 's'}`;
+    const header = nulls > 0 ? `${count} · ${formatNumber(nulls)} null` : count;
+    const filter =
+        nulls > 0
+            ? `<label class="value-preview-filter">` +
+              `<input type="checkbox" class="value-preview-hide-nulls"> hide nulls</label>`
+            : '';
+    result.innerHTML =
+        `<div class="value-preview-header">${header}</div>` +
+        filter +
+        `<div class="value-preview-table-wrap"><table class="value-preview-table">` +
+        `<thead><tr><th>#</th><th>Value</th><th title="definition level">def</th>` +
+        `<th title="repetition level">rep</th></tr></thead>` +
+        `<tbody>${renderPreviewRows(entries, false)}</tbody></table></div>`;
+    const toggle = result.querySelector<HTMLInputElement>('.value-preview-hide-nulls');
+    const tbody = result.querySelector('tbody')!;
+    toggle?.addEventListener('change', () => {
+        tbody.innerHTML = renderPreviewRows(entries, toggle.checked);
+    });
 }
 
 type Row = [string, string | number];
@@ -835,19 +862,27 @@ export class InfoPanelManager {
         section.className = 'info-section large-card value-preview-section';
         section.innerHTML =
             `<h5 class="info-section-title">Value Preview</h5>` +
-            `<button type="button" class="value-preview-btn">Preview values</button>` +
+            `<button type="button" class="btn btn-sm value-preview-btn">Preview values</button>` +
             `<div class="value-preview-result"></div>`;
+        const button = section.querySelector<HTMLButtonElement>('.value-preview-btn')!;
         const result = section.querySelector<HTMLElement>('.value-preview-result')!;
-        section.querySelector('.value-preview-btn')!.addEventListener('click', () => {
+        button.addEventListener('click', () => {
+            button.disabled = true;
             result.textContent = 'Decoding values...';
             this.valuePreview!(target.rowGroup, target.column, target.pageIndex).then(
                 res => {
-                    result.innerHTML =
-                        res.error !== undefined
-                            ? renderPreviewFailure(res.codec)
-                            : renderPreviewValues(res.values);
+                    if (res.error !== undefined) {
+                        result.innerHTML = renderPreviewFailure(res.codec);
+                        button.disabled = false;
+                        return;
+                    }
+                    // Values are rendered: the one-shot decode is done, so the
+                    // button retires and the table takes over.
+                    button.remove();
+                    renderPreviewTable(result, res.values);
                 },
                 (error: unknown) => {
+                    button.disabled = false;
                     if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
                         this.appendRecovery(
                             result,

@@ -1198,42 +1198,63 @@ code {
     margin-bottom: var(--spacing-sm);
 }
 
-.value-preview-list {
-    list-style: none;
-    margin: 0;
-    padding: var(--spacing-sm);
+.value-preview-filter {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-xs);
+    margin-bottom: var(--spacing-sm);
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    cursor: pointer;
+}
+
+/* Scroll container: the table's thead sticks to its top edge. */
+.value-preview-table-wrap {
     max-height: 300px;
     overflow: auto;
-    font-family: var(--font-mono);
-    font-size: 0.8rem;
     background: var(--bg-primary);
     border: 1px solid var(--border-light);
     border-radius: var(--border-radius);
 }
 
-.value-preview-list li {
-    display: flex;
-    gap: var(--spacing-sm);
-    align-items: baseline;
+.value-preview-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
 }
 
-.value-preview-index {
-    flex: none;
-    min-width: 3em;
-    color: var(--text-muted);
+.value-preview-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    text-align: left;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-bottom: 1px solid var(--border-medium);
 }
 
-.value-preview-value {
-    flex: 1;
+.value-preview-table td {
+    padding: var(--spacing-xs) var(--spacing-sm);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-/* Dremel definition/repetition levels, pushed to the row's right edge. */
-.value-preview-levels {
-    flex: none;
-    margin-left: auto;
+.value-preview-table tbody tr:nth-child(even) {
+    background: var(--bg-tertiary);
+}
+
+/* Narrow, muted gutter columns: index and the two Dremel levels. */
+.value-preview-table th:first-child,
+.value-preview-table th:nth-child(3),
+.value-preview-table th:nth-child(4),
+.value-preview-index,
+.value-preview-level {
+    width: 3em;
     color: var(--text-muted);
 }
 
