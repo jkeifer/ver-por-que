@@ -15,6 +15,8 @@ import { fromBuffer, fromURL, type ByteSource } from './js/byte-source';
 import { validateFile, validateMetadata, type ValidationError } from './generated/validate';
 import { fetchBytes } from './js/fetch-progress';
 import { getHashParam, setHashParam } from './js/permalink';
+import { diffDumps } from './business/diff';
+import { renderDiffView } from './components/diff-view';
 import { parseQueryState, type Evaluation, type QueryState } from './business/pruning';
 import { ParquetWorkerClient } from './js/worker/client';
 import type { AnyDump } from './types';
@@ -55,6 +57,12 @@ class ParquetExplorer {
     // Lazily created on the first raw-parquet load so the JSON path never boots
     // pyodide.
     private workerClient: ParquetWorkerClient | null = null;
+    // Diff mode: file B (the comparison target) lives here and ONLY here —
+    // IndexedDB, byteSource/bloomProbe/valuePreview, and the permalink hash
+    // all stay file A's. The diff section is shown instead of the content
+    // section, so exiting restores file A's DOM untouched.
+    private diffMode = false;
+    private diffData: AnyDump | null = null;
 
     /** Initialize the application (event listeners are bound exactly once). */
     async init(): Promise<void> {
@@ -136,6 +144,35 @@ class ParquetExplorer {
         document
             .getElementById('download-dump-btn')!
             .addEventListener('click', () => this.downloadDump());
+
+        // Diff mode: second drop target, same drag styling as the primary.
+        document
+            .getElementById('compare-btn')!
+            .addEventListener('click', () => this.enterDiffMode());
+        document
+            .getElementById('diff-close-btn')!
+            .addEventListener('click', () => this.exitDiffMode());
+
+        const diffDropZone = document.getElementById('diff-drop-zone')!;
+        const diffFileInput = document.getElementById('diff-file-input') as HTMLInputElement;
+        diffDropZone.addEventListener('click', () => diffFileInput.click());
+        diffDropZone.addEventListener('dragover', e => this.handleDragOver(e as DragEvent));
+        diffDropZone.addEventListener('dragleave', e => this.handleDragLeave(e as DragEvent));
+        diffDropZone.addEventListener('drop', e => {
+            const de = e as DragEvent;
+            de.preventDefault();
+            (de.currentTarget as HTMLElement).classList.remove('drag-over');
+            const files = de.dataTransfer?.files;
+            if (files && files.length > 0) {
+                void this.loadDiffFile(files[0]!);
+            }
+        });
+        diffFileInput.addEventListener('change', e => {
+            const files = (e.target as HTMLInputElement).files;
+            if (files && files.length > 0) {
+                void this.loadDiffFile(files[0]!);
+            }
+        });
     }
 
     /** Download the loaded dump as `<source-basename>.dump.json`. */
@@ -195,7 +232,9 @@ class ParquetExplorer {
 
         const files = e.dataTransfer?.files;
         if (files && files.length > 0) {
-            void this.loadFile(files[0]!);
+            // While comparing, an anywhere-drop means "this is file B" —
+            // otherwise it would silently replace file A mid-comparison.
+            void (this.diffMode ? this.loadDiffFile(files[0]!) : this.loadFile(files[0]!));
         }
     }
 
@@ -309,13 +348,12 @@ class ParquetExplorer {
         return this.workerClient;
     }
 
-    private async parseJSON(
-        jsonText: string,
-        source: string,
-        byteSource: ByteSource | null = null,
-        bloomProbe: BloomProbe | null = null,
-        valuePreview: ValuePreview | null = null
-    ): Promise<void> {
+    /**
+     * The single validated boundary: dump JSON text → AnyDump. Every input —
+     * the primary load AND diff mode's second file — goes through here.
+     * Throws with a human-readable message on anything invalid.
+     */
+    private parseDumpText(jsonText: string, source: string): AnyDump {
         const parsed: unknown = JSON.parse(jsonText);
 
         // Dispatch on the self-identifying envelope, then validate against that
@@ -324,30 +362,46 @@ class ParquetExplorer {
         let data: AnyDump;
         if (model === 'file') {
             if (!validateFile(parsed)) {
-                this.showError(this.validationMessage('file', validateFile.errors));
-                return;
+                throw new Error(this.validationMessage('file', validateFile.errors));
             }
             data = parsed;
         } else if (model === 'metadata') {
             if (!validateMetadata(parsed)) {
-                this.showError(this.validationMessage('metadata', validateMetadata.errors));
-                return;
+                throw new Error(this.validationMessage('metadata', validateMetadata.errors));
             }
             data = parsed;
         } else {
             const got = typeof model === 'string' ? `"${model}"` : 'no _meta.model';
-            this.showError(
+            throw new Error(
                 'Not a por-que dump / unsupported format — this build understands full ' +
                     'dumps (_meta.model "file") and metadata-only exports (_meta.model ' +
                     `"metadata"), got ${got}.`
             );
-            return;
         }
 
         if (!data.source) {
             data.source = source;
         }
+        return data;
+    }
 
+    private async parseJSON(
+        jsonText: string,
+        source: string,
+        byteSource: ByteSource | null = null,
+        bloomProbe: BloomProbe | null = null,
+        valuePreview: ValuePreview | null = null
+    ): Promise<void> {
+        let data: AnyDump;
+        try {
+            data = this.parseDumpText(jsonText, source);
+        } catch (error) {
+            this.showError((error as Error).message);
+            return;
+        }
+
+        // A new primary file supersedes any comparison in progress.
+        this.exitDiffMode();
         this.parquetData = data;
         this.byteSource = byteSource;
         this.bloomProbe = bloomProbe;
@@ -532,7 +586,84 @@ class ParquetExplorer {
         this.syncHashQuery(null);
     }
 
+    // Diff mode (compare a second file against the loaded one)
+
+    /**
+     * Swap the content section for the diff section. File A's DOM (visualizer,
+     * selection, query panel) is only hidden, never rebuilt, so exiting
+     * restores it exactly as left.
+     */
+    private enterDiffMode(): void {
+        if (!this.parquetData) {
+            return;
+        }
+        this.diffMode = true;
+        this.diffData = null;
+        document.getElementById('diff-file-a')!.textContent = this.parquetData.source ?? '';
+        document.getElementById('diff-results')!.innerHTML = '';
+        document.getElementById('diff-note')!.textContent = '';
+        this.setDisplay('diff-drop-state', 'block');
+        this.setDisplay('file-content-section', 'none');
+        this.setDisplay('diff-section', 'block');
+    }
+
+    private exitDiffMode(): void {
+        this.diffMode = false;
+        this.diffData = null;
+        this.setDisplay('diff-section', 'none');
+        this.setDisplay('file-content-section', 'block');
+    }
+
+    /**
+     * Load file B and render the diff. Same routing as the primary ingest
+     * (raw parquet → worker, everything else → parseDumpText's ajv gate), but
+     * nothing here touches file A's state: no IndexedDB write, no permalink,
+     * no byteSource/bloomProbe/valuePreview swap. Errors land in the inline
+     * note so the comparison can just be retried.
+     */
+    private async loadDiffFile(file: File): Promise<void> {
+        if (!this.parquetData) {
+            return;
+        }
+        const note = document.getElementById('diff-note')!;
+        note.textContent = `Reading ${file.name}...`;
+        try {
+            const buffer = await file.arrayBuffer();
+            const head = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
+            let text: string;
+            if (isParquet(head, file.name)) {
+                // A dedicated short-lived worker: the shared worker's
+                // current-file slot backs file A's bloom probe and value
+                // preview, and parsing B there would silently repoint them.
+                // ponytail: costs a second pyodide boot per raw-parquet
+                // compare; teach the worker named slots if that ever hurts.
+                const client = new ParquetWorkerClient(status => {
+                    note.textContent = status;
+                });
+                try {
+                    text = await client.parse(buffer, file.name);
+                } finally {
+                    client.dispose();
+                }
+            } else {
+                text = new TextDecoder().decode(buffer);
+            }
+            this.diffData = this.parseDumpText(text, file.name);
+            note.textContent = '';
+            this.setDisplay('diff-drop-state', 'none');
+            renderDiffView(
+                document.getElementById('diff-results')!,
+                diffDumps(this.parquetData, this.diffData),
+                this.parquetData.source ?? 'file A',
+                this.diffData.source ?? 'file B'
+            );
+        } catch (error) {
+            note.textContent = `Could not load comparison file: ${(error as Error).message}`;
+        }
+    }
+
     private async handleReset(): Promise<void> {
+        this.exitDiffMode();
         this.parquetData = null;
         this.byteSource = null;
         this.bloomProbe = null;

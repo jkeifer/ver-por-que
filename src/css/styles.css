@@ -1685,3 +1685,113 @@ code {
     border: 1px solid var(--border-light);
     border-radius: var(--border-radius);
 }
+
+/* Diff mode: comparison table + totals cards (shown instead of the content
+ * section; file A's DOM stays intact underneath). */
+.diff-section {
+    margin-top: var(--spacing-lg);
+}
+
+.diff-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--spacing-md);
+}
+
+.diff-intro {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin-bottom: var(--spacing-md);
+    max-width: 70ch;
+}
+
+.diff-note {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin: var(--spacing-sm) 0;
+}
+
+.diff-note:empty {
+    display: none;
+}
+
+.diff-summary {
+    margin-bottom: var(--spacing-md);
+}
+
+.diff-table-wrap {
+    overflow-x: auto;
+}
+
+.diff-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+}
+
+.diff-table th,
+.diff-table td {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    text-align: left;
+    border-bottom: 1px solid var(--border-light);
+    white-space: nowrap;
+}
+
+.diff-table th {
+    color: var(--text-secondary);
+    font-weight: 500;
+}
+
+.diff-table .diff-num {
+    text-align: right;
+}
+
+.diff-table .diff-col {
+    max-width: 18rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Δ header is the one sortable column: cursor + arrow feedback. */
+.diff-delta-header {
+    cursor: pointer;
+    user-select: none;
+}
+
+.diff-delta-header.diff-sort-desc::after {
+    content: ' ▼';
+}
+
+.diff-delta-header.diff-sort-asc::after {
+    content: ' ▲';
+}
+
+.diff-pos {
+    color: var(--viz-red);
+}
+
+.diff-neg {
+    color: var(--viz-green);
+}
+
+.diff-zero {
+    color: var(--text-muted);
+}
+
+/* A codec/encoding cell whose value changed between the files. */
+.diff-changed {
+    background: rgba(240, 196, 25, 0.25);
+    font-weight: 600;
+}
+
+.diff-unmatched {
+    margin: var(--spacing-sm) 0 0;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.diff-unmatched .diff-col {
+    font-family: var(--font-mono);
+}

@@ -76,6 +76,7 @@
                             <p id="loaded-file-source" class="file-source"></p>
                         </div>
                         <div class="file-actions">
+                            <button id="compare-btn" class="btn">Compare…</button>
                             <button id="download-dump-btn" class="btn">Download Dump JSON</button>
                             <button id="reset-btn" class="btn btn-primary">Load New File</button>
                         </div>
@@ -112,6 +113,37 @@
                     <div id="query-panel"></div>
                 </section>
             </div>
+
+            <!-- Diff Mode (compare a second file against the loaded one).
+                 Shown INSTEAD of file-content-section; toggling back leaves
+                 file A's visualizer/query DOM untouched. -->
+            <section id="diff-section" class="diff-section" style="display: none">
+                <div class="diff-header">
+                    <h2>Compare Files</h2>
+                    <button id="diff-close-btn" class="btn">Back</button>
+                </div>
+                <p class="diff-intro">
+                    Comparing against file A:
+                    <span id="diff-file-a" class="file-source"></span>. Chunks align by row-group
+                    index and column path; sizes are compressed bytes.
+                </p>
+                <div id="diff-drop-state">
+                    <div id="diff-drop-zone" class="drop-zone">
+                        <div class="drop-zone-content">
+                            <h3>Drop a second Parquet or JSON file here</h3>
+                            <p>Or click to browse files</p>
+                            <input
+                                type="file"
+                                id="diff-file-input"
+                                accept=".parquet,.json"
+                                hidden
+                            />
+                        </div>
+                    </div>
+                </div>
+                <p id="diff-note" class="diff-note"></p>
+                <div id="diff-results"></div>
+            </section>
 
             <!-- Error Section -->
             <section id="error-section" class="error-section" style="display: none">

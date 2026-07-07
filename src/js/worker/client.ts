@@ -112,6 +112,21 @@ export class ParquetWorkerClient {
     }
 
     /**
+     * Terminates the worker; anything still pending rejects. For short-lived
+     * clients (diff mode's second-file parse) that must not touch the shared
+     * worker's current-file slot.
+     */
+    dispose(): void {
+        this.worker?.terminate();
+        this.worker = null;
+        const error = new Error('parquet worker disposed');
+        for (const { reject } of this.pending.values()) {
+            reject(error);
+        }
+        this.pending.clear();
+    }
+
+    /**
      * Starts booting pyodide in the background (fire-and-forget) so the
      * runtime is warm -- or already up -- before the first parse.
      */

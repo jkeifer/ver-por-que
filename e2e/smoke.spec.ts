@@ -320,6 +320,69 @@ test('reset returns to the drop zone', async ({ page }) => {
     await expect(page.locator('#drop-zone')).toBeVisible();
 });
 
+test('diff mode: compare two files, sort, and return to file A intact', async ({ page }) => {
+    await loadFixture(page, 'data_index_bloom_encoding_stats_expected.json');
+    const viz = page.locator('#canvas-container svg');
+    await expect(viz.locator('rect.segment')).not.toHaveCount(0);
+
+    // Select a node first to prove the view survives the diff round trip.
+    await viz.locator('rect.segment[data-segment-id="data_region"]').click();
+    const panel = page.locator('#info-panel-container');
+    await expect(panel).toContainText('Data Region');
+
+    // Compare: the content section is swapped for the second drop target.
+    await page.locator('#compare-btn').click();
+    await expect(page.locator('#diff-drop-zone')).toBeVisible();
+    await expect(page.locator('#file-content-section')).toBeHidden();
+    await expect(page.locator('#diff-file-a')).toContainText('data_index_bloom_encoding_stats');
+
+    // File B goes through the same validated boundary as file A.
+    await page
+        .locator('#diff-file-input')
+        .setInputFiles(fixture('data_index_bloom_encoding_with_length_expected.json'));
+
+    // Same data, different codec: 152 GZIP → 199 UNCOMPRESSED, delta +47.
+    const table = page.locator('.diff-table');
+    await expect(table).toBeVisible();
+    const row = table.locator('tbody tr');
+    await expect(row).toHaveCount(1);
+    await expect(row).toContainText('String');
+    await expect(row).toContainText('152 Bytes');
+    await expect(row).toContainText('199 Bytes');
+    await expect(row).toContainText('+47 Bytes (+30.9%)');
+    // Codec AND encodings changed: both cells highlighted.
+    await expect(row.locator('td.diff-changed')).toHaveCount(2);
+    await expect(row.locator('td.diff-codec')).toContainText('GZIP → UNCOMPRESSED');
+
+    // File-level and per-row-group totals render.
+    const results = page.locator('#diff-results');
+    await expect(results).toContainText('File Totals');
+    await expect(results).toContainText('Row Group Totals');
+    await expect(results).toContainText('14 rows');
+
+    // Δ header sorts: first click descending, second ascending.
+    const deltaHeader = page.locator('.diff-delta-header');
+    await deltaHeader.click();
+    await expect(deltaHeader).toHaveClass(/diff-sort-desc/);
+    await deltaHeader.click();
+    await expect(deltaHeader).toHaveClass(/diff-sort-asc/);
+    await expect(row).toHaveCount(1);
+
+    // Back: file A fully intact — selection, info panel, query matrix, hash.
+    await page.locator('#diff-close-btn').click();
+    await expect(page.locator('#diff-section')).toBeHidden();
+    await expect(page.locator('#file-content-section')).toBeVisible();
+    await expect(viz.locator('rect.segment[data-segment-id="data_region"]')).toHaveClass(
+        /segment-selected/
+    );
+    await expect(panel).toContainText('Data Region');
+    await expect(page.locator('.query-matrix .qm-cell')).toHaveCount(1);
+    await expect(page).toHaveURL(/node=data_region/);
+    await expect(page.locator('#loaded-file-source')).toContainText(
+        'data_index_bloom_encoding_stats'
+    );
+});
+
 test('service worker serves the app shell offline after a warm load', async ({ page, context }) => {
     // The SW registers on the production build served by `vite preview`.
     await page.goto('/');
