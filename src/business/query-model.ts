@@ -63,6 +63,22 @@ export interface QueryContext {
 // only surfaces (appended to a kept/eval reason) when a predicate on the column
 // actually influenced the outcome — never as noise on a plainly-read chunk.
 
+/**
+ * Turn an engine `Decision.reason` into a friendly clause. The engine leads
+ * with its verdict — `pruned — …`, `kept — …`, `cannot prune — …` — which we
+ * re-lead ourselves (Skipped/Read…), so strip that prefix. "cannot prune"
+ * means the engine couldn't rule the segment out, so it was read anyway;
+ * phrase it as such instead of surfacing the bare "cannot prune" text.
+ */
+function explain(d: Decision): string {
+    const m = /^(pruned|kept|cannot prune) — (.*)$/s.exec(d.reason);
+    if (!m) {
+        return d.reason;
+    }
+    const [, verdict, rest] = m;
+    return verdict === 'cannot prune' ? `couldn't rule it out: ${rest}` : rest!;
+}
+
 const notSelected = (): SegmentStatus => ({
     kind: 'not-selected',
     reason: 'Not read — column not selected for output.',
@@ -70,24 +86,22 @@ const notSelected = (): SegmentStatus => ({
 
 const prunedRowGroup = (d: Decision): SegmentStatus => ({
     kind: 'pruned',
-    reason: `Skipped — ${d.reason}`,
+    reason: `Skipped — ${explain(d)}`,
 });
 
 const prunedPage = (d: Decision): SegmentStatus => ({
     kind: 'pruned',
-    reason: `Skipped — page pruned by column index: ${d.reason}`,
+    reason: `Skipped — ${explain(d)}`,
 });
 
-const evalOnly = (d: Decision | undefined): SegmentStatus => ({
+const evalOnly = (): SegmentStatus => ({
     kind: 'eval-only',
-    reason: d
-        ? `Read only to evaluate a predicate; ${d.reason}`
-        : 'Read only to evaluate a predicate.',
+    reason: 'Read only to evaluate a predicate; not returned.',
 });
 
 const read = (predicate: boolean, d: Decision | undefined): SegmentStatus => ({
     kind: 'read',
-    reason: predicate && d ? `Read and returned. ${d.reason}` : 'Read and returned.',
+    reason: predicate && d ? `Read and returned — ${explain(d)}` : 'Read and returned.',
 });
 
 // --- The single precedence ---------------------------------------------------
@@ -112,7 +126,7 @@ export function chunkStatus(ctx: QueryContext, rg: number, column: string): Segm
         return prunedRowGroup(rgDecision);
     }
     if (!projected) {
-        return evalOnly(rgDecision);
+        return evalOnly();
     }
     return read(predicate, rgDecision);
 }
@@ -144,7 +158,7 @@ export function pageStatus(
         return prunedRowGroup(rgDecision);
     }
     if (!projected) {
-        return evalOnly(rgDecision);
+        return evalOnly();
     }
     return read(predicate, rgDecision);
 }
