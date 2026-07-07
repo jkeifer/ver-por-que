@@ -298,11 +298,11 @@ export class SvgByteVisualizer implements Visualizer {
         segmentLayout: SegmentLayout,
         group: SVGGElement,
         levelIndex: number,
-        _segmentIndex: number
+        segmentIndex: number
     ): void {
         const segment = segmentLayout.segment;
 
-        const colorVar = VisualizationConfig.getSegmentColor(segment.kind);
+        const colorVar = VisualizationConfig.getSegmentColor(segment.kind, segmentIndex);
         const fillColor =
             this.getCSSVariable(colorVar) ||
             this.getCSSVariable(VisualizationConfig.COLORS.DEFAULT);

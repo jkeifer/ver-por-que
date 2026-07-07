@@ -147,12 +147,13 @@ export class TreemapVisualizer implements Visualizer {
             current.children.map(c => ({ id: c.id, size: c.end - c.start })),
             { x: 0, y: 0, width, height: HEIGHT }
         );
-        const byId = new Map(current.children.map(c => [c.id, c]));
+        const byId = new Map(current.children.map((c, i) => [c.id, { node: c, index: i }]));
         for (const placed of rects) {
             if (placed.width <= 0 || placed.height <= 0) {
                 continue; // zero-size node: nothing visible or clickable to draw
             }
-            this.renderNode(byId.get(placed.id)!, placed);
+            const { node, index } = byId.get(placed.id)!;
+            this.renderNode(node, placed, index);
         }
 
         this.container.appendChild(this.svg);
@@ -181,9 +182,10 @@ export class TreemapVisualizer implements Visualizer {
 
     private renderNode(
         node: SegmentNode,
-        placed: { x: number; y: number; width: number; height: number }
+        placed: { x: number; y: number; width: number; height: number },
+        index: number
     ): void {
-        const colorVar = VisualizationConfig.getSegmentColor(node.kind);
+        const colorVar = VisualizationConfig.getSegmentColor(node.kind, index);
         const fillColor =
             this.getCSSVariable(colorVar) ||
             this.getCSSVariable(VisualizationConfig.COLORS.DEFAULT);

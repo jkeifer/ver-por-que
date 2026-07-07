@@ -18,7 +18,9 @@
     --viz-purple: #9467bd;
 
     /* Color families for segment types */
+    --green-light: #90ee90;
     --green-medium: #32cd32;
+    --green-dark: #228b22;
     --red-medium: #dc3545;
 
     /* Semantic segment colors */
@@ -29,18 +31,29 @@
     --row-groups: #4682b4;
 
     /* Schema hierarchy - distinct colors for each level */
+    --schema-group-light: #dda0dd;
     --schema-group-medium: #9370db;
     --schema-group-dark: #663399;
+    --schema-element-light: #87ceeb;
     --schema-element-medium: #4682b4;
+    --schema-element-dark: #1e3a8a;
 
     /* Data structure */
+    --row-group-light: #ffb366;
     --row-group-medium: #ff8c00;
+    --row-group-dark: #cc6600;
+    --column-chunk-light: #dda0dd;
     --column-chunk-medium: #9370db;
+    --column-chunk-dark: #663399;
 
     /* Pages */
+    --data-page-light: #90ee90;
     --data-page-medium: #32cd32;
+    --data-page-dark: #228b22;
     --dictionary-page-color: #dc3545;
+    --index-page-light: #ffb366;
     --index-page-medium: #ff8c00;
+    --index-page-dark: #cc6600;
 
     /* Metadata */
     --column-index-light: #90ee90;
