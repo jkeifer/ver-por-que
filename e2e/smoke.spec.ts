@@ -320,6 +320,32 @@ test('reset returns to the drop zone', async ({ page }) => {
     await expect(page.locator('#drop-zone')).toBeVisible();
 });
 
+test('service worker serves the app shell offline after a warm load', async ({ page, context }) => {
+    // The SW registers on the production build served by `vite preview`.
+    await page.goto('/');
+    await page.evaluate(() => navigator.serviceWorker.ready);
+    // clients.claim() takes control of this already-open page.
+    await expect
+        .poll(() => page.evaluate(() => Boolean(navigator.serviceWorker.controller)))
+        .toBe(true);
+    // A controlled reload runs every shell request through the SW, which awaits
+    // each cache.put before returning -- so once reload() resolves, the shell
+    // is cached.
+    await page.reload();
+
+    // Cut the network and reload: the shell must come entirely from cache.
+    await context.setOffline(true);
+    await page.reload();
+    await expect(page.locator('#drop-zone')).toBeVisible();
+
+    // The JSON path needs no network (no pyodide), so a dump still renders.
+    await page.locator('#file-input').setInputFiles(fixture('metadata-export.json'));
+    await expect(page.locator('#loaded-file-source')).toContainText('(metadata-only export)');
+    await expect(page.locator('#canvas-container svg rect.segment')).not.toHaveCount(0);
+
+    await context.setOffline(false);
+});
+
 test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page }) => {
     test.skip(!hasWheel, 'run `npm run wheel` to stage the por-que/hctef wheels first');
     // First parse downloads the ~12MB pyodide runtime from the CDN.
