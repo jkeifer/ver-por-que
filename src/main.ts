@@ -16,6 +16,7 @@ import { validateFile, validateMetadata, type ValidationError } from './generate
 import { fetchBytes } from './js/fetch-progress';
 import { getHashParam, setHashParam } from './js/permalink';
 import { parseQueryState, type QueryState } from './business/pruning';
+import { project, type SegmentNode } from './business/segment-tree';
 import type { Resolution } from './business/query-model';
 import { ParquetWorkerClient } from './js/worker/client';
 import type { AnyDump } from './types';
@@ -35,6 +36,9 @@ interface StoredFile {
 
 class ParquetExplorer {
     private parquetData: AnyDump | null = null;
+    // The segment tree, projected once per dump and shared by both lenses and
+    // the query panel — renderers consume it, they never re-project.
+    private tree: SegmentNode | null = null;
     // Raw-byte access for the hex inspector. Only raw-parquet loads have one;
     // JSON dumps and IndexedDB restores don't (bytes aren't persisted).
     private byteSource: ByteSource | null = null;
@@ -406,6 +410,8 @@ class ParquetExplorer {
             // A new dump invalidates the previous dump's selection and dimming.
             this.selectedNodeId = null;
             this.currentResolution = null;
+            // Project once here; the lenses and the query panel all share it.
+            this.tree = project(data);
 
             // Permalink: `#lens=treemap` opens straight into the treemap
             // (only the non-default lens is ever written to the hash).
@@ -421,10 +427,15 @@ class ParquetExplorer {
             }
 
             // Query simulation section (matrix + builder) below the structure.
-            this.queryPanel = new QueryPanel(document.getElementById('query-panel')!, data, {
-                onUpdate: resolution => this.applyQueryRun(resolution),
-                onClear: () => this.clearQueryOverlay(),
-            });
+            this.queryPanel = new QueryPanel(
+                document.getElementById('query-panel')!,
+                data,
+                this.tree!,
+                {
+                    onUpdate: resolution => this.applyQueryRun(resolution),
+                    onClear: () => this.clearQueryOverlay(),
+                }
+            );
 
             // Permalink: `#q=<json {predicates, columns}>` re-applies the query
             // simulation to the dump that just loaded (applied after `node`).
@@ -455,7 +466,7 @@ class ParquetExplorer {
             this.selectedNodeId = id;
             this.syncHashNode(id);
         };
-        this.fileStructureViz.initWithData(data);
+        this.fileStructureViz.initWithData(data, this.tree!);
         this.updateLensButtons();
     }
 
@@ -524,6 +535,7 @@ class ParquetExplorer {
 
     private async handleReset(): Promise<void> {
         this.parquetData = null;
+        this.tree = null;
         this.byteSource = null;
         this.bloomProbe = null;
         this.valuePreview = null;

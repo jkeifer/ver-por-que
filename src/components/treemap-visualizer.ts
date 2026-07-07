@@ -8,7 +8,7 @@
 import { formatBytes } from '../format';
 import { VisualizationConfig } from '../config/visualization-config';
 import { squarify } from '../business/treemap-layout';
-import { project, describe, findPath, type SegmentNode } from '../business/segment-tree';
+import { describe, findPath, type SegmentNode } from '../business/segment-tree';
 import type { AnyDump } from '../types';
 import type { InfoPanelManager } from './info-panel-manager';
 import type { Visualizer } from './visualizer';
@@ -47,9 +47,9 @@ export class TreemapVisualizer implements Visualizer {
         window.addEventListener('resize', this.onResize);
     }
 
-    initWithData(data: AnyDump): void {
+    initWithData(data: AnyDump, tree: SegmentNode): void {
         this.dump = data;
-        this.root = project(data);
+        this.root = tree;
         this.path = [this.root];
         this.selectedLeafId = null;
         this.render();

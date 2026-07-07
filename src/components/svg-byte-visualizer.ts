@@ -9,7 +9,7 @@ import {
     type LevelLayout,
     type SegmentLayout,
 } from '../business/segment-layout-calculator';
-import { project, describe, findPath, type SegmentNode } from '../business/segment-tree';
+import { describe, findPath, type SegmentNode } from '../business/segment-tree';
 import type { AnyDump } from '../types';
 import type { InfoPanelManager } from './info-panel-manager';
 import type { Visualizer } from './visualizer';
@@ -209,10 +209,10 @@ export class SvgByteVisualizer implements Visualizer {
         document.body.appendChild(this.tooltip);
     }
 
-    /** Initialize with parquet data (a full dump or a metadata-only export). */
-    initWithData(data: AnyDump): void {
+    /** Initialize with parquet data and the shared, already-projected tree. */
+    initWithData(data: AnyDump, tree: SegmentNode): void {
         this.dump = data;
-        this.root = project(data);
+        this.root = tree;
         this.levels = [];
         this.selectedSegments.clear();
         this.selectionPath = [];

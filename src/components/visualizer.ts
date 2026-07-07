@@ -6,13 +6,18 @@
  * is a lens implementation detail.
  */
 import type { AnyDump } from '../types';
+import type { SegmentNode } from '../business/segment-tree';
 
 export interface Visualizer {
     /** Fired with the deepest selected node's id (null when nothing is selected). */
     onSelectionChange: ((id: string | null) => void) | null;
 
-    /** Initialize with parquet data (a full dump or a metadata-only export). */
-    initWithData(data: AnyDump): void;
+    /**
+     * Initialize with parquet data and the already-projected segment tree.
+     * The tree is projected once by main and shared across lenses — a lens
+     * renders it, it does not re-project.
+     */
+    initWithData(data: AnyDump, tree: SegmentNode): void;
 
     /**
      * Programmatically select a node by id. Returns false (a silent no-op)

@@ -26,7 +26,7 @@ import {
     type Resolution,
     type SegmentStatus,
 } from '../business/query-model';
-import { project, type SegmentNode } from '../business/segment-tree';
+import type { SegmentNode } from '../business/segment-tree';
 import { formatBytes } from '../format';
 import { escapeHtml } from './info-panel-manager';
 import type { AnyDump } from '../types';
@@ -84,8 +84,14 @@ export class QueryPanel {
     /** Debounce handle for value-input edits. */
     private updateTimer: ReturnType<typeof setTimeout> | undefined;
 
-    constructor(container: HTMLElement, dump: AnyDump, delegate: QueryPanelDelegate) {
+    constructor(
+        container: HTMLElement,
+        dump: AnyDump,
+        tree: SegmentNode,
+        delegate: QueryPanelDelegate
+    ) {
         this.dump = dump;
+        this.tree = tree;
         this.delegate = delegate;
         this.columns = leafColumns(dump);
         this.stats = new Map(this.columns.map(c => [c, statsLine(dump, c)]));
@@ -153,7 +159,6 @@ export class QueryPanel {
         });
         container.querySelector('#query-clear-btn')!.addEventListener('click', () => this.clear());
         this.checks.forEach(cb => cb.addEventListener('change', () => this.update()));
-        this.tree = project(dump);
         // Initial paint only: the default state (no predicates, everything
         // projected) has nothing to overlay, and calling the delegate here
         // would clear a `q=` permalink before main.ts has read it.
