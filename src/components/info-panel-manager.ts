@@ -7,7 +7,8 @@
  */
 import { formatBytes, formatNumber, formatOffset } from '../format';
 import { logicalTypeLabel, displayType } from '../domain/parquet-type-resolver';
-import { OP_LABEL, type Evaluation, type Predicate } from '../business/pruning';
+import { OP_LABEL } from '../business/pruning';
+import type { Resolution } from '../business/query-model';
 import { describe, findSchemaLeaf, type Kind, type SegmentNode } from '../business/segment-tree';
 import { parsePredicateValue } from '../business/stat-values';
 import type { ByteSource } from '../js/byte-source';
@@ -693,12 +694,6 @@ const PANELS: Registry = {
 /** Kinds that have a panel handler (exhaustiveness checks). */
 export const PANEL_KINDS = new Set<Kind>(Object.keys(PANELS) as Kind[]);
 
-/** A run query-simulation result, overlaid on the panels of evaluated nodes. */
-export interface QueryOverlay {
-    predicates: Predicate[];
-    evaluation: Evaluation;
-}
-
 export class InfoPanelManager {
     private container: HTMLElement;
     private infoPanel: HTMLElement;
@@ -707,8 +702,8 @@ export class InfoPanelManager {
     private bloomProbe: BloomProbe | null;
     /** Live value decoder; null for JSON-dump / metadata-only loads. */
     private valuePreview: ValuePreview | null;
-    /** Active query-simulation result, or null when no predicate has run. */
-    private query: QueryOverlay | null = null;
+    /** Active query resolution, or null when no predicate has run. */
+    private query: Resolution | null = null;
     /** Last shown node/dump, so a query run can refresh the open panel. */
     private current: { node: SegmentNode; dump: AnyDump } | null = null;
     /** Hex window start (absolute file offset) for the currently shown node. */
@@ -734,34 +729,30 @@ export class InfoPanelManager {
     }
 
     /** Set (or clear) the query overlay and refresh the open panel. */
-    setQuery(query: QueryOverlay | null): void {
-        this.query = query;
+    setQuery(resolution: Resolution | null): void {
+        this.query = resolution;
         if (this.current) {
             this.show(this.current.node, this.current.dump);
         }
     }
 
-    /** The query decision for this node, if it was evaluated. */
+    /** The query decision for this node, if the query resolved a status for it. */
     private querySection(node: SegmentNode): Section | null {
-        if (!this.query) {
+        const status = this.query?.statusOf(node.id);
+        if (!status) {
             return null;
         }
-        const { predicates, evaluation } = this.query;
-        const decision =
-            node.kind === 'row_group'
-                ? evaluation.rowGroups.get(node.index)
-                : evaluation.pages.get(node.id);
-        if (!decision) {
-            return null;
-        }
+        const predicates = this.query!.state.predicates;
         const label = predicates.map(p => `${p.column} ${OP_LABEL[p.op]} ${p.value}`).join(' AND ');
-        return {
-            title: 'Query Pruning',
-            rows: [
-                [predicates.length === 1 ? 'Predicate' : 'Predicates (AND)', escapeHtml(label)],
-                ['Decision', escapeHtml(decision.reason)],
-            ],
-        };
+        const rows: Row[] = [];
+        if (predicates.length > 0) {
+            rows.push([
+                predicates.length === 1 ? 'Predicate' : 'Predicates (AND)',
+                escapeHtml(label),
+            ]);
+        }
+        rows.push(['Decision', escapeHtml(status.reason)]);
+        return { title: 'Query Pruning', rows };
     }
 
     /** Render the panel for a segment node (the root node renders the overview). */
