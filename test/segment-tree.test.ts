@@ -352,7 +352,7 @@ describe('prunedClosure', () => {
     });
 
     it('a pruned leaf (page) carries only itself', () => {
-        let leaf = rowGroup;
+        let leaf: SegmentNode = rowGroup;
         while (leaf.children.length > 0) {
             leaf = leaf.children[0]!;
         }

@@ -105,9 +105,9 @@ export type SegmentNode =
           meta: ColumnMetadata | null;
           leaf: SchemaLeaf | null;
       })
-    | (Base & { kind: 'dictionary_page'; page: DictionaryPage; path: string })
+    | (Base & { kind: 'dictionary_page'; page: DictionaryPage; path: string; rowGroup: number })
     | (Base & { kind: 'data_page'; page: DataPage; path: string; rowGroup: number })
-    | (Base & { kind: 'index_page'; page: IndexPage; path: string })
+    | (Base & { kind: 'index_page'; page: IndexPage; path: string; rowGroup: number })
     // index is null in a metadata-only export: the byte span comes from the
     // footer, but the parsed index contents aren't in the dump.
     | (Base & { kind: 'column_index'; index: ColumnIndex | null; path: string })
@@ -324,6 +324,7 @@ function buildDictPage(page: DictionaryPage, path: string, rg: number): SegmentN
         end: pageEnd(page),
         page,
         path,
+        rowGroup: rg,
         children: [],
     };
 }
@@ -351,6 +352,7 @@ function buildIndexPage(page: IndexPage, path: string, rg: number, i: number): S
         end: pageEnd(page),
         page,
         path,
+        rowGroup: rg,
         children: [],
     };
 }
