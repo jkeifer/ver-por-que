@@ -9,7 +9,13 @@ import {
     type LevelLayout,
     type SegmentLayout,
 } from '../business/segment-layout-calculator';
-import { project, describe, findPath, type SegmentNode } from '../business/segment-tree';
+import {
+    project,
+    describe,
+    findPath,
+    prunedClosure,
+    type SegmentNode,
+} from '../business/segment-tree';
 import type { AnyDump } from '../types';
 import type { InfoPanelManager } from './info-panel-manager';
 import type { Visualizer } from './visualizer';
@@ -914,12 +920,16 @@ export class SvgByteVisualizer implements Visualizer {
 
     /**
      * Dim the rects for these node ids (and any rendered later by drill-down).
-     * Pass an empty set to clear.
+     * A pruned row group carries its whole subtree, so column chunks and pages
+     * under it dim too. Pass an empty set to clear.
      */
     setDimmed(ids: Set<string>): void {
-        this.dimmedIds = ids;
+        this.dimmedIds = this.root ? prunedClosure(this.root, ids) : ids;
         this.svg.querySelectorAll('.segment').forEach(rect => {
-            rect.classList.toggle('segment-dimmed', ids.has(rect.getAttribute('data-segment-id')!));
+            rect.classList.toggle(
+                'segment-dimmed',
+                this.dimmedIds.has(rect.getAttribute('data-segment-id')!)
+            );
         });
     }
 
