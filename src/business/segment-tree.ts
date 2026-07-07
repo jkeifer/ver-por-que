@@ -106,7 +106,13 @@ export type SegmentNode =
           leaf: SchemaLeaf | null;
       })
     | (Base & { kind: 'dictionary_page'; page: DictionaryPage; path: string; rowGroup: number })
-    | (Base & { kind: 'data_page'; page: DataPage; path: string; rowGroup: number })
+    | (Base & {
+          kind: 'data_page';
+          page: DataPage;
+          path: string;
+          rowGroup: number;
+          pageIndex: number;
+      })
     | (Base & { kind: 'index_page'; page: IndexPage; path: string; rowGroup: number })
     // index is null in a metadata-only export: the byte span comes from the
     // footer, but the parsed index contents aren't in the dump.
@@ -339,6 +345,7 @@ function buildDataPage(page: DataPage, path: string, rg: number, i: number): Seg
         page,
         path,
         rowGroup: rg,
+        pageIndex: i,
         children: [],
     };
 }

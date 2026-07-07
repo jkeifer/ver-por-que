@@ -44,14 +44,20 @@ export type ParquetSource = Uint8Array | { url: string };
 /** A decoded value, converted to a JSON-safe form python-side (see _json_safe). */
 export type PreviewValue = string | number | boolean | null;
 
+/** A decoded value with its Dremel definition and repetition levels. */
+export interface PreviewEntry {
+    value: PreviewValue;
+    def: number;
+    rep: number;
+}
+
 /**
- * Result of a value preview: the first N decoded values of a column chunk, or
- * a typed codec failure when the chunk's compression has no pure-python
- * fallback (lzo) so the values can't be decoded in-browser.
+ * Result of a value preview: every decoded value of a single data page, or a
+ * typed codec failure when the chunk's compression has no pure-python fallback
+ * (lzo) so the values can't be decoded in-browser.
  */
 export type PreviewResult =
-    | { values: PreviewValue[]; total: number; truncated: boolean; error?: undefined }
-    | { error: 'codec_unavailable'; codec: string };
+    { values: PreviewEntry[]; error?: undefined } | { error: 'codec_unavailable'; codec: string };
 
 /** Parses parquet sources into por-que dump JSON, plus follow-up queries. */
 export interface ParquetParser {
@@ -64,11 +70,13 @@ export interface ParquetParser {
      */
     probeBloom(rowGroup: number, column: string, value: string): Promise<boolean>;
     /**
-     * Decodes the first `maxValues` values of a column chunk in the most
-     * recently parsed file. Codec-unavailable failures (lzo has no
-     * pure-python fallback) come back as a typed result, not a rejection.
+     * Decodes every value of data page `pageIndex` in column chunk
+     * (`rowGroup`, `column`) of the most recently parsed file. A page is bounded
+     * by the writer's page-size target, so there's no cap. Codec-unavailable
+     * failures (lzo has no pure-python fallback) come back as a typed result,
+     * not a rejection.
      */
-    preview(rowGroup: number, column: string, maxValues: number): Promise<PreviewResult>;
+    preview(rowGroup: number, column: string, pageIndex: number): Promise<PreviewResult>;
     /**
      * Rehydrates a full dump into the current-file slot and attaches a
      * range-reading reader at `url`, so bloom/preview work on a JSON-loaded
@@ -181,7 +189,7 @@ def _json_safe(value):
         case _:
             return str(value)
 
-async def _preview(row_group, column, max_values):
+async def _preview(row_group, column, page_index):
     if _current is None:
         raise RuntimeError('no parquet file is loaded in this worker')
     pf, reader = _current
@@ -195,15 +203,13 @@ async def _preview(row_group, column, max_values):
     )
     if chunk is None:
         raise KeyError(f'no column chunk {column!r} in row group {row_group}')
+    # A page is bounded by the writer's page-size target, so decode it whole --
+    # no cap. ponytail: virtualize the value list if pathologically large pages
+    # ever jank the DOM.
     values = []
-    total = 0
     try:
-        # ponytail: decodes the whole chunk, page-targeted decode when someone
-        # loads a huge file
-        async for value, _def_level, _rep_level in chunk.parse_all_data_pages(reader):
-            total += 1
-            if len(values) < max_values:
-                values.append(_json_safe(value))
+        for value, def_level, rep_level in await chunk.parse_data_page(page_index, reader):
+            values.append({'value': _json_safe(value), 'def': def_level, 'rep': rep_level})
     except ParquetDataError as error:
         # compressors.py raises '<Codec> compression requires <pkg> package'
         # when the codec has no importable module and no pure-python fallback
@@ -211,7 +217,7 @@ async def _preview(row_group, column, max_values):
         if 'requires' in str(error) and 'package' in str(error):
             return json.dumps({'error': 'codec_unavailable', 'codec': chunk.codec.name})
         raise
-    return json.dumps({'values': values, 'total': total, 'truncated': total > len(values)})
+    return json.dumps({'values': values})
 `;
 
 /**
@@ -288,7 +294,7 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
     const preview = pyodide.globals.get('_preview') as (
         rowGroup: number,
         column: string,
-        maxValues: number
+        pageIndex: number
     ) => Promise<string>;
     const bootFromDump = pyodide.globals.get('_boot_from_dump') as (
         dumpJson: string,
@@ -383,8 +389,8 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         // Values cross the boundary as a JSON string: strings/numbers survive
         // pyodide proxying, but this keeps the conversion rules in one place
         // (python's _json_safe) and the payload copy-free.
-        preview: async (rowGroup: number, column: string, maxValues: number) =>
-            JSON.parse(await preview(rowGroup, column, maxValues)) as PreviewResult,
+        preview: async (rowGroup: number, column: string, pageIndex: number) =>
+            JSON.parse(await preview(rowGroup, column, pageIndex)) as PreviewResult,
         bootFromDump: (dumpJson: string, url: string) => bootFromDump(dumpJson, url),
     });
 }

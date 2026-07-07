@@ -57,14 +57,14 @@ export interface ProbeBloomRequest {
 }
 
 /**
- * Decode the first `maxValues` values of a column chunk in the worker's
- * current file. Codec-unavailable failures come back as a typed success
- * payload (PreviewResult), never an error response.
+ * Decode every value of a single data page in the worker's current file.
+ * Codec-unavailable failures come back as a typed success payload
+ * (PreviewResult), never an error response.
  */
 export interface PreviewRequest {
     id: number;
     manifestUrl: string;
-    preview: { rowGroup: number; column: string; maxValues: number };
+    preview: { rowGroup: number; column: string; pageIndex: number };
     warmup?: undefined;
     probe?: undefined;
     boot?: undefined;

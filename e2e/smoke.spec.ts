@@ -298,14 +298,15 @@ test('bloom filter probe is available on a JSON dump with a fetchable source', a
 
 test('value preview is available on a JSON dump with a fetchable source', async ({ page }) => {
     // The dump records a fetchable source, so the preview boots a range reader
-    // on demand -- the interactive control renders, not a dead note.
-    await page.goto('/#node=rg_0_col_String');
+    // on demand -- the interactive control renders, not a dead note. Value
+    // preview lives on data pages, not the column chunk.
+    await page.goto('/#node=rg_0_col_String_data_0');
     await page
         .locator('#file-input')
         .setInputFiles(fixture('data_index_bloom_encoding_stats_expected.json'));
 
     const panel = page.locator('#info-panel-container');
-    await expect(panel).toContainText('Column Chunk String');
+    await expect(panel).toContainText('Data page DATA0');
     await expect(panel).toContainText('Value Preview');
     await expect(panel.locator('.value-preview-btn')).toHaveCount(1);
 });
@@ -400,9 +401,11 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
     await page.locator('.bloom-probe-btn').click();
     await expect(result).toContainText('definitely not present');
 
-    // Value preview: decode the String chunk in-browser and show real values.
+    // Value preview: decode the String column's data page in-browser and show
+    // real values (the preview lives on the page, not the chunk).
     await viz.locator('rect.segment[data-segment-id="rg_0"]').click();
     await viz.locator('rect.segment[data-segment-id="rg_0_col_String"]').click();
+    await viz.locator('rect.segment[data-segment-id="rg_0_col_String_data_0"]').click();
     const panel = page.locator('#info-panel-container');
     await expect(panel).toContainText('Value Preview');
     await page.locator('.value-preview-btn').click();

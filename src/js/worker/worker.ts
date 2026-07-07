@@ -91,8 +91,8 @@ ctx.addEventListener('message', event => {
                 return;
             }
             if (req.preview) {
-                const { rowGroup, column, maxValues } = req.preview;
-                const preview = await parser.preview(rowGroup, column, maxValues);
+                const { rowGroup, column, pageIndex } = req.preview;
+                const preview = await parser.preview(rowGroup, column, pageIndex);
                 ctx.postMessage({ id: req.id, ok: true, preview });
                 return;
             }

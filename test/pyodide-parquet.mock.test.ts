@@ -14,7 +14,7 @@ function fakePyodide() {
     const dumpUrl = vi.fn().mockResolvedValue('{"dumped":"url"}');
     const probeBloom = vi.fn().mockResolvedValue(false);
     // The python side returns preview results as a JSON string.
-    const preview = vi.fn().mockResolvedValue('{"values":["Hello"],"total":14,"truncated":true}');
+    const preview = vi.fn().mockResolvedValue('{"values":[{"value":"Hello","def":1,"rep":0}]}');
     const globals = new Map<string, unknown>([
         ['_dump', dump],
         ['_dump_url', dumpUrl],
@@ -141,17 +141,15 @@ describe('createParquetParser (mocked pyodide)', () => {
         const parse = await boot(py);
 
         // Success payload: the JSON string becomes a typed result object.
-        await expect(parse.preview(0, 'String', 100)).resolves.toEqual({
-            values: ['Hello'],
-            total: 14,
-            truncated: true,
+        await expect(parse.preview(0, 'String', 0)).resolves.toEqual({
+            values: [{ value: 'Hello', def: 1, rep: 0 }],
         });
-        expect(py._preview).toHaveBeenCalledWith(0, 'String', 100);
+        expect(py._preview).toHaveBeenCalledWith(0, 'String', 0);
 
         // Codec failure is a typed RESULT (lzo has no pure-python fallback),
         // never a rejection: the UI renders a friendly note, not an error.
         py._preview.mockResolvedValueOnce('{"error":"codec_unavailable","codec":"LZO"}');
-        await expect(parse.preview(1, 'col', 5)).resolves.toEqual({
+        await expect(parse.preview(1, 'col', 2)).resolves.toEqual({
             error: 'codec_unavailable',
             codec: 'LZO',
         });

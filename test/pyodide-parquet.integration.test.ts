@@ -196,30 +196,28 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         await expect(parse.probeBloom(0, 'nope', 'x')).rejects.toThrow(/KeyError|nope/);
     });
 
-    it('previews decoded values from the current-file slot', async () => {
+    it('previews a data page of decoded values from the current-file slot', async () => {
         const bloomFile = new Uint8Array(
             readFileSync(fixturePath('data_index_bloom_encoding_with_length.parquet'))
         );
         expectValidDump(await parse(bloomFile, 'data_index_bloom_encoding_with_length.parquet'));
 
-        // Exact first values of the one String column (UNCOMPRESSED, PLAIN).
-        await expect(parse.preview(0, 'String', 3)).resolves.toEqual({
-            values: ['Hello', 'This is', 'a'],
-            total: 14,
-            truncated: true,
-        });
-
-        // maxValues past the end: everything, untruncated.
-        const all = await parse.preview(0, 'String', 100);
-        if (all.error !== undefined) {
-            throw new Error(`unexpected codec failure: ${all.codec}`);
+        // The one String column (UNCOMPRESSED, PLAIN) has a single data page,
+        // so page 0 is the whole column: all 14 values, no cap.
+        const page = await parse.preview(0, 'String', 0);
+        if (page.error !== undefined) {
+            throw new Error(`unexpected codec failure: ${page.codec}`);
         }
-        expect(all).toMatchObject({ total: 14, truncated: false });
-        expect(all.values).toHaveLength(14);
-        expect(all.values[13]).toBe('dog');
+        expect(page.values).toHaveLength(14);
+        expect(page.values.slice(0, 3).map(v => v.value)).toEqual(['Hello', 'This is', 'a']);
+        expect(page.values[13]!.value).toBe('dog');
+        // Every value carries its Dremel definition + repetition levels.
+        expect(page.values.every(v => typeof v.def === 'number' && typeof v.rep === 'number')).toBe(
+            true
+        );
 
         // Unknown columns reject rather than guess.
-        await expect(parse.preview(0, 'nope', 3)).rejects.toThrow(/KeyError|nope/);
+        await expect(parse.preview(0, 'nope', 0)).rejects.toThrow(/KeyError|nope/);
     });
 
     it('boots from a JSON dump + URL and probes via range reads, no re-parse', async () => {
@@ -239,11 +237,11 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
             // the spans the dump already located.
             await expect(parse.probeBloom(0, 'String', 'Hello')).resolves.toBe(true);
             await expect(parse.probeBloom(0, 'String', 'zzzzzz-not-here')).resolves.toBe(false);
-            await expect(parse.preview(0, 'String', 3)).resolves.toEqual({
-                values: ['Hello', 'This is', 'a'],
-                total: 14,
-                truncated: true,
-            });
+            const page = await parse.preview(0, 'String', 0);
+            if (page.error !== undefined) {
+                throw new Error(`unexpected codec failure: ${page.codec}`);
+            }
+            expect(page.values.slice(0, 3).map(v => v.value)).toEqual(['Hello', 'This is', 'a']);
 
             // Every fetch the boot + probes issued was a bounded range request;
             // the file was never pulled in one whole-body GET.
@@ -260,11 +258,11 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         // por-que ships a pure-python snappy fallback used when the
         // python-snappy C extension is absent (as under pyodide), so SNAPPY
         // values now decode in-browser instead of returning codec_unavailable.
-        await expect(parse.preview(0, 'id', 5)).resolves.toEqual({
-            values: [6, 7],
-            total: 2,
-            truncated: false,
-        });
+        const page = await parse.preview(0, 'id', 0);
+        if (page.error !== undefined) {
+            throw new Error(`unexpected codec failure: ${page.codec}`);
+        }
+        expect(page.values.map(v => v.value)).toEqual([6, 7]);
     });
 
     it('falls back to a whole-file download when ranges are unsupported', async () => {
