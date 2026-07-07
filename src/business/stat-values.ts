@@ -12,8 +12,13 @@ import type { SchemaLeaf } from '../types';
 export type StatValue = number | bigint | boolean | string;
 
 function base64Bytes(b64: string): Uint8Array | undefined {
+    // Dumps serialize stat bytes as base64, but some values arrive base64url
+    // (`-`/`_` for `+`/`/`) — atob only accepts standard base64, so normalize
+    // the URL-safe alphabet back before decoding. Without this, any stat whose
+    // bytes encode a `-`/`_` sextet decodes to undefined ("cannot decode").
+    const std = b64.replace(/-/g, '+').replace(/_/g, '/');
     try {
-        const bin = atob(b64);
+        const bin = atob(std);
         const out = new Uint8Array(bin.length);
         for (let i = 0; i < bin.length; i++) {
             out[i] = bin.charCodeAt(i);

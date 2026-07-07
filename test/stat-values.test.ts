@@ -40,6 +40,13 @@ describe('decodeStatValue', () => {
         expect(decodeStatValue(b64(0, 0, 0, 0, 0, 0, 0x04, 0xc0), leaf('DOUBLE'))).toBe(-2.5);
     });
 
+    it('accepts base64url stats (-/_) as well as standard base64', () => {
+        // Real overture bbox.xmin DOUBLE stat, serialized base64url: `_` is `/`.
+        // atob rejects the URL-safe alphabet, so these once decoded to undefined.
+        expect(decodeStatValue('AAAA4C_kZcA=', leaf('DOUBLE'))).toBeCloseTo(-175.1308441, 5);
+        expect(decodeStatValue('AAAAQNh-VsA=', leaf('DOUBLE'))).toBeCloseTo(-89.9819488, 5);
+    });
+
     it('decodes BOOLEAN', () => {
         expect(decodeStatValue(b64(1), leaf('BOOLEAN'))).toBe(true);
         expect(decodeStatValue(b64(0), leaf('BOOLEAN'))).toBe(false);
