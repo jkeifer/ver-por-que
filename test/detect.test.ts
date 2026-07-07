@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isParquet, isParquetURL } from '../src/detect';
+import { isParquet, isParquetURL, httpUrlOrNull } from '../src/detect';
 
 const PAR1 = new Uint8Array([0x50, 0x41, 0x52, 0x31]);
 const JSON_HEAD = new Uint8Array([0x7b, 0x22, 0x73, 0x22]); // '{"s'
@@ -47,5 +47,23 @@ describe('isParquetURL', () => {
 
     it('rejects unparseable URLs', () => {
         expect(isParquetURL('not a url.parquet')).toBe(false);
+    });
+});
+
+describe('httpUrlOrNull', () => {
+    it('returns http(s) URLs unchanged', () => {
+        expect(httpUrlOrNull('https://example.com/f.parquet')).toBe(
+            'https://example.com/f.parquet'
+        );
+        expect(httpUrlOrNull('http://example.com/f.json')).toBe('http://example.com/f.json');
+    });
+
+    it('rejects non-http sources (local paths, file:, blob:, empty)', () => {
+        expect(httpUrlOrNull('data.parquet')).toBeNull();
+        expect(httpUrlOrNull('/tmp/data.parquet')).toBeNull();
+        expect(httpUrlOrNull('file:///tmp/data.parquet')).toBeNull();
+        expect(httpUrlOrNull(null)).toBeNull();
+        expect(httpUrlOrNull(undefined)).toBeNull();
+        expect(httpUrlOrNull('')).toBeNull();
     });
 });

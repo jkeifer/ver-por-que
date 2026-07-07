@@ -495,6 +495,10 @@ code {
     font-size: 0.85rem;
 }
 
+.recovery-btn {
+    margin-top: 0.5rem;
+}
+
 .viz-error {
     text-align: center;
     color: var(--viz-red);

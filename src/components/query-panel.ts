@@ -36,6 +36,12 @@ export interface QueryPanelDelegate {
     onUpdate(resolution: Resolution): void;
     /** The query is back to the default state (no predicates, all columns): drop any overlay. */
     onClear(): void;
+    /**
+     * Re-parse the file from its URL to gain the full structure, or null when
+     * the dump has no fetchable source. The read summary offers it as a button
+     * when a metadata-only dump limits the summary to row-group detail.
+     */
+    loadFullStructure: (() => void) | null;
 }
 
 const INCOMPLETE = 'incomplete — not applied';
@@ -74,6 +80,8 @@ export class QueryPanel {
     private readonly rowsEl: HTMLElement;
     private readonly summaryEl: HTMLElement;
     private readonly summaryNoteEl: HTMLElement;
+    /** Upgrade button shown beside the summary note on metadata-only dumps. */
+    private readonly summaryUpgradeBtn: HTMLButtonElement | null;
     private readonly checks: HTMLInputElement[];
     /** Per-column "type · min · max · nulls" line, shared by tooltips and rows. */
     private readonly stats: Map<string, string>;
@@ -146,6 +154,21 @@ export class QueryPanel {
         this.rowsEl = container.querySelector('.query-predicate-rows')!;
         this.summaryEl = container.querySelector('#query-summary')!;
         this.summaryNoteEl = container.querySelector('.query-summary-note')!;
+        // Same recovery affordance as the info panel's degraded cards: when a
+        // metadata-only dump limits the summary and the source is fetchable,
+        // offer to re-parse the full structure. Shown/hidden with the note.
+        if (this.delegate.loadFullStructure) {
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn recovery-btn';
+            btn.textContent = 'Load full structure from source';
+            btn.hidden = true;
+            btn.addEventListener('click', this.delegate.loadFullStructure);
+            this.summaryNoteEl.insertAdjacentElement('afterend', btn);
+            this.summaryUpgradeBtn = btn;
+        } else {
+            this.summaryUpgradeBtn = null;
+        }
         this.checks = [...container.querySelectorAll<HTMLInputElement>('.query-columns input')];
         container
             .querySelector('#query-select-all')!
@@ -341,5 +364,8 @@ export class QueryPanel {
             .join('');
         this.summaryNoteEl.hidden = summary.note === null;
         this.summaryNoteEl.textContent = summary.note ?? '';
+        if (this.summaryUpgradeBtn) {
+            this.summaryUpgradeBtn.hidden = summary.note === null;
+        }
     }
 }

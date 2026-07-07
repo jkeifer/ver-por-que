@@ -40,6 +40,30 @@ const BLOOM_PROBE_UNAVAILABLE_NOTE =
 const VALUE_PREVIEW_UNAVAILABLE_NOTE =
     'Decoding values needs the file bytes — load the original .parquet to preview values.';
 
+const RANGE_UNSUPPORTED_MESSAGE =
+    "This file can't be read incrementally (HTTP range requests not supported).";
+
+/** True when a byte read failed because the server won't serve range requests. */
+export function isIncrementalReadError(error: unknown): boolean {
+    const message = (error as Error | undefined)?.message ?? '';
+    return (
+        message.includes('HctefNetworkError') ||
+        message.includes('does not support HTTP range') ||
+        message.includes('range request')
+    );
+}
+
+/**
+ * Recovery actions for degraded cards: re-parse the file from its URL to gain
+ * full structure (metadata-only dumps), or download the whole file when the
+ * server won't serve range requests. Null when the loaded dump has no fetchable
+ * source (no recovery possible).
+ */
+export interface RecoveryActions {
+    loadFullStructure: (() => void) | null;
+    downloadFullFile: (() => void) | null;
+}
+
 /**
  * Tests a value against a column chunk's bloom filter. Only raw-parquet loads
  * have one (the worker holds the file); the value crosses as a string.
@@ -129,6 +153,7 @@ interface Section {
     title: string;
     rows?: Row[];
     html?: string;
+    degraded?: 'metadata-only';
 }
 
 type Handler<K extends Kind> = (
@@ -191,7 +216,11 @@ function statRows(stats: ColumnStatistics): Row[] {
 function pageSummary(dump: AnyDump): Section | null {
     // A metadata-only export carries no page structure to summarize.
     if (!('column_chunks' in dump)) {
-        return { title: 'Data Pages', rows: [['Detail', METADATA_ONLY_NOTE]] };
+        return {
+            title: 'Data Pages',
+            rows: [['Detail', METADATA_ONLY_NOTE]],
+            degraded: 'metadata-only',
+        };
     }
     if (dump.column_chunks.length === 0) {
         return null;
@@ -451,7 +480,11 @@ const PANELS: Registry = {
             sections.push({ title: 'Page Layout', rows: pageRows });
         } else {
             sections.push({ title: 'Page Layout', rows: pageRows });
-            sections.push({ title: 'Pages', rows: [['Detail', METADATA_ONLY_NOTE]] });
+            sections.push({
+                title: 'Pages',
+                rows: [['Detail', METADATA_ONLY_NOTE]],
+                degraded: 'metadata-only',
+            });
         }
         return sections;
     },
@@ -510,6 +543,7 @@ const PANELS: Registry = {
         layout(node),
         {
             title: 'Column Index',
+            degraded: node.index ? undefined : 'metadata-only',
             rows: [
                 ['Column', node.path],
                 // index === null in a metadata-only export: span only, no contents.
@@ -528,6 +562,7 @@ const PANELS: Registry = {
         layout(node),
         {
             title: 'Offset Index',
+            degraded: node.index ? undefined : 'metadata-only',
             rows: [
                 ['Column', node.path],
                 ...(node.index
@@ -702,6 +737,8 @@ export class InfoPanelManager {
     private bloomProbe: BloomProbe | null;
     /** Live value decoder; null for JSON-dump / metadata-only loads. */
     private valuePreview: ValuePreview | null;
+    /** Recovery actions for degraded cards; both null when no fetchable source. */
+    private recovery: RecoveryActions;
     /** Active query resolution, or null when no predicate has run. */
     private query: Resolution | null = null;
     /** Last shown node/dump, so a query run can refresh the open panel. */
@@ -715,13 +752,15 @@ export class InfoPanelManager {
         container: HTMLElement,
         byteSource: ByteSource | null = null,
         bloomProbe: BloomProbe | null = null,
-        valuePreview: ValuePreview | null = null
+        valuePreview: ValuePreview | null = null,
+        recovery: RecoveryActions = { loadFullStructure: null, downloadFullFile: null }
     ) {
         this.container = container;
         this.container.innerHTML = '';
         this.byteSource = byteSource;
         this.bloomProbe = bloomProbe;
         this.valuePreview = valuePreview;
+        this.recovery = recovery;
         this.infoPanel = document.createElement('div');
         this.infoPanel.className = 'info-panel';
         this.infoPanel.style.display = 'none';
@@ -792,6 +831,12 @@ export class InfoPanelManager {
         this.infoPanel.innerHTML = `<h3>${heading}</h3><div class="info-sections">${sections
             .map(s => this.renderSection(s))
             .join('')}</div>`;
+        if (this.recovery.loadFullStructure) {
+            const upgrade = this.recovery.loadFullStructure;
+            this.infoPanel
+                .querySelectorAll('.recovery-btn[data-action="upgrade"]')
+                .forEach(btn => btn.addEventListener('click', upgrade));
+        }
         if (node.kind === 'bloom_filter' && this.bloomProbe) {
             this.infoPanel
                 .querySelector('.info-sections')!
@@ -847,6 +892,15 @@ export class InfoPanelManager {
                             : renderPreviewValues(res.values, res.total, res.truncated);
                 },
                 (error: unknown) => {
+                    if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
+                        this.appendRecovery(
+                            result,
+                            RANGE_UNSUPPORTED_MESSAGE,
+                            'Download full file',
+                            this.recovery.downloadFullFile
+                        );
+                        return;
+                    }
                     // Pyodide errors embed the python traceback; the last line
                     // is the actual exception.
                     const message = (error as Error).message.trim();
@@ -897,6 +951,15 @@ export class InfoPanelManager {
                           'negatives, so a reader can safely skip this row group.';
                 },
                 (error: unknown) => {
+                    if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
+                        this.appendRecovery(
+                            result,
+                            RANGE_UNSUPPORTED_MESSAGE,
+                            'Download full file',
+                            this.recovery.downloadFullFile
+                        );
+                        return;
+                    }
                     // Pyodide errors embed the python traceback; the last line
                     // is the actual exception.
                     const message = (error as Error).message.trim();
@@ -960,7 +1023,17 @@ export class InfoPanelManager {
                 }
             },
             (error: unknown) => {
-                if (token === this.hexToken) {
+                if (token !== this.hexToken) {
+                    return;
+                }
+                if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
+                    this.appendRecovery(
+                        view,
+                        RANGE_UNSUPPORTED_MESSAGE,
+                        'Download full file',
+                        this.recovery.downloadFullFile
+                    );
+                } else {
                     view.textContent = `Bytes unavailable: ${(error as Error).message}`;
                 }
             }
@@ -969,6 +1042,25 @@ export class InfoPanelManager {
 
     hide(): void {
         this.infoPanel.style.display = 'none';
+    }
+
+    /** Render `message` in `el`, plus a wired recovery button when `action` exists. */
+    private appendRecovery(
+        el: HTMLElement,
+        message: string,
+        label: string,
+        action: (() => void) | null
+    ): void {
+        el.textContent = message;
+        if (action) {
+            el.append(' ');
+            const btn = document.createElement('button');
+            btn.type = 'button';
+            btn.className = 'btn recovery-btn';
+            btn.textContent = label;
+            btn.addEventListener('click', action);
+            el.appendChild(btn);
+        }
     }
 
     private renderSection(section: Section): string {
@@ -981,6 +1073,10 @@ export class InfoPanelManager {
                 )
                 .join('')}</div>`;
         const card = section.html ? 'large-card' : 'regular-card';
-        return `<div class="info-section ${card}"><h5 class="info-section-title">${section.title}</h5>${body}</div>`;
+        const recovery =
+            section.degraded === 'metadata-only' && this.recovery.loadFullStructure
+                ? `<button type="button" class="btn recovery-btn" data-action="upgrade">Load full structure from source</button>`
+                : '';
+        return `<div class="info-section ${card}"><h5 class="info-section-title">${section.title}</h5>${body}${recovery}</div>`;
     }
 }

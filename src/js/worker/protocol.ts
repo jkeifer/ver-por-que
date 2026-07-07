@@ -9,6 +9,7 @@ interface ParseRequestBase {
     warmup?: undefined;
     probe?: undefined;
     preview?: undefined;
+    boot?: undefined;
 }
 
 /**
@@ -21,6 +22,7 @@ export interface WarmupRequest {
     manifestUrl: string;
     probe?: undefined;
     preview?: undefined;
+    boot?: undefined;
 }
 
 /** Parse locally-provided bytes (upload/drop). */
@@ -49,6 +51,7 @@ export interface ProbeBloomRequest {
     probe: { rowGroup: number; column: string; value: string };
     warmup?: undefined;
     preview?: undefined;
+    boot?: undefined;
     bytes?: undefined;
     url?: undefined;
 }
@@ -64,12 +67,30 @@ export interface PreviewRequest {
     preview: { rowGroup: number; column: string; maxValues: number };
     warmup?: undefined;
     probe?: undefined;
+    boot?: undefined;
+    bytes?: undefined;
+    url?: undefined;
+}
+
+/**
+ * Rehydrate a full dump into the worker's current-file slot and attach a
+ * range-reading reader at `url`. Lets bloom/preview run against a JSON-loaded
+ * dump without re-parsing the file (the dump already holds every offset).
+ */
+export interface BootRequest {
+    id: number;
+    manifestUrl: string;
+    boot: { dumpJson: string; url: string };
+    warmup?: undefined;
+    probe?: undefined;
+    preview?: undefined;
     bytes?: undefined;
     url?: undefined;
 }
 
 /** Everything the main thread can send to the worker. */
-export type WorkerRequest = ParseRequest | ProbeBloomRequest | PreviewRequest | WarmupRequest;
+export type WorkerRequest =
+    ParseRequest | ProbeBloomRequest | PreviewRequest | BootRequest | WarmupRequest;
 
 export interface ParseSuccess {
     id: number;
@@ -77,6 +98,7 @@ export interface ParseSuccess {
     dump: string;
     mightContain?: undefined;
     preview?: undefined;
+    booted?: undefined;
 }
 
 export interface ProbeBloomSuccess {
@@ -86,6 +108,7 @@ export interface ProbeBloomSuccess {
     mightContain: boolean;
     dump?: undefined;
     preview?: undefined;
+    booted?: undefined;
 }
 
 export interface PreviewSuccess {
@@ -94,6 +117,17 @@ export interface PreviewSuccess {
     preview: PreviewResult;
     dump?: undefined;
     mightContain?: undefined;
+    booted?: undefined;
+}
+
+/** Acknowledges a BootRequest; carries no payload. */
+export interface BootSuccess {
+    id: number;
+    ok: true;
+    booted: true;
+    dump?: undefined;
+    mightContain?: undefined;
+    preview?: undefined;
 }
 
 export interface ParseFailure {
@@ -133,6 +167,7 @@ export type WorkerResponse =
     | ParseSuccess
     | ProbeBloomSuccess
     | PreviewSuccess
+    | BootSuccess
     | ParseFailure
     | StatusEvent
     | DetailEvent

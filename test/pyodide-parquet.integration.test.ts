@@ -222,6 +222,38 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         await expect(parse.preview(0, 'nope', 3)).rejects.toThrow(/KeyError|nope/);
     });
 
+    it('boots from a JSON dump + URL and probes via range reads, no re-parse', async () => {
+        // The purist path: a full dump carries every offset, so rehydrating it
+        // and attaching a range reader is all bloom/preview need -- the footer
+        // is never re-parsed and the file is never downloaded whole.
+        const bloomFile = new Uint8Array(
+            readFileSync(fixturePath('data_index_bloom_encoding_with_length.parquet'))
+        );
+        const dumpJson = await parse(bloomFile, 'data_index_bloom_encoding_with_length.parquet');
+
+        const server = await serveFixture(bloomFile, true);
+        try {
+            await parse.bootFromDump(dumpJson, server.url);
+
+            // Bloom + preview now answer from the rehydrated slot, reading only
+            // the spans the dump already located.
+            await expect(parse.probeBloom(0, 'String', 'Hello')).resolves.toBe(true);
+            await expect(parse.probeBloom(0, 'String', 'zzzzzz-not-here')).resolves.toBe(false);
+            await expect(parse.preview(0, 'String', 3)).resolves.toEqual({
+                values: ['Hello', 'This is', 'a'],
+                total: 14,
+                truncated: true,
+            });
+
+            // Every fetch the boot + probes issued was a bounded range request;
+            // the file was never pulled in one whole-body GET.
+            expect(server.ranges.length).toBeGreaterThan(0);
+            expect(server.ranges.every(r => r !== null)).toBe(true);
+        } finally {
+            await server.close();
+        }
+    }, 60_000);
+
     it('decodes snappy chunks via por-que pure-python fallback', async () => {
         expectValidDump(await parse(data, 'alltypes_plain.snappy.parquet'));
 

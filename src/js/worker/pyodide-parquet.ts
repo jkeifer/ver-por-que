@@ -69,6 +69,12 @@ export interface ParquetParser {
      * pure-python fallback) come back as a typed result, not a rejection.
      */
     preview(rowGroup: number, column: string, maxValues: number): Promise<PreviewResult>;
+    /**
+     * Rehydrates a full dump into the current-file slot and attaches a
+     * range-reading reader at `url`, so bloom/preview work on a JSON-loaded
+     * dump without re-parsing the file (every offset is already in the dump).
+     */
+    bootFromDump(dumpJson: string, url: string): Promise<void>;
 }
 
 const PARSE_PY = `
@@ -122,6 +128,17 @@ async def _dump_url(url, progress):
         raise
     await _set_current(pf, f)
     return pf.to_json()
+
+async def _boot_from_dump(dump_json, url):
+    # Purist path for a full structure dump loaded from JSON: the dump already
+    # carries the entire parsed footer, so rehydrate it (from_json relinks the
+    # schema) instead of re-reading the file's metadata. Attach a range-reading
+    # reader at the recorded URL and park it in the current-file slot; bloom
+    # probes and value previews then range-read only the spans they need -- no
+    # footer parse, no whole-file download. Nothing the dump lacks is required.
+    pf = ParquetFile.from_json(dump_json)
+    f = await AsyncHttpFile(url).open()
+    await _set_current(pf, f)
 
 def _coerce_probe_value(value, physical_type):
     # Probe values always cross the JS boundary as strings; convert to the
@@ -273,6 +290,10 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         column: string,
         maxValues: number
     ) => Promise<string>;
+    const bootFromDump = pyodide.globals.get('_boot_from_dump') as (
+        dumpJson: string,
+        url: string
+    ) => Promise<void>;
 
     // por-que's parse phases, in emission order, with human labels. The parse
     // is one process, so the status (modal title) stays put; each phase is
@@ -364,5 +385,6 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         // (python's _json_safe) and the payload copy-free.
         preview: async (rowGroup: number, column: string, maxValues: number) =>
             JSON.parse(await preview(rowGroup, column, maxValues)) as PreviewResult,
+        bootFromDump: (dumpJson: string, url: string) => bootFromDump(dumpJson, url),
     });
 }

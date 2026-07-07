@@ -3,6 +3,8 @@
  * (so the JSON path pays zero pyodide cost) and reuses it thereafter.
  */
 import type {
+    BootRequest,
+    BootSuccess,
     ParseRequest,
     ParseSuccess,
     PreviewRequest,
@@ -13,7 +15,7 @@ import type {
 } from './protocol';
 import type { PreviewResult } from './pyodide-parquet';
 
-type Success = ParseSuccess | ProbeBloomSuccess | PreviewSuccess;
+type Success = ParseSuccess | ProbeBloomSuccess | PreviewSuccess | BootSuccess;
 
 interface Pending {
     resolve: (msg: Success) => void;
@@ -112,6 +114,15 @@ export class ParquetWorkerClient {
     }
 
     /**
+     * Rehydrates a full dump into the worker's current-file slot and attaches a
+     * range reader at `url`, so probeBloom/preview work on a JSON-loaded dump
+     * without re-parsing the file. One-time per dump; the caller memoizes.
+     */
+    bootFromDump(dumpJson: string, url: string): Promise<void> {
+        return this.request({ boot: { dumpJson, url } }).then(() => undefined);
+    }
+
+    /**
      * Starts booting pyodide in the background (fire-and-forget) so the
      * runtime is warm -- or already up -- before the first parse.
      */
@@ -123,7 +134,8 @@ export class ParquetWorkerClient {
         payload:
             | ({ name: string } & ({ bytes: ArrayBuffer } | { url: string }))
             | { probe: ProbeBloomRequest['probe'] }
-            | { preview: PreviewRequest['preview'] },
+            | { preview: PreviewRequest['preview'] }
+            | { boot: BootRequest['boot'] },
         transfer: Transferable[] = []
     ): Promise<Success> {
         const worker = this.ensureWorker();
@@ -131,7 +143,7 @@ export class ParquetWorkerClient {
         return new Promise<Success>((resolve, reject) => {
             this.pending.set(id, { resolve, reject });
             const req = { id, manifestUrl: manifestUrl(), ...payload } as
-                ParseRequest | ProbeBloomRequest | PreviewRequest;
+                ParseRequest | ProbeBloomRequest | PreviewRequest | BootRequest;
             worker.postMessage(req, transfer);
         });
     }

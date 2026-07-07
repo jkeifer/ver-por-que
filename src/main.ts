@@ -10,7 +10,7 @@ import { QueryPanel } from './components/query-panel';
 import { SvgByteVisualizer } from './components/svg-byte-visualizer';
 import { TreemapVisualizer } from './components/treemap-visualizer';
 import type { Visualizer } from './components/visualizer';
-import { isParquet, isParquetURL } from './detect';
+import { isParquet, isParquetURL, httpUrlOrNull } from './detect';
 import { fromBuffer, fromURL, type ByteSource } from './js/byte-source';
 import { validateFile, validateMetadata, type ValidationError } from './generated/validate';
 import { fetchBytes } from './js/fetch-progress';
@@ -49,6 +49,11 @@ class ParquetExplorer {
     // Value decoder against the worker's current file; same lifecycle as the
     // bloom probe.
     private valuePreview: ValuePreview | null = null;
+    // For a full dump loaded from JSON (or restored) whose source is a
+    // fetchable URL: the one-time boot that rehydrates the dump into the
+    // worker and attaches a range reader, so bloom/preview read only the spans
+    // they need. Reset on every load so the slot always matches the dump.
+    private workerBooted: Promise<void> | null = null;
     private infoPanelManager: InfoPanelManager | null = null;
     private fileStructureViz: Visualizer | null = null;
     private queryPanel: QueryPanel | null = null;
@@ -287,6 +292,23 @@ class ParquetExplorer {
     }
 
     /**
+     * Whole-file fallback for a source whose server won't serve range requests:
+     * download it all (with progress) and re-ingest as a local load, so hex, bloom
+     * and value preview work from the retained buffer. The modal shows progress.
+     */
+    private async downloadFullFile(url: string): Promise<void> {
+        this.showLoadingScreen();
+        try {
+            this.updateLoadingStatus('Downloading whole file (range requests not supported)...');
+            this.updateLoadingDetail(url);
+            const bytes = await fetchBytes(url, fraction => this.updateLoadingProgress(fraction));
+            await this.ingest(bytes.buffer as ArrayBuffer, url);
+        } catch (error) {
+            this.showError(`Failed to download file: ${(error as Error).message}`);
+        }
+    }
+
+    /**
      * Probe routed at the worker's current-file slot, which the parse that
      * just completed populated. Valid until the next parse replaces it.
      */
@@ -357,11 +379,62 @@ class ParquetExplorer {
         this.byteSource = byteSource;
         this.bloomProbe = bloomProbe;
         this.valuePreview = valuePreview;
+        this.hydrateFromSource();
         await this.saveToStorage(data, source);
 
         this.showExplorer();
         this.populateUI();
         this.hideLoadingScreen();
+    }
+
+    /** The dump's recorded source, when it's a fetchable http(s) URL. */
+    private fetchableSource(): string | null {
+        return httpUrlOrNull(this.parquetData?.source);
+    }
+
+    /**
+     * JSON-dump and restored loads arrive source-less, but nothing they need is
+     * actually missing: a full dump carries every offset, and the payload bytes
+     * come from range reads. So when the dump records a fetchable URL, wire the
+     * byte-level features straight at it — hex range-reads via fromURL, and
+     * bloom/preview lazily boot a range reader in the worker on first use (see
+     * ensureWorkerBooted). Metadata-only dumps have no chunk/page nodes to probe
+     * from, so they get hex only and rely on the "load full structure" button.
+     */
+    private hydrateFromSource(): void {
+        this.workerBooted = null;
+        if (this.byteSource) {
+            return; // a raw-parquet load is already fully wired
+        }
+        const url = this.fetchableSource();
+        if (!url) {
+            return;
+        }
+        this.byteSource = fromURL(url);
+        if (this.parquetData && 'column_chunks' in this.parquetData) {
+            this.bloomProbe = (rowGroup, column, value) =>
+                this.ensureWorkerBooted(url).then(() =>
+                    this.workerClient!.probeBloom(rowGroup, column, value)
+                );
+            this.valuePreview = (rowGroup, column, maxValues) =>
+                this.ensureWorkerBooted(url).then(() =>
+                    this.workerClient!.preview(rowGroup, column, maxValues)
+                );
+        }
+    }
+
+    /**
+     * Boot the worker's current-file slot for the loaded dump once (rehydrate
+     * the dump JSON + attach a range reader at `url` — a footer-sized read at
+     * most, never a download), then reuse it for every probe until the next
+     * load resets it.
+     */
+    private ensureWorkerBooted(url: string): Promise<void> {
+        if (!this.workerBooted) {
+            const dumpJson = JSON.stringify(this.parquetData);
+            this.workerBooted = this.ensureWorkerClient().bootFromDump(dumpJson, url);
+        }
+        return this.workerBooted;
     }
 
     /** First ~5 validation errors, as a single human-readable line. */
@@ -400,11 +473,17 @@ class ParquetExplorer {
                 throw new Error('Required containers not found');
             }
 
+            const src = this.fetchableSource();
+            const metadataOnly = !('column_chunks' in data);
             this.infoPanelManager = new InfoPanelManager(
                 infoPanelContainer,
                 this.byteSource,
                 this.bloomProbe,
-                this.valuePreview
+                this.valuePreview,
+                {
+                    loadFullStructure: src && metadataOnly ? () => void this.loadURL(src) : null,
+                    downloadFullFile: src ? () => void this.downloadFullFile(src) : null,
+                }
             );
 
             // A new dump invalidates the previous dump's selection and dimming.
@@ -434,6 +513,7 @@ class ParquetExplorer {
                 {
                     onUpdate: resolution => this.applyQueryRun(resolution),
                     onClear: () => this.clearQueryOverlay(),
+                    loadFullStructure: src && metadataOnly ? () => void this.loadURL(src) : null,
                 }
             );
 
@@ -539,6 +619,7 @@ class ParquetExplorer {
         this.byteSource = null;
         this.bloomProbe = null;
         this.valuePreview = null;
+        this.workerBooted = null;
         this.lens = 'bytes';
         this.selectedNodeId = null;
         this.currentResolution = null;
@@ -654,6 +735,7 @@ class ParquetExplorer {
             const storedFile = await this.loadFromIndexedDB();
             if (storedFile) {
                 this.parquetData = storedFile.data;
+                this.hydrateFromSource();
                 this.showExplorer();
                 this.populateUI();
             }

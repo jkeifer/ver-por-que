@@ -96,6 +96,11 @@ ctx.addEventListener('message', event => {
                 ctx.postMessage({ id: req.id, ok: true, preview });
                 return;
             }
+            if (req.boot) {
+                await parser.bootFromDump(req.boot.dumpJson, req.boot.url);
+                ctx.postMessage({ id: req.id, ok: true, booted: true });
+                return;
+            }
             const source = req.url !== undefined ? { url: req.url } : new Uint8Array(req.bytes);
             const dump = await parser(source, req.name);
             ctx.postMessage({ id: req.id, ok: true, dump });
