@@ -32,9 +32,9 @@ VENDOR = ROOT / 'static' / 'vendor'
 # keep filenames intact.
 WHEELS = {
     'wheel': {
-        'filename': 'por_que-0.3.3-py3-none-any.whl',
-        'url': 'https://files.pythonhosted.org/packages/23/9d/c659ce66e2bb500cfc9e745f2e9585dbfcf97d45cdd0f8814fbfc9f3728a/por_que-0.3.3-py3-none-any.whl',
-        'sha256': 'b98bbbca85aff87f437f869b7cc858d112ea111ff88b3e0118d91d0b3a9ddccb',
+        'filename': 'por_que-0.3.4-py3-none-any.whl',
+        'url': 'https://files.pythonhosted.org/packages/53/da/0f9fa9ad1d9bcc9aa15d768f24d2e3d058a698e54e9981accd3959e3b86d/por_que-0.3.4-py3-none-any.whl',
+        'sha256': '33e563406e64502df3ef84c167addbdf947ddd44ca743989edbee07fd133753d',
     },
     'hctef': {
         'filename': 'hctef-0.3.0-py3-none-any.whl',

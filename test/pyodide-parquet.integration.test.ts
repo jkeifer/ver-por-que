@@ -19,8 +19,8 @@ import { validateFile } from '../src/generated/validate';
  * Skipped (with a message) when the wheels are absent -- run `npm run wheel`
  * first, which CI does.
  *
- * alltypes_plain.snappy.parquet is deliberate: it exercises the snappy-less
- * path (there is no wasm snappy wheel) and proves a SNAPPY file still dumps.
+ * alltypes_plain.snappy.parquet is deliberate: it proves a SNAPPY file dumps
+ * AND that its values decode via por-que's pure-python snappy fallback.
  */
 const vendorDir = fileURLToPath(new URL('../static/vendor/', import.meta.url));
 const manifestPath = `${vendorDir}manifest.json`;
@@ -222,15 +222,16 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         await expect(parse.preview(0, 'nope', 3)).rejects.toThrow(/KeyError|nope/);
     });
 
-    it('returns a typed codec failure for snappy chunks (no wasm snappy wheel)', async () => {
+    it('decodes snappy chunks via por-que pure-python fallback', async () => {
         expectValidDump(await parse(data, 'alltypes_plain.snappy.parquet'));
 
-        // The structure dump above succeeded without decompressing anything;
-        // decoding values needs snappy, which pyodide cannot import -- that
-        // must surface as a typed result, not a rejection.
+        // por-que 0.3.4 ships a pure-python snappy fallback used when the
+        // python-snappy C extension is absent (as under pyodide), so SNAPPY
+        // values now decode in-browser instead of returning codec_unavailable.
         await expect(parse.preview(0, 'id', 5)).resolves.toEqual({
-            error: 'codec_unavailable',
-            codec: 'SNAPPY',
+            values: [6, 7],
+            total: 2,
+            truncated: false,
         });
     });
 

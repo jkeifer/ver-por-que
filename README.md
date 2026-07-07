@@ -49,9 +49,10 @@ structure. Detection is by magic bytes (`PAR1`), so extension doesn't matter.
   support `Range` and (cross-origin) to expose `Content-Range` via
   `Access-Control-Expose-Headers`; otherwise the app warns in the console and
   falls back to downloading the whole file.
-- Page **content** decompression is not needed for the structure dump, so the
-  missing wasm build of Snappy doesn't matter — a SNAPPY-compressed file dumps
-  fine. (This only affects future value-reconstruction features, not structure.)
+- Page **content** decompression is not needed for the structure dump, so a
+  SNAPPY-compressed file dumps fine even without the C snappy extension. Value
+  previews additionally decode content: SNAPPY works via por-que's pure-python
+  fallback; LZO has no in-browser decoder and previews report it as such.
 
 ## Technology Stack
 

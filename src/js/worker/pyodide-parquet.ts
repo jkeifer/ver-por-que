@@ -46,8 +46,8 @@ export type PreviewValue = string | number | boolean | null;
 
 /**
  * Result of a value preview: the first N decoded values of a column chunk, or
- * a typed codec failure when the chunk's compression has no wasm build
- * (snappy, lzo) so the values can't be decoded in-browser.
+ * a typed codec failure when the chunk's compression has no pure-python
+ * fallback (lzo) so the values can't be decoded in-browser.
  */
 export type PreviewResult =
     | { values: PreviewValue[]; total: number; truncated: boolean; error?: undefined }
@@ -65,8 +65,8 @@ export interface ParquetParser {
     probeBloom(rowGroup: number, column: string, value: string): Promise<boolean>;
     /**
      * Decodes the first `maxValues` values of a column chunk in the most
-     * recently parsed file. Codec-unavailable failures (snappy/lzo have no
-     * wasm wheel) come back as a typed result, not a rejection.
+     * recently parsed file. Codec-unavailable failures (lzo has no
+     * pure-python fallback) come back as a typed result, not a rejection.
      */
     preview(rowGroup: number, column: string, maxValues: number): Promise<PreviewResult>;
 }
@@ -189,8 +189,8 @@ async def _preview(row_group, column, max_values):
                 values.append(_json_safe(value))
     except ParquetDataError as error:
         # compressors.py raises '<Codec> compression requires <pkg> package'
-        # when the codec's module can't import -- snappy and lzo have no wasm
-        # wheel, so this is expected in-browser, not an error state.
+        # when the codec has no importable module and no pure-python fallback
+        # -- lzo, so this is expected in-browser, not an error state.
         if 'requires' in str(error) and 'package' in str(error):
             return json.dumps({'error': 'codec_unavailable', 'codec': chunk.codec.name})
         raise

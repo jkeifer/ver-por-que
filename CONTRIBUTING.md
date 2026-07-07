@@ -111,8 +111,9 @@ npm run wheel   # downloads the wheels into static/vendor/ (gitignored), once
   that `npm run generate` consumes.
 - pyodide itself loads from a CDN, pinned to one version constant in
   `src/js/worker/worker.ts` (keep it equal to the `pyodide` devDep).
-- The parse never decompresses page content, so the lack of a wasm Snappy wheel
-  is irrelevant to the structure dump. Static assets under `static/` are Vite's
+- The parse never decompresses page content, so the structure dump needs no
+  compression libs; value previews decode content and rely on por-que's
+  pure-python codec fallbacks (SNAPPY works, LZO doesn't). Static assets under `static/` are Vite's
   `publicDir`: served at the site root in dev and copied into `dist/` on build.
 
 ### Pre-commit Hooks

@@ -148,12 +148,12 @@ describe('createParquetParser (mocked pyodide)', () => {
         });
         expect(py._preview).toHaveBeenCalledWith(0, 'String', 100);
 
-        // Codec failure is a typed RESULT (snappy/lzo have no wasm wheel),
+        // Codec failure is a typed RESULT (lzo has no pure-python fallback),
         // never a rejection: the UI renders a friendly note, not an error.
-        py._preview.mockResolvedValueOnce('{"error":"codec_unavailable","codec":"SNAPPY"}');
+        py._preview.mockResolvedValueOnce('{"error":"codec_unavailable","codec":"LZO"}');
         await expect(parse.preview(1, 'col', 5)).resolves.toEqual({
             error: 'codec_unavailable',
-            codec: 'SNAPPY',
+            codec: 'LZO',
         });
     });
 
