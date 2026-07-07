@@ -8,12 +8,22 @@
 import { formatBytes } from '../format';
 import { VisualizationConfig } from '../config/visualization-config';
 import { squarify } from '../business/treemap-layout';
+import { distributeWithMinimums, type MinSizingOpts } from '../business/min-sizing';
 import { describe, findPath, type SegmentNode } from '../business/segment-tree';
 import type { AnyDump } from '../types';
 import type { InfoPanelManager } from './info-panel-manager';
 import type { Visualizer } from './visualizer';
 
 const HEIGHT = 400;
+// ponytail: min-sizing knobs in area (px²) so tiny metadata stays visible next
+// to huge data nodes. Tuning knob — bump baseline/cap by eye if metadata is
+// still too small (or too pushy) on real dumps.
+const TREEMAP_MIN_SIZING: MinSizingOpts = {
+    baseline: 400, // ~20×20 px smallest floor
+    cap: 3600, // ~60×60 px largest floor
+    floor: 64,
+    logFactor: 2,
+};
 /** Rects narrower/shorter than this skip their label (heuristic, no measuring). */
 const LABEL_MIN_HEIGHT = 18;
 const LABEL_CHAR_WIDTH = 7.5;
@@ -146,8 +156,13 @@ export class TreemapVisualizer implements Visualizer {
         `;
 
         const current = this.path[this.path.length - 1]!;
+        // Floor tiny nodes to a minimum area (same log-scaled min-sizing the byte
+        // layout uses) before packing, so metadata survives huge data siblings.
+        const sizes = current.children.map(c => c.end - c.start);
+        const total = sizes.reduce((sum, s) => sum + Math.max(0, s), 0);
+        const adjusted = distributeWithMinimums(sizes, total, width * HEIGHT, TREEMAP_MIN_SIZING);
         const rects = squarify(
-            current.children.map(c => ({ id: c.id, size: c.end - c.start })),
+            current.children.map((c, i) => ({ id: c.id, size: adjusted[i]!.extent })),
             { x: 0, y: 0, width, height: HEIGHT }
         );
         const byId = new Map(current.children.map((c, i) => [c.id, { node: c, index: i }]));

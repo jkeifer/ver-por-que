@@ -4,8 +4,17 @@
  */
 import { VisualizationConfig, type LayoutConfig } from '../config/visualization-config';
 import type { SegmentNode } from './segment-tree';
+import { distributeWithMinimums, logarithmicMinimums, type MinSizingOpts } from './min-sizing';
 
 const sizeOf = (n: SegmentNode): number => Math.max(0, n.end - n.start);
+
+/** Byte-layout min-sizing knobs, in container-width pixels, from LAYOUT config. */
+const minSizingOpts = (config: LayoutConfig): MinSizingOpts => ({
+    baseline: config.STARTING_BASELINE || 5,
+    cap: config.MAX_MIN_SEGMENT_WIDTH,
+    floor: config.MIN_SEGMENT_WIDTH,
+    logFactor: config.LOG_SCALE_FACTOR,
+});
 
 export interface SegmentLayout {
     segment: SegmentNode;
@@ -56,109 +65,39 @@ export class SegmentLayoutCalculator {
 
         const minStart = Math.min(...segments.map(s => s.start));
         const maxEnd = Math.max(...segments.map(s => s.end));
-        const totalSize = maxEnd - minStart;
+        const span = maxEnd - minStart;
 
-        const minWidths = this.calculateLogarithmicMinWidths(
-            segments,
-            totalSize,
+        const distributed = distributeWithMinimums(
+            segments.map(sizeOf),
+            span,
             containerWidth,
-            config
+            minSizingOpts(config)
         );
 
-        const segmentData: SegmentWidthData[] = segments.map((segment, index) => ({
-            segment: segment,
-            naturalWidthPercent: (sizeOf(segment) / totalSize) * 100,
-            naturalWidthPixels: (sizeOf(segment) / totalSize) * containerWidth,
-            finalWidthPercent: 0,
-            finalWidthPixels: 0,
-            isExpanded: false,
-            minWidth: minWidths[index] ?? 0,
-        }));
-
-        segmentData.forEach(data => {
-            const segmentMinWidthPercent = (data.minWidth / containerWidth) * 100;
-
-            if (data.naturalWidthPixels < data.minWidth) {
-                data.isExpanded = true;
-                data.finalWidthPercent = segmentMinWidthPercent;
-                data.finalWidthPixels = data.minWidth;
-            } else {
-                data.finalWidthPercent = data.naturalWidthPercent;
-                data.finalWidthPixels = data.naturalWidthPixels;
-            }
+        const segmentData: SegmentWidthData[] = segments.map((segment, index) => {
+            const d = distributed[index]!;
+            return {
+                segment: segment,
+                naturalWidthPercent: (d.natural / containerWidth) * 100,
+                naturalWidthPixels: d.natural,
+                finalWidthPercent: (d.extent / containerWidth) * 100,
+                finalWidthPixels: d.extent,
+                isExpanded: d.isExpanded,
+                minWidth: d.min,
+            };
         });
-
-        const expandedSegments = segmentData.filter(d => d.isExpanded);
-        const extraSpaceUsed = expandedSegments.reduce((sum, data) => {
-            return sum + (data.finalWidthPercent - data.naturalWidthPercent);
-        }, 0);
-
-        if (extraSpaceUsed > 0) {
-            const availableSpace =
-                100 - expandedSegments.reduce((sum, d) => sum + d.finalWidthPercent, 0);
-            const naturalSpaceForNonExpanded = segmentData
-                .filter(d => !d.isExpanded)
-                .reduce((sum, d) => sum + d.naturalWidthPercent, 0);
-
-            if (naturalSpaceForNonExpanded > 0) {
-                const scaleFactor = availableSpace / naturalSpaceForNonExpanded;
-
-                segmentData.forEach(data => {
-                    if (!data.isExpanded) {
-                        data.finalWidthPercent = data.naturalWidthPercent * scaleFactor;
-                        data.finalWidthPixels = (data.finalWidthPercent / 100) * containerWidth;
-                    }
-                });
-            }
-        }
 
         return this.calculateSegmentPositions(segmentData, config);
     }
 
-    /** Calculate logarithmic minimum widths for segments. */
+    /** Calculate logarithmic minimum widths for segments (delegates to min-sizing). */
     static calculateLogarithmicMinWidths(
         segments: SegmentNode[],
         _totalSize: number,
         containerWidth: number,
         config: LayoutConfig
     ): number[] {
-        const startingBaseline = config.STARTING_BASELINE || 5;
-        const adjustedBaseline = Math.min(startingBaseline, containerWidth / segments.length);
-
-        if (adjustedBaseline < config.MIN_SEGMENT_WIDTH) {
-            return segments.map(() => containerWidth / segments.length);
-        }
-
-        const sizes = segments.map(s => Math.max(1, sizeOf(s)));
-        const minSize = Math.min(...sizes);
-        const maxSize = Math.max(...sizes);
-
-        if (minSize === maxSize) {
-            return segments.map(() => adjustedBaseline);
-        }
-
-        const logMinSize = Math.log10(minSize);
-        const logMaxSize = Math.log10(maxSize);
-        const logRange = logMaxSize - logMinSize;
-
-        const logarithmicWidths = sizes.map(size => {
-            const logSize = Math.log10(size);
-            const logPosition = (logSize - logMinSize) / logRange;
-            const scaledPosition = Math.pow(logPosition, 1 / config.LOG_SCALE_FACTOR);
-            return (
-                adjustedBaseline +
-                (config.MAX_MIN_SEGMENT_WIDTH - adjustedBaseline) * scaledPosition
-            );
-        });
-
-        const totalLogarithmicWidth = logarithmicWidths.reduce((sum, width) => sum + width, 0);
-
-        if (totalLogarithmicWidth > containerWidth) {
-            const scalingFactor = containerWidth / totalLogarithmicWidth;
-            return logarithmicWidths.map(width => width * scalingFactor);
-        }
-
-        return logarithmicWidths;
+        return logarithmicMinimums(segments.map(sizeOf), containerWidth, minSizingOpts(config));
     }
 
     /** Calculate segment positions based on calculated widths. */
