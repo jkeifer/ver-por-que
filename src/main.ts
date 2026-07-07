@@ -11,7 +11,6 @@ import { SvgByteVisualizer } from './components/svg-byte-visualizer';
 import { TreemapVisualizer } from './components/treemap-visualizer';
 import type { Visualizer } from './components/visualizer';
 import { isParquet, isParquetURL, httpUrlOrNull } from './detect';
-import { fromBuffer, fromURL, type ByteSource } from './js/byte-source';
 import { validateFile, validateMetadata, type ValidationError } from './generated/validate';
 import { fetchBytes } from './js/fetch-progress';
 import { getHashParam, setHashParam } from './js/permalink';
@@ -39,9 +38,6 @@ class ParquetExplorer {
     // The segment tree, projected once per dump and shared by both lenses and
     // the query panel — renderers consume it, they never re-project.
     private tree: SegmentNode | null = null;
-    // Raw-byte access for the hex inspector. Only raw-parquet loads have one;
-    // JSON dumps and IndexedDB restores don't (bytes aren't persisted).
-    private byteSource: ByteSource | null = null;
     // Bloom-filter probe against the worker's current file. Only raw-parquet
     // loads have one (the worker keeps the parsed file alive); JSON dumps and
     // restores degrade with a note.
@@ -233,16 +229,7 @@ class ParquetExplorer {
             // whole and sniffed as before.
             if (isParquetURL(url)) {
                 const dump = await this.parseParquetURL(url);
-                // The hex inspector re-reads the same URL via range requests;
-                // if the server turns out not to support them, reads reject
-                // and the panel degrades.
-                await this.parseJSON(
-                    dump,
-                    url,
-                    fromURL(url),
-                    this.workerBloomProbe(),
-                    this.workerValuePreview()
-                );
+                await this.parseJSON(dump, url, this.workerBloomProbe(), this.workerValuePreview());
                 return;
             }
 
@@ -264,17 +251,10 @@ class ParquetExplorer {
     private async ingest(buffer: ArrayBuffer, source: string): Promise<void> {
         const head = new Uint8Array(buffer, 0, Math.min(4, buffer.byteLength));
         if (isParquet(head, source)) {
-            // Transfer a COPY to the worker (postMessage detaches it) and keep
-            // the original for the hex inspector; workshop files are ~22 MB,
-            // holding one in memory is fine.
-            const dump = await this.parseParquet(buffer.slice(0), source);
-            await this.parseJSON(
-                dump,
-                source,
-                fromBuffer(buffer),
-                this.workerBloomProbe(),
-                this.workerValuePreview()
-            );
+            // The worker takes ownership of the buffer (postMessage detaches
+            // it); nothing here needs it afterward.
+            const dump = await this.parseParquet(buffer, source);
+            await this.parseJSON(dump, source, this.workerBloomProbe(), this.workerValuePreview());
         } else {
             this.updateLoadingStatus('Parsing JSON data...');
             await this.parseJSON(new TextDecoder().decode(buffer), source);
@@ -293,8 +273,9 @@ class ParquetExplorer {
 
     /**
      * Whole-file fallback for a source whose server won't serve range requests:
-     * download it all (with progress) and re-ingest as a local load, so hex, bloom
-     * and value preview work from the retained buffer. The modal shows progress.
+     * download it all (with progress) and re-ingest as a local load, so bloom
+     * and value preview work against the freshly parsed file. The modal shows
+     * progress.
      */
     private async downloadFullFile(url: string): Promise<void> {
         this.showLoadingScreen();
@@ -339,7 +320,6 @@ class ParquetExplorer {
     private async parseJSON(
         jsonText: string,
         source: string,
-        byteSource: ByteSource | null = null,
         bloomProbe: BloomProbe | null = null,
         valuePreview: ValuePreview | null = null
     ): Promise<void> {
@@ -376,7 +356,6 @@ class ParquetExplorer {
         }
 
         this.parquetData = data;
-        this.byteSource = byteSource;
         this.bloomProbe = bloomProbe;
         this.valuePreview = valuePreview;
         this.hydrateFromSource();
@@ -394,23 +373,21 @@ class ParquetExplorer {
 
     /**
      * JSON-dump and restored loads arrive source-less, but nothing they need is
-     * actually missing: a full dump carries every offset, and the payload bytes
-     * come from range reads. So when the dump records a fetchable URL, wire the
-     * byte-level features straight at it — hex range-reads via fromURL, and
-     * bloom/preview lazily boot a range reader in the worker on first use (see
-     * ensureWorkerBooted). Metadata-only dumps have no chunk/page nodes to probe
-     * from, so they get hex only and rely on the "load full structure" button.
+     * actually missing: a full dump carries every offset, and bloom/preview
+     * lazily boot a range reader in the worker on first use (see
+     * ensureWorkerBooted). So when the dump records a fetchable URL, wire those
+     * byte-level features straight at it. Metadata-only dumps have no chunk/page
+     * nodes to probe from, so they rely on the "load full structure" button.
      */
     private hydrateFromSource(): void {
         this.workerBooted = null;
-        if (this.byteSource) {
-            return; // a raw-parquet load is already fully wired
+        if (this.bloomProbe) {
+            return; // a raw-parquet load already wired bloom/preview at the worker
         }
         const url = this.fetchableSource();
         if (!url) {
             return;
         }
-        this.byteSource = fromURL(url);
         if (this.parquetData && 'column_chunks' in this.parquetData) {
             this.bloomProbe = (rowGroup, column, value) =>
                 this.ensureWorkerBooted(url).then(() =>
@@ -477,7 +454,6 @@ class ParquetExplorer {
             const metadataOnly = !('column_chunks' in data);
             this.infoPanelManager = new InfoPanelManager(
                 infoPanelContainer,
-                this.byteSource,
                 this.bloomProbe,
                 this.valuePreview,
                 {
@@ -616,7 +592,6 @@ class ParquetExplorer {
     private async handleReset(): Promise<void> {
         this.parquetData = null;
         this.tree = null;
-        this.byteSource = null;
         this.bloomProbe = null;
         this.valuePreview = null;
         this.workerBooted = null;

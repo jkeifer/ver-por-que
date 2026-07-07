@@ -11,7 +11,6 @@ import { OP_LABEL } from '../business/pruning';
 import type { Resolution } from '../business/query-model';
 import { describe, findSchemaLeaf, type Kind, type SegmentNode } from '../business/segment-tree';
 import { decodeStatValue, parsePredicateValue } from '../business/stat-values';
-import type { ByteSource } from '../js/byte-source';
 import type { PreviewResult, PreviewValue } from '../js/worker/pyodide-parquet';
 import type { AnyDump, ColumnStatistics, SchemaGroup, SchemaLeaf, SchemaRoot } from '../types';
 
@@ -30,9 +29,6 @@ function columnChunkCount(dump: AnyDump): number {
 
 const METADATA_ONLY_NOTE =
     'Page detail is not in a metadata-only dump — load the original .parquet to see pages.';
-
-const BYTES_UNAVAILABLE_NOTE =
-    'Raw bytes are not available for this load — load the original .parquet to inspect bytes.';
 
 const BLOOM_PROBE_UNAVAILABLE_NOTE =
     'Probing needs the filter bytes — load the original .parquet to test values.';
@@ -91,25 +87,6 @@ interface PreviewTarget {
     column: string;
     /** True on data_page nodes: v1 previews the whole containing chunk. */
     pageScoped: boolean;
-}
-
-/** Hex inspector window: page through the span 4 KB at a time. */
-const HEX_WINDOW = 4096;
-const HEX_BYTES_PER_ROW = 16;
-
-/** Classic hex dump: offset gutter, hex bytes, ASCII. Rows start at `offset`. */
-function hexDump(bytes: Uint8Array, offset: number): string {
-    const lines: string[] = [];
-    for (let row = 0; row < bytes.length; row += HEX_BYTES_PER_ROW) {
-        const slice = bytes.subarray(row, row + HEX_BYTES_PER_ROW);
-        const hex = Array.from(slice, b => b.toString(16).padStart(2, '0')).join(' ');
-        const ascii = Array.from(slice, b =>
-            b >= 0x20 && b <= 0x7e ? String.fromCharCode(b) : '.'
-        ).join('');
-        const gutter = (offset + row).toString(16).padStart(8, '0');
-        lines.push(`${gutter}  ${hex.padEnd(HEX_BYTES_PER_ROW * 3 - 1)}  ${ascii}`);
-    }
-    return lines.join('\n');
 }
 
 /** Friendly (not an error state) message for a codec with no in-browser decoder. */
@@ -740,7 +717,6 @@ export const PANEL_KINDS = new Set<Kind>(Object.keys(PANELS) as Kind[]);
 export class InfoPanelManager {
     private container: HTMLElement;
     private infoPanel: HTMLElement;
-    private byteSource: ByteSource | null;
     /** Live bloom-filter probe; null for JSON-dump / metadata-only loads. */
     private bloomProbe: BloomProbe | null;
     /** Live value decoder; null for JSON-dump / metadata-only loads. */
@@ -751,21 +727,15 @@ export class InfoPanelManager {
     private query: Resolution | null = null;
     /** Last shown node/dump, so a query run can refresh the open panel. */
     private current: { node: SegmentNode; dump: AnyDump } | null = null;
-    /** Hex window start (absolute file offset) for the currently shown node. */
-    private hexOffset = 0;
-    /** Invalidates in-flight hex reads when the selection or window changes. */
-    private hexToken = 0;
 
     constructor(
         container: HTMLElement,
-        byteSource: ByteSource | null = null,
         bloomProbe: BloomProbe | null = null,
         valuePreview: ValuePreview | null = null,
         recovery: RecoveryActions = { loadFullStructure: null, downloadFullFile: null }
     ) {
         this.container = container;
         this.container.innerHTML = '';
-        this.byteSource = byteSource;
         this.bloomProbe = bloomProbe;
         this.valuePreview = valuePreview;
         this.recovery = recovery;
@@ -830,11 +800,6 @@ export class InfoPanelManager {
                 rows: [['Detail', VALUE_PREVIEW_UNAVAILABLE_NOTE]],
             });
         }
-        if (!this.byteSource) {
-            // No original file bytes (JSON dump, metadata export, or restore):
-            // same degradation pattern as METADATA_ONLY_NOTE.
-            sections.push({ title: 'Raw Bytes', rows: [['Detail', BYTES_UNAVAILABLE_NOTE]] });
-        }
         this.infoPanel.style.display = 'block';
         this.infoPanel.innerHTML = `<h3>${heading}</h3><div class="info-sections">${sections
             .map(s => this.renderSection(s))
@@ -854,10 +819,6 @@ export class InfoPanelManager {
             this.infoPanel
                 .querySelector('.info-sections')!
                 .appendChild(this.buildValuePreviewSection(preview));
-        }
-        if (this.byteSource) {
-            this.hexOffset = node.start;
-            this.infoPanel.querySelector('.info-sections')!.appendChild(this.buildHexSection(node));
         }
     }
 
@@ -982,70 +943,6 @@ export class InfoPanelManager {
             }
         });
         return section;
-    }
-
-    /** Interactive hex inspector over the node's byte span. */
-    private buildHexSection(node: SegmentNode): HTMLElement {
-        const section = document.createElement('div');
-        section.className = 'info-section large-card hex-section';
-        section.innerHTML =
-            `<h5 class="info-section-title">Raw Bytes</h5>` +
-            `<div class="hex-header">Bytes ${formatOffset(node.start)}–${formatOffset(
-                node.end
-            )} (${formatBytes(node.end - node.start)})</div>` +
-            `<div class="hex-controls">` +
-            `<button type="button" class="hex-prev">&#9664; Prev</button>` +
-            `<span class="hex-range"></span>` +
-            `<button type="button" class="hex-next">Next &#9654;</button>` +
-            `</div>` +
-            `<pre class="hex-view"></pre>`;
-        if (node.end - node.start <= HEX_WINDOW) {
-            section.querySelector<HTMLElement>('.hex-controls')!.style.display = 'none';
-        }
-        section.querySelector('.hex-prev')!.addEventListener('click', () => {
-            this.hexOffset = Math.max(node.start, this.hexOffset - HEX_WINDOW);
-            this.renderHexWindow(node, section);
-        });
-        section.querySelector('.hex-next')!.addEventListener('click', () => {
-            this.hexOffset = Math.min(this.hexOffset + HEX_WINDOW, node.end - 1);
-            this.renderHexWindow(node, section);
-        });
-        this.renderHexWindow(node, section);
-        return section;
-    }
-
-    private renderHexWindow(node: SegmentNode, section: HTMLElement): void {
-        const start = this.hexOffset;
-        const end = Math.min(start + HEX_WINDOW, node.end);
-        section.querySelector<HTMLButtonElement>('.hex-prev')!.disabled = start <= node.start;
-        section.querySelector<HTMLButtonElement>('.hex-next')!.disabled = end >= node.end;
-        section.querySelector('.hex-range')!.textContent =
-            `${formatOffset(start)}–${formatOffset(end)}`;
-        const view = section.querySelector<HTMLElement>('.hex-view')!;
-        view.textContent = 'Loading bytes...';
-        const token = ++this.hexToken;
-        this.byteSource!.read(start, end).then(
-            bytes => {
-                if (token === this.hexToken) {
-                    view.textContent = hexDump(bytes, start);
-                }
-            },
-            (error: unknown) => {
-                if (token !== this.hexToken) {
-                    return;
-                }
-                if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
-                    this.appendRecovery(
-                        view,
-                        RANGE_UNSUPPORTED_MESSAGE,
-                        'Download full file',
-                        this.recovery.downloadFullFile
-                    );
-                } else {
-                    view.textContent = `Bytes unavailable: ${(error as Error).message}`;
-                }
-            }
-        );
     }
 
     hide(): void {

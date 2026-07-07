@@ -15,7 +15,7 @@ export function isParquet(head: Uint8Array, name?: string): boolean {
 /**
  * Returns the source string when it's a fetchable http(s) URL, else null. Used
  * to decide whether a JSON/restored dump can be re-fetched from its recorded
- * `source` (range-read for hex, or re-parsed for bloom/preview). Only checks
+ * `source` (re-parsed for bloom/preview). Only checks
  * that it parses as an http(s) URL — CORS/auth/404 are only knowable by trying,
  * and the fetch paths already degrade gracefully on failure.
  */
