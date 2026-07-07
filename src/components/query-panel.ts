@@ -77,6 +77,9 @@ export class QueryPanel {
     private readonly delegate: QueryPanelDelegate;
     private readonly columns: string[];
     private readonly matrix: HTMLTableElement;
+    /** Floating tooltip for the matrix + the cell/header it's currently on. */
+    private readonly tip: HTMLDivElement;
+    private tipFor: HTMLElement | null = null;
     private readonly rowsEl: HTMLElement;
     private readonly summaryEl: HTMLElement;
     private readonly summaryNoteEl: HTMLElement;
@@ -164,6 +167,13 @@ export class QueryPanel {
                 </div>
             </div>`;
         this.matrix = container.querySelector('.query-matrix')!;
+        this.tip = document.createElement('div');
+        this.tip.className = 'qm-tip';
+        this.tip.hidden = true;
+        // Lives in the section (destroyed with the panel on reset — no leak),
+        // but position:fixed so the wrap's overflow never clips it.
+        container.querySelector('.query-matrix-section')!.appendChild(this.tip);
+        this.setupMatrixTooltip();
         this.rowsEl = container.querySelector('.query-predicate-rows')!;
         this.summaryEl = container.querySelector('#query-summary')!;
         this.summaryNoteEl = container.querySelector('.query-summary-note')!;
@@ -341,7 +351,10 @@ export class QueryPanel {
                 const cells = this.columns
                     .map(column => {
                         const s = this.resolution.matrixCell(index, column);
-                        const title = `${column}\n${this.stats.get(column)}\n${s.reason}`;
+                        // Column name, then the status + its rationale (the reason
+                        // already reads "Status — why"). Per-column stats live on
+                        // the header, not here.
+                        const title = `${column}\n${s.reason}`;
                         return `<td class="qm-cell ${KIND_CLASS[s.kind]}" title="${escapeHtml(title)}"></td>`;
                     })
                     .join('');
@@ -349,7 +362,72 @@ export class QueryPanel {
             })
             .join('');
         this.matrix.innerHTML = `<thead>${head}</thead><tbody>${body}</tbody>`;
+        // The old cell/header the tooltip tracked is gone with the innerHTML.
+        this.tipFor = null;
+        this.tip.hidden = true;
         this.renderSummary(this.resolution.summary);
+    }
+
+    /**
+     * Instant floating tooltip for every cell and column header. Native `title`
+     * is kept (a11y + tests read it) but stashed away while a target is hovered
+     * so the browser's slow duplicate never shows. Delegated on the persistent
+     * table, so it survives each render()'s innerHTML swap. The `t === tipFor`
+     * guard makes re-entry from a header's inner <span> a no-op instead of a
+     * flicker; mouseout only hides once the pointer truly leaves the target.
+     */
+    private setupMatrixTooltip(): void {
+        const TARGETS = '.qm-cell, thead th:not(.qm-rowhead)';
+        const restore = (t: HTMLElement): void => {
+            if (t.dataset['tip'] !== undefined) {
+                t.setAttribute('title', t.dataset['tip']);
+                delete t.dataset['tip'];
+            }
+        };
+        this.matrix.addEventListener('mouseover', e => {
+            const t = (e.target as HTMLElement).closest<HTMLElement>(TARGETS);
+            if (!t || t === this.tipFor) {
+                return;
+            }
+            if (this.tipFor) {
+                restore(this.tipFor);
+            }
+            this.tipFor = t;
+            const title = t.getAttribute('title');
+            if (title === null) {
+                return;
+            }
+            t.dataset['tip'] = title;
+            t.removeAttribute('title');
+            this.tip.textContent = title;
+            this.tip.hidden = false;
+            this.moveTip(e);
+        });
+        this.matrix.addEventListener('mouseout', e => {
+            const t = (e.target as HTMLElement).closest<HTMLElement>(TARGETS);
+            if (t && t === this.tipFor && !t.contains(e.relatedTarget as Node)) {
+                restore(t);
+                this.tipFor = null;
+                this.tip.hidden = true;
+            }
+        });
+        this.matrix.addEventListener('mousemove', e => this.moveTip(e));
+    }
+
+    /** Keep the tooltip beside the cursor and inside the viewport. */
+    private moveTip(e: MouseEvent): void {
+        if (this.tip.hidden) {
+            return;
+        }
+        const pad = 12;
+        const r = this.tip.getBoundingClientRect();
+        const left = Math.min(e.clientX + pad, window.innerWidth - r.width - pad);
+        let top = e.clientY + pad;
+        if (top + r.height > window.innerHeight) {
+            top = e.clientY - r.height - pad;
+        }
+        this.tip.style.left = `${Math.max(pad, left)}px`;
+        this.tip.style.top = `${Math.max(pad, top)}px`;
     }
 
     /**

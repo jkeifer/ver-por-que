@@ -510,6 +510,8 @@ code {
 /* Buttons */
 .btn {
     padding: var(--spacing-sm) var(--spacing-lg);
+    background: var(--bg-secondary);
+    color: var(--text-primary);
     border: 1px solid var(--border-medium);
     border-radius: var(--border-radius);
     font-size: 0.9rem;
@@ -519,6 +521,14 @@ code {
     font-family: var(--font-sans);
     text-decoration: none;
     display: inline-block;
+}
+
+/* Shared rollover for every button; .btn-primary:hover overrides the colors below. */
+.btn:hover {
+    background: var(--bg-tertiary);
+    border-color: var(--text-secondary);
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-sm);
 }
 
 .btn-primary {
@@ -893,6 +903,28 @@ code {
 
 .qm-skip {
     background: var(--border-medium);
+}
+
+/* Instant, WYSIWYG matrix tooltip: native `title` is too slow/unreliable on
+ * the tiny cells and thin diagonal header labels. position:fixed dodges the
+ * wrap's overflow clip; white-space:pre-line renders the `\n`-joined lines. */
+.qm-tip {
+    position: fixed;
+    z-index: 1000;
+    max-width: 24rem;
+    padding: var(--spacing-xs) var(--spacing-sm);
+    background: rgba(0, 0, 0, 0.9);
+    color: #fff;
+    border-radius: var(--border-radius);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    line-height: 1.4;
+    white-space: pre-line;
+    pointer-events: none;
+}
+
+.qm-tip[hidden] {
+    display: none;
 }
 
 .query-legend {
