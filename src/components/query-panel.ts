@@ -12,32 +12,41 @@
  */
 import {
     columnStats,
-    evaluate,
     formatStatValue,
     isValidPredicate,
     leafColumns,
     OP_LABEL,
-    rowCounts,
-    type Evaluation,
     type Op,
     type Predicate,
     type QueryState,
 } from '../business/pruning';
+import {
+    resolve,
+    type ReadSummary,
+    type Resolution,
+    type SegmentStatus,
+} from '../business/query-model';
+import { project, type SegmentNode } from '../business/segment-tree';
+import { formatBytes } from '../format';
 import { escapeHtml } from './info-panel-manager';
 import type { AnyDump } from '../types';
 
 export interface QueryPanelDelegate {
-    /** The live query state changed: overlay the evaluation on the rest of the app. */
-    onUpdate(state: QueryState, evaluation: Evaluation): void;
+    /** The live query state changed: overlay the resolved query on the rest of the app. */
+    onUpdate(resolution: Resolution): void;
     /** The query is back to the default state (no predicates, all columns): drop any overlay. */
     onClear(): void;
 }
 
-const NOT_SELECTED = 'not read — not selected for output';
-const EVAL_ONLY = 'read only to evaluate a predicate — not in the output';
 const INCOMPLETE = 'incomplete — not applied';
 
-const emptyEvaluation = (): Evaluation => ({ rowGroups: new Map(), pages: new Map() });
+/** Matrix cell class per resolved status kind. */
+const KIND_CLASS: Record<SegmentStatus['kind'], string> = {
+    read: 'qm-read',
+    'eval-only': 'qm-eval',
+    'not-selected': 'qm-skip',
+    pruned: 'qm-pruned',
+};
 
 /** One-line footer-statistics summary for a column ("type · min · max · nulls"). */
 function statsLine(dump: AnyDump, column: string): string {
@@ -68,10 +77,10 @@ export class QueryPanel {
     private readonly checks: HTMLInputElement[];
     /** Per-column "type · min · max · nulls" line, shared by tooltips and rows. */
     private readonly stats: Map<string, string>;
-    /** Current evaluation of the VALID predicates; empty means nothing pruned. */
-    private evaluation: Evaluation = emptyEvaluation();
-    /** Columns the valid predicates touch (read even when not projected). */
-    private predicateColumns = new Set<string>();
+    /** The segment tree, built once; fed to `resolve` on every edit. */
+    private readonly tree: SegmentNode;
+    /** The current resolved query (default state until the first edit). */
+    private resolution: Resolution;
     /** Debounce handle for value-input edits. */
     private updateTimer: ReturnType<typeof setTimeout> | undefined;
 
@@ -84,9 +93,9 @@ export class QueryPanel {
             <div class="query-matrix-wrap"><table class="query-matrix"></table></div>
             <div class="query-legend">
                 <span><span class="qm-swatch qm-read"></span>read and returned</span>
-                <span><span class="qm-swatch qm-eval"></span>${EVAL_ONLY}</span>
+                <span><span class="qm-swatch qm-eval"></span>read only to evaluate a predicate — not in the output</span>
                 <span><span class="qm-swatch qm-pruned"></span>skipped — a predicate pruned the row group</span>
-                <span><span class="qm-swatch qm-skip"></span>${NOT_SELECTED}</span>
+                <span><span class="qm-swatch qm-skip"></span>not read — not selected for output</span>
             </div>
             <div class="info-sections query-cards">
                 <div class="info-section large-card query-summary-card">
@@ -144,9 +153,11 @@ export class QueryPanel {
         });
         container.querySelector('#query-clear-btn')!.addEventListener('click', () => this.clear());
         this.checks.forEach(cb => cb.addEventListener('change', () => this.update()));
+        this.tree = project(dump);
         // Initial paint only: the default state (no predicates, everything
         // projected) has nothing to overlay, and calling the delegate here
         // would clear a `q=` permalink before main.ts has read it.
+        this.resolution = resolve(dump, this.tree, this.readState());
         this.render();
     }
 
@@ -258,13 +269,12 @@ export class QueryPanel {
                 valid.push(predicate);
             }
         }
-        this.evaluation = evaluate(this.dump, valid);
-        this.predicateColumns = new Set(valid.map(p => p.column));
+        this.resolution = resolve(this.dump, this.tree, { predicates: valid, columns });
         this.render();
-        if (valid.length === 0 && columns.length === this.columns.length) {
-            this.delegate.onClear();
+        if (this.resolution.active) {
+            this.delegate.onUpdate(this.resolution);
         } else {
-            this.delegate.onUpdate({ predicates: valid, columns }, this.evaluation);
+            this.delegate.onClear();
         }
     }
 
@@ -275,14 +285,10 @@ export class QueryPanel {
     }
 
     /**
-     * Redraw the matrix + summary. Cell precedence: a column that is neither
-     * projected nor under a valid predicate is never read (gray) — even in a
-     * pruned row group, skipping it saves nothing. Only the remaining columns
-     * show the row group's pruned (red) / kept (green or eval-only yellow)
-     * decision.
+     * Redraw the matrix + summary from the resolved query. Each cell's fate and
+     * wording come from `resolution.matrixCell` — the panel holds no precedence.
      */
     private render(): void {
-        const selected = new Set(this.readState().columns);
         const head = `<tr><th class="qm-rowhead"></th>${this.columns
             .map(
                 c => `<th title="${escapeHtml(`${c}\n${this.stats.get(c)}`)}">${escapeHtml(c)}</th>`
@@ -290,91 +296,37 @@ export class QueryPanel {
             .join('')}</tr>`;
         const body = this.dump.metadata.row_groups
             .map((_, index) => {
-                const decision = this.evaluation.rowGroups.get(index);
                 const cells = this.columns
                     .map(column => {
-                        const projected = selected.has(column);
-                        const hasPredicate = this.predicateColumns.has(column);
-                        let cls: string;
-                        let reason: string;
-                        if (!projected && !hasPredicate) {
-                            cls = 'qm-skip';
-                            reason = NOT_SELECTED;
-                        } else if (decision?.pruned) {
-                            cls = 'qm-pruned';
-                            reason = decision.reason;
-                        } else if (!projected) {
-                            cls = 'qm-eval';
-                            reason = decision ? `${EVAL_ONLY}; ${decision.reason}` : EVAL_ONLY;
-                        } else {
-                            cls = 'qm-read';
-                            reason =
-                                decision && hasPredicate
-                                    ? `read and returned; ${decision.reason}`
-                                    : 'read and returned';
-                        }
-                        const title = `${column}\n${this.stats.get(column)}\n${reason}`;
-                        return `<td class="qm-cell ${cls}" title="${escapeHtml(title)}"></td>`;
+                        const s = this.resolution.matrixCell(index, column);
+                        const title = `${column}\n${this.stats.get(column)}\n${s.reason}`;
+                        return `<td class="qm-cell ${KIND_CLASS[s.kind]}" title="${escapeHtml(title)}"></td>`;
                     })
                     .join('');
                 return `<tr><th class="qm-rowhead">RG${index}</th>${cells}</tr>`;
             })
             .join('');
         this.matrix.innerHTML = `<thead>${head}</thead><tbody>${body}</tbody>`;
-        this.renderSummary(selected);
+        this.renderSummary(this.resolution.summary);
     }
 
     /**
-     * Structured read summary. "Up to" on rows is deliberate: statistics
-     * pruning is an upper bound, never an exact row count. Chunk counts follow
-     * the cell precedence — a gray (never-read) chunk counts as not read, and
-     * is never attributed to pruning.
+     * Structured read summary, straight from the core's `ReadSummary`. "Up to"
+     * on rows is deliberate: statistics pruning is an upper bound, never exact.
      */
-    private renderSummary(selected: Set<string>): void {
-        const groups = this.dump.metadata.row_groups;
-        let chunksTotal = 0;
-        let chunksRead = 0;
-        let groupsKept = 0;
-        groups.forEach((group, index) => {
-            const pruned = this.evaluation.rowGroups.get(index)?.pruned ?? false;
-            if (!pruned) {
-                groupsKept += 1;
-            }
-            for (const column of this.columns) {
-                if (!(column in group.column_chunks)) {
-                    continue;
-                }
-                chunksTotal += 1;
-                if (!pruned && (selected.has(column) || this.predicateColumns.has(column))) {
-                    chunksRead += 1;
-                }
-            }
-        });
-        const rows = rowCounts(this.dump, this.evaluation);
+    private renderSummary(summary: ReadSummary): void {
         const items: [string, string][] = [
-            ['Rows', `up to ${rows.kept} of ${rows.total}`],
-            ['Row groups', `${groupsKept} of ${groups.length} read`],
-            ['Column chunks', `${chunksRead} of ${chunksTotal} read`],
+            ['Rows', `up to ${summary.rows.kept} of ${summary.rows.total}`],
+            ['Row groups', `${summary.rowGroups.read} of ${summary.rowGroups.total} read`],
+            ['Column chunks', `${summary.columnChunks.read} of ${summary.columnChunks.total} read`],
         ];
-        if ('column_chunks' in this.dump && this.evaluation.pages.size > 0) {
-            // A page inside a pruned row group is never read, whatever its own
-            // column-index decision says (e.g. "cannot prune — no column
-            // index"): the reader skips the whole row group first.
-            const prunedGroups = new Set(
-                [...this.evaluation.rowGroups.entries()]
-                    .filter(([, d]) => d.pruned)
-                    .map(([index]) => index)
-            );
-            const inPrunedGroup = (key: string): boolean => {
-                const match = /^rg_(\d+)_/.exec(key);
-                return match !== null && prunedGroups.has(Number(match[1]));
-            };
-            const pages = this.evaluation.pages;
-            const kept = [...pages.entries()].filter(
-                ([key, d]) => !d.pruned && !inPrunedGroup(key)
-            ).length;
-            items.push(['Pages', `${kept} of ${pages.size} read`]);
+        if (summary.pages) {
+            items.push(['Pages', `${summary.pages.read} of ${summary.pages.total} read`]);
         }
+        items.push([
+            'Bytes',
+            `${formatBytes(summary.bytes.read)} of ${formatBytes(summary.bytes.total)} read`,
+        ]);
         this.summaryEl.innerHTML = items
             .map(
                 ([label, value]) =>
@@ -382,12 +334,7 @@ export class QueryPanel {
                     `<span class="info-value">${escapeHtml(value)}</span></div>`
             )
             .join('');
-        // Metadata-only export: the column index isn't in the dump, so
-        // page-level decisions degrade to a note (once a predicate applies).
-        const degraded = !('column_chunks' in this.dump) && this.evaluation.rowGroups.size > 0;
-        this.summaryNoteEl.hidden = !degraded;
-        this.summaryNoteEl.textContent = degraded
-            ? 'page detail is not in a metadata-only dump'
-            : '';
+        this.summaryNoteEl.hidden = summary.note === null;
+        this.summaryNoteEl.textContent = summary.note ?? '';
     }
 }

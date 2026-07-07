@@ -15,7 +15,8 @@ import { fromBuffer, fromURL, type ByteSource } from './js/byte-source';
 import { validateFile, validateMetadata, type ValidationError } from './generated/validate';
 import { fetchBytes } from './js/fetch-progress';
 import { getHashParam, setHashParam } from './js/permalink';
-import { parseQueryState, type Evaluation, type QueryState } from './business/pruning';
+import { parseQueryState, type QueryState } from './business/pruning';
+import type { Resolution } from './business/query-model';
 import { ParquetWorkerClient } from './js/worker/client';
 import type { AnyDump } from './types';
 import { BUILD_INFO } from './build-info.js';
@@ -51,7 +52,7 @@ class ParquetExplorer {
     // starts blank, so main.ts re-selects the node and re-applies the dimming.
     private lens: Lens = 'bytes';
     private selectedNodeId: string | null = null;
-    private dimmedIds = new Set<string>();
+    private currentResolution: Resolution | null = null;
     // Lazily created on the first raw-parquet load so the JSON path never boots
     // pyodide.
     private workerClient: ParquetWorkerClient | null = null;
@@ -404,7 +405,7 @@ class ParquetExplorer {
 
             // A new dump invalidates the previous dump's selection and dimming.
             this.selectedNodeId = null;
-            this.dimmedIds = new Set();
+            this.currentResolution = null;
 
             // Permalink: `#lens=treemap` opens straight into the treemap
             // (only the non-default lens is ever written to the hash).
@@ -421,7 +422,7 @@ class ParquetExplorer {
 
             // Query simulation section (matrix + builder) below the structure.
             this.queryPanel = new QueryPanel(document.getElementById('query-panel')!, data, {
-                onUpdate: (state, evaluation) => this.applyQueryRun(state, evaluation),
+                onUpdate: resolution => this.applyQueryRun(resolution),
                 onClear: () => this.clearQueryOverlay(),
             });
 
@@ -472,7 +473,7 @@ class ParquetExplorer {
         if (this.selectedNodeId) {
             this.fileStructureViz!.selectNodeById(this.selectedNodeId);
         }
-        this.fileStructureViz!.setDimmed(this.dimmedIds);
+        this.fileStructureViz!.setDimmed(this.currentResolution?.dimmed ?? new Set());
         this.syncHashLens();
     }
 
@@ -506,28 +507,17 @@ class ParquetExplorer {
     // Query simulation (predicate pushdown visualization)
 
     /** The live query changed: dim pruned segments, overlay the info panel, sync the hash. */
-    private applyQueryRun(state: QueryState, evaluation: Evaluation): void {
-        const dimmed = new Set<string>();
-        evaluation.rowGroups.forEach((decision, index) => {
-            if (decision.pruned) {
-                dimmed.add(`rg_${index}`);
-            }
-        });
-        evaluation.pages.forEach((decision, nodeId) => {
-            if (decision.pruned) {
-                dimmed.add(nodeId);
-            }
-        });
-        this.dimmedIds = dimmed;
-        this.fileStructureViz?.setDimmed(dimmed);
-        this.infoPanelManager?.setQuery({ predicates: state.predicates, evaluation });
-        this.syncHashQuery(state);
+    private applyQueryRun(resolution: Resolution): void {
+        this.currentResolution = resolution;
+        this.fileStructureViz?.setDimmed(resolution.dimmed);
+        this.infoPanelManager?.setQuery(resolution);
+        this.syncHashQuery(resolution.state);
     }
 
     /** Drop the query overlay and the `q` permalink param. */
     private clearQueryOverlay(): void {
-        this.dimmedIds = new Set();
-        this.fileStructureViz?.setDimmed(this.dimmedIds);
+        this.currentResolution = null;
+        this.fileStructureViz?.setDimmed(new Set());
         this.infoPanelManager?.setQuery(null);
         this.syncHashQuery(null);
     }
@@ -539,7 +529,7 @@ class ParquetExplorer {
         this.valuePreview = null;
         this.lens = 'bytes';
         this.selectedNodeId = null;
-        this.dimmedIds = new Set();
+        this.currentResolution = null;
         this.updateLensButtons();
         // A permalink is meaningless with no dump loaded (lens and query included).
         history.replaceState(null, '', location.pathname + location.search);

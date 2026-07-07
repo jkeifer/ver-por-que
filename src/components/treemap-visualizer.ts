@@ -8,13 +8,7 @@
 import { formatBytes } from '../format';
 import { VisualizationConfig } from '../config/visualization-config';
 import { squarify } from '../business/treemap-layout';
-import {
-    project,
-    describe,
-    findPath,
-    prunedClosure,
-    type SegmentNode,
-} from '../business/segment-tree';
+import { project, describe, findPath, type SegmentNode } from '../business/segment-tree';
 import type { AnyDump } from '../types';
 import type { InfoPanelManager } from './info-panel-manager';
 import type { Visualizer } from './visualizer';
@@ -89,7 +83,7 @@ export class TreemapVisualizer implements Visualizer {
     }
 
     setDimmed(ids: Set<string>): void {
-        this.dimmedIds = this.root ? prunedClosure(this.root, ids) : ids;
+        this.dimmedIds = ids;
         this.svg?.querySelectorAll('.segment').forEach(rect => {
             rect.classList.toggle(
                 'segment-dimmed',
