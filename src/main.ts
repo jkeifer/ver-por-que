@@ -18,6 +18,7 @@ import { getHashParam, setHashParam } from './js/permalink';
 import { parseQueryState, type Evaluation, type QueryState } from './business/pruning';
 import { ParquetWorkerClient } from './js/worker/client';
 import type { AnyDump } from './types';
+import { BUILD_INFO } from './build-info.js';
 
 const DB_NAME = 'ParquetExplorerDB';
 
@@ -779,3 +780,17 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 });
+
+// Offline support: cache the app shell + pyodide runtime after one warm load so
+// workshop venues with flaky wifi keep working. Production only -- dev must stay
+// live-reloadable. The ?v=<commit> versions the cache and forces the service
+// worker to update on every deploy.
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+        navigator.serviceWorker
+            .register(`./sw.js?v=${BUILD_INFO.commit}`)
+            .catch((error: unknown) => {
+                console.warn('Service worker registration failed:', error);
+            });
+    });
+}
