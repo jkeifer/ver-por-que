@@ -59,35 +59,49 @@ export class VisualizationConfig {
         MIN_WIDTH: 200,
     };
 
-    /** One CSS custom property per segment kind. */
-    static KIND_COLORS: Record<Kind, string> = {
-        file: '--generic-segment-color',
-        magic_header: '--magic-color',
-        magic_footer: '--magic-color',
-        footer: '--footer-color',
-        data_region: '--row-groups',
-        metadata_region: '--metadata-container-color',
-        row_group: '--row-group-medium',
-        column_chunk: '--column-chunk-medium',
-        dictionary_page: '--dictionary-page-color',
-        data_page: '--data-page-medium',
-        index_page: '--index-page-medium',
-        column_index: '--column-index-medium',
-        offset_index: '--column-index-dark',
-        bloom_filter: '--column-index-light',
-        schema_root: '--schema-group-dark',
-        schema_group: '--schema-group-medium',
-        schema_leaf: '--schema-element-medium',
-        row_groups_meta: '--row-groups',
-        row_group_meta: '--row-group-medium',
-        chunk_meta: '--column-chunk-medium',
-        kv_meta: '--red-medium',
-        kv_entry: '--green-medium',
+    /**
+     * Color family (CSS custom properties) per segment kind. Kinds that repeat
+     * as siblings (row groups, column chunks, pages, schema groups/leaves, kv
+     * entries) get a light/medium/dark family so consecutive segments alternate
+     * shade and their boundaries stay visible without delimiter lines. Singleton
+     * or already-distinct kinds get a one-entry family.
+     */
+    static KIND_COLORS: Record<Kind, string[]> = {
+        file: ['--generic-segment-color'],
+        magic_header: ['--magic-color'],
+        magic_footer: ['--magic-color'],
+        footer: ['--footer-color'],
+        data_region: ['--row-groups'],
+        metadata_region: ['--metadata-container-color'],
+        row_group: ['--row-group-light', '--row-group-medium', '--row-group-dark'],
+        column_chunk: ['--column-chunk-light', '--column-chunk-medium', '--column-chunk-dark'],
+        dictionary_page: ['--dictionary-page-color'],
+        data_page: ['--data-page-light', '--data-page-medium', '--data-page-dark'],
+        index_page: ['--index-page-light', '--index-page-medium', '--index-page-dark'],
+        column_index: ['--column-index-medium'],
+        offset_index: ['--column-index-dark'],
+        bloom_filter: ['--column-index-light'],
+        schema_root: ['--schema-group-dark'],
+        schema_group: ['--schema-group-light', '--schema-group-medium', '--schema-group-dark'],
+        schema_leaf: ['--schema-element-light', '--schema-element-medium', '--schema-element-dark'],
+        row_groups_meta: ['--row-groups'],
+        row_group_meta: ['--row-group-light', '--row-group-medium', '--row-group-dark'],
+        chunk_meta: ['--column-chunk-light', '--column-chunk-medium', '--column-chunk-dark'],
+        kv_meta: ['--red-medium'],
+        kv_entry: ['--green-light', '--green-medium', '--green-dark'],
     };
 
-    /** CSS custom property name for a segment kind. */
-    static getSegmentColor(kind: Kind): string {
-        return VisualizationConfig.KIND_COLORS[kind] ?? VisualizationConfig.COLORS.DEFAULT;
+    /**
+     * CSS custom property name for a segment kind. `index` is the segment's
+     * position within its level; it selects a shade within the kind's family so
+     * adjacent same-kind segments differ.
+     */
+    static getSegmentColor(kind: Kind, index = 0): string {
+        const family = VisualizationConfig.KIND_COLORS[kind];
+        if (!family || family.length === 0) {
+            return VisualizationConfig.COLORS.DEFAULT;
+        }
+        return family[index % family.length]!;
     }
 
     /**
