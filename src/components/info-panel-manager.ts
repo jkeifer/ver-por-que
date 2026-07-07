@@ -10,7 +10,7 @@ import { logicalTypeLabel, displayType } from '../domain/parquet-type-resolver';
 import { OP_LABEL } from '../business/pruning';
 import type { Resolution } from '../business/query-model';
 import { describe, findSchemaLeaf, type Kind, type SegmentNode } from '../business/segment-tree';
-import { parsePredicateValue } from '../business/stat-values';
+import { decodeStatValue, parsePredicateValue } from '../business/stat-values';
 import type { ByteSource } from '../js/byte-source';
 import type { PreviewResult, PreviewValue } from '../js/worker/pyodide-parquet';
 import type { AnyDump, ColumnStatistics, SchemaGroup, SchemaLeaf, SchemaRoot } from '../types';
@@ -191,12 +191,16 @@ function countColumns(node: SchemaRoot | SchemaGroup | SchemaLeaf): number {
     return Object.values(children).reduce((sum, c) => sum + countColumns(c), 0);
 }
 
-function statRows(stats: ColumnStatistics): Row[] {
-    const val = (v: unknown): string => {
+function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null): Row[] {
+    // min/max_value are base64 raw physical bytes; decode with the leaf's type
+    // when we can, else fall back to the raw string (INT96/decimal/binary =
+    // decodeStatValue returns undefined, matching the pruning engine's honesty).
+    const val = (v: string | null | undefined): string => {
         if (v === null || v === undefined) {
             return 'N/A';
         }
-        const s = String(v);
+        const decoded = leaf ? decodeStatValue(v, leaf) : undefined;
+        const s = String(decoded ?? v);
         return s.length > 50 ? `${s.slice(0, 47)}...` : s;
     };
     return [
@@ -486,6 +490,9 @@ const PANELS: Registry = {
                 degraded: 'metadata-only',
             });
         }
+        if (meta?.statistics) {
+            sections.push({ title: 'Statistics', rows: statRows(meta.statistics, leaf) });
+        }
         return sections;
     },
 
@@ -508,7 +515,7 @@ const PANELS: Registry = {
         },
     ],
 
-    data_page: node => {
+    data_page: (node, dump) => {
         const p = node.page;
         const rows: Row[] = [
             ['Page Type', p.page_type ?? 'DATA_PAGE'],
@@ -521,7 +528,8 @@ const PANELS: Registry = {
         ];
         const sections: Section[] = [layout(node), { title: 'Data Page', rows }];
         if (p.statistics) {
-            sections.push({ title: 'Page Statistics', rows: statRows(p.statistics) });
+            const leaf = findSchemaLeaf(dump.metadata.schema_root, node.path);
+            sections.push({ title: 'Page Statistics', rows: statRows(p.statistics, leaf) });
         }
         return sections;
     },
