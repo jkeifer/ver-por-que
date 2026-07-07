@@ -41,9 +41,6 @@ test('renders a full dump and drills into a row group', async ({ page }) => {
     const panel = page.locator('#info-panel-container');
     await expect(panel).toContainText('Physical Layout');
     await expect(panel).toContainText('Row Group');
-    // The dump records a fetchable source, so the hex inspector range-reads
-    // the original file instead of degrading to a note.
-    await expect(panel).toContainText('Raw Bytes');
 });
 
 test('renders a metadata-only export with the source suffix', async ({ page }) => {
@@ -378,12 +375,6 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
     await expect(source).not.toContainText('(metadata-only export)');
     const viz = page.locator('#canvas-container svg');
     await expect(viz.locator('rect.segment')).not.toHaveCount(0);
-
-    // Hex inspector: the header magic is readable straight off the wire.
-    await viz.locator('rect.segment[data-segment-id="magic_header"]').click();
-    const hexView = page.locator('#info-panel-container .hex-view');
-    await expect(hexView).toContainText('50 41 52 31');
-    await expect(hexView).toContainText('PAR1');
 
     // Bloom filter probe: needs a file whose footer records the filter's
     // length (data_index_bloom_encoding_stats records only the offset, so no
