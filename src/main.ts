@@ -771,6 +771,12 @@ class ParquetExplorer {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+    const commitEl = document.getElementById('commit-hash');
+    if (commitEl) {
+        commitEl.textContent = BUILD_INFO.commit;
+        commitEl.title = `Built ${BUILD_INFO.buildTime}`;
+    }
+
     const app = new ParquetExplorer();
     app.init().catch((error: Error) => {
         console.error('Failed to initialize app:', error);
