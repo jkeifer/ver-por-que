@@ -128,6 +128,10 @@ class ParquetExplorer {
             }
         });
 
+        for (const link of document.querySelectorAll<HTMLElement>('.sample-link')) {
+            link.addEventListener('click', () => void this.loadURL(link.dataset.url!));
+        }
+
         document
             .getElementById('lens-bytes')!
             .addEventListener('click', () => this.setLens('bytes'));
