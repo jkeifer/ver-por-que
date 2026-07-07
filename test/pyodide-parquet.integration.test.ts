@@ -225,7 +225,7 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
     it('decodes snappy chunks via por-que pure-python fallback', async () => {
         expectValidDump(await parse(data, 'alltypes_plain.snappy.parquet'));
 
-        // por-que 0.3.4 ships a pure-python snappy fallback used when the
+        // por-que ships a pure-python snappy fallback used when the
         // python-snappy C extension is absent (as under pyodide), so SNAPPY
         // values now decode in-browser instead of returning codec_unavailable.
         await expect(parse.preview(0, 'id', 5)).resolves.toEqual({
