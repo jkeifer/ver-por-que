@@ -152,7 +152,7 @@ test('query simulation: live matrix, pruning, projection, permalink', async ({ p
     // counts as read in the summary.
     await page.locator('.query-columns input[data-column="String"]').uncheck();
     await expect(cell).toHaveClass(/qm-eval/);
-    await expect(cell).toHaveAttribute('title', /read only to evaluate a predicate/);
+    await expect(cell).toHaveAttribute('title', /Read only to evaluate a predicate/);
     await expect(summary).toContainText('1 of 1 read');
 
     // Select all / Deselect all act on every return-column checkbox.
@@ -167,7 +167,7 @@ test('query simulation: live matrix, pruning, projection, permalink', async ({ p
     await page.locator('.qp-remove').click();
     await page.locator('.query-columns input[data-column="String"]').uncheck();
     await expect(cell).toHaveClass(/qm-skip/);
-    await expect(cell).toHaveAttribute('title', /not read — not selected for output/);
+    await expect(cell).toHaveAttribute('title', /Not read — column not selected for output/);
 
     // Clear drops predicates but keeps the projection: still gray. Re-checking
     // the column restores the default state and drops the hash param.
@@ -203,7 +203,10 @@ test('query cell precedence: unprojected columns stay gray in a pruned row group
     await expect(cells.nth(3)).toHaveClass(/qm-skip/);
 
     // Gray tooltips never show a pruning reason.
-    await expect(cells.nth(1)).toHaveAttribute('title', /not read — not selected for output/);
+    await expect(cells.nth(1)).toHaveAttribute(
+        'title',
+        /Not read — column not selected for output/
+    );
     await expect(cells.nth(1)).not.toHaveAttribute('title', /pruned/);
 
     // Summary: red is would-have-read-but-skipped; gray is simply not read.

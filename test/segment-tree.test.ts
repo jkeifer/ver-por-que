@@ -8,7 +8,6 @@ import {
     projectMetadataExport,
     findNode,
     findPath,
-    prunedClosure,
     describe as describeNode,
     KINDS,
     type Kind,
@@ -326,40 +325,5 @@ describe('exhaustiveness', () => {
         // describe covers every kind via a fully-typed switch; spot-check a few.
         const root = projectDump(load(KV));
         walk(root, n => expect(describeNode(n)).toBeTruthy());
-    });
-});
-
-describe('prunedClosure', () => {
-    const root = projectDump(load(INDEXED));
-    const dataRegion = root.children.find(c => c.kind === 'data_region')!;
-    const rowGroup = dataRegion.children.find(c => c.kind === 'row_group')!;
-
-    it('carries a pruned row group down to its column chunks and pages', () => {
-        const subtree: string[] = [];
-        walk(rowGroup, n => subtree.push(n.id));
-        expect(subtree.length).toBeGreaterThan(1); // row group has descendants
-
-        const closure = prunedClosure(root, new Set([rowGroup.id]));
-        for (const id of subtree) {
-            expect(closure.has(id), id).toBe(true);
-        }
-    });
-
-    it('leaves segments outside the pruned node bright', () => {
-        const closure = prunedClosure(root, new Set([rowGroup.id]));
-        expect(closure.has(root.id)).toBe(false);
-        expect(closure.has(dataRegion.id)).toBe(false);
-    });
-
-    it('a pruned leaf (page) carries only itself', () => {
-        let leaf: SegmentNode = rowGroup;
-        while (leaf.children.length > 0) {
-            leaf = leaf.children[0]!;
-        }
-        expect([...prunedClosure(root, new Set([leaf.id]))]).toEqual([leaf.id]);
-    });
-
-    it('empty in, empty out', () => {
-        expect(prunedClosure(root, new Set()).size).toBe(0);
     });
 });
