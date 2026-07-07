@@ -87,12 +87,12 @@ function hexDump(bytes: Uint8Array, offset: number): string {
     return lines.join('\n');
 }
 
-/** Friendly (not an error state) message for a codec with no wasm build. */
+/** Friendly (not an error state) message for a codec with no in-browser decoder. */
 function renderPreviewFailure(codec: string): string {
     const name = escapeHtml(codec);
     return (
         `<div class="value-preview-codec-note">This chunk is ${name}-compressed and ` +
-        `${name.toLowerCase()} has no wasm build — values can't be decoded in-browser.</div>`
+        `${name.toLowerCase()} can't be decoded in-browser.</div>`
     );
 }
 
