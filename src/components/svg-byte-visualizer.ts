@@ -287,11 +287,20 @@ export class SvgByteVisualizer implements Visualizer {
             transform: `translate(0, ${layout.y})`,
         }) as SVGGElement;
 
-        layout.segments.forEach((segmentLayout, segmentIndex) => {
-            this.createSegmentElements(segmentLayout, group, levelIndex, segmentIndex);
-        });
+        this.renderSegments(group, layout.segments, levelIndex);
 
         return group;
+    }
+
+    /** Render each segment of a level into `target`, shaded by its position. */
+    private renderSegments(
+        target: SVGGElement,
+        segments: SegmentLayout[],
+        levelIndex: number
+    ): void {
+        segments.forEach((segmentLayout, segmentIndex) => {
+            this.createSegmentElements(segmentLayout, target, levelIndex, segmentIndex);
+        });
     }
 
     private createSegmentElements(
@@ -302,11 +311,10 @@ export class SvgByteVisualizer implements Visualizer {
     ): void {
         const segment = segmentLayout.segment;
 
-        const colorVar = VisualizationConfig.getSegmentColor(segment.kind, segmentIndex);
-        const fillColor =
-            this.getCSSVariable(colorVar) ||
-            this.getCSSVariable(VisualizationConfig.COLORS.DEFAULT);
-        const contrastClass = VisualizationConfig.getContrastClass(fillColor);
+        const { fillColor, contrastClass } = VisualizationConfig.resolveSegmentStyle(
+            segment.kind,
+            segmentIndex
+        );
 
         const segmentGroup = this.createSvgElement('g', { class: contrastClass });
 
@@ -418,7 +426,7 @@ export class SvgByteVisualizer implements Visualizer {
     ): FunnelElement {
         const funnel = this.createSvgElement('polygon', {
             points: points,
-            fill: this.getCSSVariable('--funnel-fill'),
+            fill: VisualizationConfig.getCSSVariable('--funnel-fill'),
             class: animated ? 'funnel-connection animated-funnel' : 'funnel-connection',
             'data-parent-segment': parentSegmentId ?? '',
             'data-child-level': childLevelIndex,
@@ -778,10 +786,6 @@ export class SvgByteVisualizer implements Visualizer {
         });
     }
 
-    private getCSSVariable(name: string): string {
-        return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-    }
-
     private handleSegmentClick(segment: SegmentNode, levelIndex: number): void {
         const isCurrentlySelected = this.isSegmentSelected(segment.id, levelIndex);
 
@@ -1008,9 +1012,7 @@ export class SvgByteVisualizer implements Visualizer {
         level.svgGroup.innerHTML = '';
         level.svgGroup.setAttribute('transform', `translate(0, ${level.layout.y})`);
 
-        level.layout.segments.forEach((segmentLayout, segmentIndex) => {
-            this.createSegmentElements(segmentLayout, level.svgGroup, levelIndex, segmentIndex);
-        });
+        this.renderSegments(level.svgGroup, level.layout.segments, levelIndex);
 
         if (level.parentSegmentId && levelIndex > 0 && level.animationState === 'visible') {
             this.createFunnelConnection(level, levelIndex);

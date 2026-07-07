@@ -104,6 +104,25 @@ export class VisualizationConfig {
         return family[index % family.length]!;
     }
 
+    /** Resolve a CSS custom property (e.g. `--row-group-medium`) off :root. */
+    static getCSSVariable(name: string): string {
+        return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    }
+
+    /**
+     * Resolved fill + contrast class for a segment, shared by every renderer:
+     * kind (+ level position) → family shade → concrete color → contrast class.
+     */
+    static resolveSegmentStyle(
+        kind: Kind,
+        index = 0
+    ): { fillColor: string; contrastClass: string } {
+        const fillColor =
+            VisualizationConfig.getCSSVariable(VisualizationConfig.getSegmentColor(kind, index)) ||
+            VisualizationConfig.getCSSVariable(VisualizationConfig.COLORS.DEFAULT);
+        return { fillColor, contrastClass: VisualizationConfig.getContrastClass(fillColor) };
+    }
+
     /**
      * Get contrast class name based on background color luminance.
      */
