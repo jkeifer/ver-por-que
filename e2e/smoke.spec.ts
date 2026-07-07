@@ -41,14 +41,28 @@ test('renders a full dump and drills into a row group', async ({ page }) => {
     const panel = page.locator('#info-panel-container');
     await expect(panel).toContainText('Physical Layout');
     await expect(panel).toContainText('Row Group');
-    // A JSON-dump load has no original file bytes: hex degrades to a note.
-    await expect(panel).toContainText('Raw bytes are not available');
+    // The dump records a fetchable source, so the hex inspector range-reads
+    // the original file instead of degrading to a note.
+    await expect(panel).toContainText('Raw Bytes');
 });
 
 test('renders a metadata-only export with the source suffix', async ({ page }) => {
     await loadFixture(page, 'metadata-export.json');
     await expect(page.locator('#loaded-file-source')).toContainText('(metadata-only export)');
     await expect(page.locator('#canvas-container svg rect.segment')).not.toHaveCount(0);
+});
+
+test('degraded metadata-only card offers the upgrade button', async ({ page }) => {
+    // The fixture records a fetchable http(s) source, so degraded cards can
+    // offer to re-parse the full structure from it. The column-index node is
+    // span-only in a metadata-only dump -> its card carries the upgrade button.
+    await page.goto('/#node=colidx_rg0_String');
+    await page.locator('#file-input').setInputFiles(fixture('metadata-export.json'));
+
+    await expect(page.locator('.recovery-btn[data-action="upgrade"]')).toBeVisible();
+    // The read summary is limited to row-group detail on a metadata-only dump,
+    // so it carries the same upgrade button.
+    await expect(page.locator('.query-summary-card .recovery-btn')).toBeVisible();
 });
 
 test('permalink hash selects the node when data arrives', async ({ page }) => {
@@ -269,9 +283,10 @@ test('lens switcher: treemap renders, selection and dimming survive switching', 
     await expect(page.locator('#canvas-container svg.treemap rect.segment')).not.toHaveCount(0);
 });
 
-test('bloom filter probe degrades with a note on JSON-dump loads', async ({ page }) => {
+test('bloom filter probe is available on a JSON dump with a fetchable source', async ({ page }) => {
     // This dump records bloom_filter_offset AND length, so the bloom node
-    // exists -- but a JSON load has no live worker file to probe against.
+    // exists, and its fetchable source lets the probe boot a range reader on
+    // demand -- the interactive control renders, not a dead note.
     await loadFixture(page, 'data_index_bloom_encoding_with_length_expected.json');
 
     const viz = page.locator('#canvas-container svg');
@@ -281,12 +296,12 @@ test('bloom filter probe degrades with a note on JSON-dump loads', async ({ page
     const panel = page.locator('#info-panel-container');
     await expect(panel).toContainText('Bloom Filter');
     await expect(panel).toContainText('Probe a Value');
-    await expect(panel).toContainText('Probing needs the filter bytes');
-    await expect(panel.locator('.bloom-probe-btn')).toHaveCount(0);
+    await expect(panel.locator('.bloom-probe-btn')).toHaveCount(1);
 });
 
-test('value preview degrades with a note on JSON-dump loads', async ({ page }) => {
-    // A JSON load has no live worker file, so nothing can decode values.
+test('value preview is available on a JSON dump with a fetchable source', async ({ page }) => {
+    // The dump records a fetchable source, so the preview boots a range reader
+    // on demand -- the interactive control renders, not a dead note.
     await page.goto('/#node=rg_0_col_String');
     await page
         .locator('#file-input')
@@ -295,8 +310,7 @@ test('value preview degrades with a note on JSON-dump loads', async ({ page }) =
     const panel = page.locator('#info-panel-container');
     await expect(panel).toContainText('Column Chunk String');
     await expect(panel).toContainText('Value Preview');
-    await expect(panel).toContainText('Decoding values needs the file bytes');
-    await expect(panel.locator('.value-preview-btn')).toHaveCount(0);
+    await expect(panel.locator('.value-preview-btn')).toHaveCount(1);
 });
 
 test('downloads the loaded dump as re-validating JSON', async ({ page }) => {
