@@ -63,8 +63,10 @@ help you get started with development and contributing to the project.
 | `npm run wheel`        | Stage the pinned wheels + extract the dump schema |
 | `npm run dev`          | Start development server with hot reload          |
 | `npm run build`        | Build for production                              |
+| `npm run preview`      | Serve the production build from `dist/`           |
 | `npm run typecheck`    | Type-check with `tsc --noEmit`                    |
 | `npm test`             | Run unit tests with Vitest                        |
+| `npm run e2e`          | Run the Playwright end-to-end smoke suite         |
 | `npm run lint`         | Check code style and quality                      |
 | `npm run lint:fix`     | Auto-fix linting issues                           |
 | `npm run format`       | Format code with Prettier                         |
@@ -140,28 +142,43 @@ npm run format
 ### Project Structure
 
 ```plaintext
-static/vendor/             # STAGED (gitignored) by `npm run wheel`: wheels + dump schema
+index.html                 # HTML entry point (repo root; loads /src/main.ts as a module)
+static/                    # Vite publicDir (served at site root, copied into dist/)
+├── sw.js                  # Hand-written service worker (offline cache-first)
+└── vendor/                # STAGED (gitignored) by `npm run wheel`: wheels + dump schema
 src/
-├── index.html             # Main HTML entry point (loads main.ts as a module)
-├── css/                   # Styles
-├── main.ts                # Entry point; JSON.parse → AJV validate → typed dump
-├── detect.ts              # Parquet-vs-JSON detection by magic bytes
+├── css/styles.css         # Styles
+├── main.ts                # Controller: load → validate → project → drive lenses/panel/query
+├── detect.ts              # Parquet-vs-JSON detection by magic bytes; URL helpers
 ├── format.ts              # Shared byte/number formatting helpers
 ├── types.ts               # Friendly aliases over the schema-generated types
-├── generated/             # GENERATED (gitignored): por-que.d.ts + validate.js
-├── js/worker/             # In-browser parquet parsing (pyodide in a Web Worker)
-│   ├── client.ts          # Main-thread handle; lazily spins up the worker
-│   ├── worker.ts          # Worker shell (loads pyodide from the CDN)
-│   ├── pyodide-parquet.ts # Worker-agnostic boot+parse (testable under node)
-│   └── protocol.ts        # Request/response message shapes
+├── build-info.{js,d.ts}   # Git commit info, written at build time by get-git-info.js
+├── generated/             # GENERATED (gitignored): por-que.d.ts + validate.js/.d.ts
+├── js/
+│   ├── permalink.ts       # URL-hash state (de)serialization (#node=, lens=)
+│   ├── fetch-progress.ts  # Streaming URL→bytes with download-progress reporting
+│   └── worker/            # In-browser parquet parsing (pyodide in a Web Worker)
+│       ├── client.ts          # Main-thread handle; lazily spins up the worker
+│       ├── worker.ts          # Worker shell (loads pyodide from the CDN)
+│       ├── pyodide-parquet.ts # Worker-agnostic boot/parse/probe/preview (node-testable)
+│       └── protocol.ts        # Request/response message shapes
 ├── domain/
 │   └── parquet-type-resolver.ts # Logical-type pretty-printing / display logic
-├── business/
-│   ├── segment-tree.ts              # projectDump(): dump → SegmentNode tree
-│   └── segment-layout-calculator.ts # Calculates byte positions
+├── business/                        # Pure logic (no DOM)
+│   ├── segment-tree.ts              # project(): validated dump → SegmentNode tree
+│   ├── segment-layout-calculator.ts # Byte positions for the byte-map lens
+│   ├── min-sizing.ts                # Minimum-sizing math shared by both lenses
+│   ├── treemap-layout.ts            # squarify(): size-proportional rectangles
+│   ├── stat-values.ts               # Decode base64 statistics bytes → comparable values
+│   ├── pruning.ts                   # Predicate-pushdown pruning engine
+│   └── query-model.ts               # resolve(): per-segment status under a query
 ├── components/
-│   ├── info-panel-manager.ts       # Declarative kind → panel sections registry
-│   └── svg-byte-visualizer.ts      # Byte visualization renderer
+│   ├── visualizer.ts              # Visualizer interface (the lens contract)
+│   ├── svg-byte-visualizer.ts     # Byte-map lens renderer
+│   ├── svg-funnels.ts             # Drill-down funnel shapes for the byte-map lens
+│   ├── treemap-visualizer.ts      # Treemap lens renderer
+│   ├── info-panel-manager.ts      # Declarative kind → panel sections registry
+│   └── query-panel.ts             # Query-simulation panel (matrix + builder)
 └── config/
     └── visualization-config.ts     # Layout constants + kind → color map
 ```
@@ -171,31 +188,63 @@ global-script sharing. Unit tests live in `test/` and run under Vitest.
 
 ### Key Components
 
+The core dataflow: **load → validate → `project()` once → share one
+`SegmentNode` tree** across every surface. Lenses render the tree, the info
+panel reads it, and the query engine annotates it — none of them re-project or
+re-derive offsets.
+
 #### ParquetExplorer (`main.ts`)
 
-- Main application controller; loads files (local, URL, or `?url=`)
+- Main application controller; loads files (local, URL, or `?url=`), raw
+  `.parquet` or dump JSON
 - Validates the dump against the schema at the boundary, then trusts the shape
-- Coordinates between components
+- Projects the tree once and coordinates the active lens, info panel, and query
+  panel; owns permalink hash state
 
-#### projectDump (`business/segment-tree.ts`)
+#### project (`business/segment-tree.ts`)
 
 - One recursive pass turns a validated dump into a `SegmentNode` tree
+  (`projectDump` / `projectMetadataExport` behind the `project` dispatcher)
 - Every span is a REAL byte offset off the wire — nothing is estimated
 - A node's `kind` (a string-literal union) says what it is; its `children` are
   the next drill-down level
 
-#### SvgByteVisualizer (`components/svg-byte-visualizer.ts`)
+#### Visualizer lenses (`components/visualizer.ts` + renderers)
 
-- Renders the tree: each level is a node's children, colored by `kind`
-- Handles user interactions (clicks to drill down, hovers)
+- `Visualizer` is the lens contract — a renderer over the shared tree
+- `SvgByteVisualizer` (+ `svg-funnels.ts`) is the byte-map lens: children per
+  level, colored by `kind`, funnels animating each drill-down
+- `TreemapVisualizer` is the size-proportional lens (area ∝ span)
+- Selection and query dimming carry across lenses; the active lens is
+  permalinked
+
+#### Query engine (`business/pruning.ts` + `query-model.ts`)
+
+- `pruning.ts` simulates predicate pushdown: which row groups (footer stats)
+  and pages (column index) a reader would skip, each with a stated reason;
+  never guesses on unsupported types or missing stats
+- `query-model.ts` `resolve()` turns that into one per-segment status the
+  matrix, info panel, and lenses all consume
+- `stat-values.ts` decodes the base64 statistics bytes into comparable values
+- `QueryPanel` (`components/query-panel.ts`) is the RG×column matrix + predicate
+  builder; evaluation is live
 
 #### InfoPanelManager (`components/info-panel-manager.ts`)
 
 - A `Record<Kind, (node, dump) => Section[]>` registry plus one renderer
+- Hosts the hex inspector, single-page value preview, and bloom-filter probe —
+  the last two round-trip to the worker (`preview` / `probe` requests)
 
-#### SegmentLayoutCalculator (`business/segment-layout-calculator.ts`)
+#### Layout math (`business/segment-layout-calculator.ts`, `min-sizing.ts`, `treemap-layout.ts`)
 
-- Calculates byte positions and sizes for the visual layout
+- Byte positions for the byte-map lens; `squarify()` for the treemap;
+  `min-sizing.ts` floors tiny segments so metadata stays visible next to huge
+  data spans (shared by both lenses)
+
+#### Worker (`js/worker/`)
+
+- pyodide + por-que/hctef parse `.parquet` off the main thread and answer bloom
+  `probe` / value `preview` requests; `protocol.ts` is the message contract
 
 ## 🎯 Contributing Guidelines
 
@@ -309,22 +358,30 @@ npm run build                   # Rebuild
 ## 🧪 Testing
 
 Unit tests run under [Vitest](https://vitest.dev/) (`npm test`) and live in
-`test/`. They cover the pure logic: formatting helpers, the segment layout
-calculator, and the tree projection (`projectDump`) — the projection tests read
-real dump fixtures from `test/fixtures/` (vendored from por-que's test suite),
-assert the validator
+`test/`. They cover the pure logic: formatting and detection helpers, the
+segment layout calculator, min-sizing and treemap layout, the pruning/query
+engine and statistics decoding, permalink (de)serialization, and the tree
+projection (`project`). The projection tests read real dump fixtures from
+`test/fixtures/` (vendored from por-que's test suite), assert the validator
 accepts them and rejects mutations, and check the tree has real offsets, sorted
 children, and correct `kind` coverage. New logic in those layers should come
 with a focused test.
 
-`test/pyodide-parquet.integration.test.ts` is the end-to-end check for
+`test/pyodide-parquet.integration.test.ts` is the integration check for
 in-browser parsing: it boots real pyodide, installs the locally-built wheels,
 parses a real parquet file — from bytes, and from a URL served by a local
 range-supporting HTTP server (plus the no-range fallback) — and asserts the
 dumps pass the validator. It skips (with a message) when the wheels are absent,
 so run `npm run wheel` first — CI does. It downloads a parquet fixture from
 `apache/parquet-testing` pinned to the same ref as the python fixtures, and has
-a long timeout.
+a long timeout. A lighter `pyodide-parquet.mock.test.ts` covers the same code
+paths without booting pyodide.
+
+End-to-end tests run under [Playwright](https://playwright.dev/) (`npm run
+e2e`, `e2e/smoke.spec.ts`): they drive the built app in a real browser —
+loading a fixture, drilling in, switching lenses, exercising the query panel,
+and reloading offline. The `@slow` pyodide case needs the wheels; CI runs the
+suite as a separate `e2e` job.
 
 Welcome additions:
 

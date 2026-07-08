@@ -10,21 +10,28 @@ Parquet files. This application allows you to examine how Parquet files are
 organized on disk, including the layout of row groups, column chunks, and data
 pages.
 
-> [!WARNING]
-> This is utterly and completely vibe-coded. It is crap. I have not had a
-> chance to review the code and fix the issues, which I know to be plentiful.
-> YYMV until that happens
+> [!NOTE]
+> This is a young project that moves fast — expect some rough edges. Bug
+> reports and PRs are welcome.
 
 ## Features
 
-- **Drag & Drop Interface**: Simply drag a por-que JSON structure dump onto the
-  browser window
-- **Physical File Structure Visualization**: Visual representation of how bytes
-  are organized in the Parquet file
-- **Interactive Exploration**: Click on segments to see detailed information
-  about row groups, columns, and pages
-- **Byte-level Analysis**: Understand compression ratios, encoding types, and
-  storage characteristics
+- **Two ways in**: drop, pick, or point a `?url=` at a raw `.parquet` file
+  (parsed in the browser, no server) — or a por-que dump JSON if you'd rather
+  parse it yourself.
+- **Two lenses on the same structure**: a physical **byte-map layout** and a
+  size-proportional **treemap**, switchable, with your selection carried
+  between them.
+- **Interactive drill-down**: click a segment — row group, column chunk, page,
+  dictionary, or index — to see its details.
+- **Info-panel extras**: a **hex inspector** for any byte span, single-page
+  **value preview**, and a **bloom-filter** membership probe.
+- **Query simulation**: build an AND of predicates plus an output-column
+  projection and watch which row groups and pages a reader would skip — and
+  why, from the file's own statistics.
+- **Shareable links**: the selected node and active lens live in the URL hash.
+- **Works offline**: after the first load, the app shell, wheels, and Python
+  runtime are cached.
 
 ## How It Works
 
@@ -60,7 +67,8 @@ structure. Detection is by magic bytes (`PAR1`), so extension doesn't matter.
   Vite
 - **Vite**: Bundler and dev server; native ESM in dev, so the pyodide module
   worker runs the same way in dev and production
-- **Vitest**: Unit tests for the domain/business logic
+- **Vitest / Playwright**: Vitest unit-tests the domain/business logic;
+  Playwright drives an end-to-end smoke suite
 - **Modern CSS**: Responsive design for an optimal viewing experience
 
 ## Getting Started
@@ -77,45 +85,39 @@ to use the deployed version.
 
 ### Workflow
 
-1. **Generate metadata with por-que**:
+1. **Load a file.** Either drop a raw `.parquet` file straight in (it's parsed
+   in the browser — nothing leaves your machine), or, if you'd rather parse it
+   yourself, load a por-que dump JSON:
 
    ```bash
    pip install por-que
    por-que dump your-file.parquet > metadata.json
    ```
 
-1. **Load the JSON file** into this application via:
+   Either kind can arrive by:
 
    - Drag and drop onto the browser window
    - File picker (click the drop zone)
-   - URL input (for remote JSON files)
+   - URL input, or a `?url=` query parameter (e.g. `/?url=data.parquet`) to
+     auto-load on startup — handy for linking straight to a hosted file
 
 1. **Explore the structure**:
 
-   - View the physical layout of the file as a visual byte map
-   - Click on different segments to see details about row groups, columns, and pages
+   - View the physical layout as a byte map, or switch to the treemap lens
+   - Click segments to see details about row groups, columns, and pages —
+     including a hex inspector, value preview, and bloom-filter probe
    - Understand how your data is compressed and encoded
 
-   The app can also auto-load a dump (or a raw `.parquet`) on startup via a
-   `?url=` query parameter (e.g. `/?url=data.json`), handy for linking straight
-   to a hosted file.
+1. **Simulate a query** (optional): build predicates and pick output columns to
+   see which row groups and pages a reader would skip, and why.
 
-## Schema-generated types
+## Contributing
 
-The dump JSON shape is defined by a JSON Schema that ships inside the pinned
-[por-que](https://github.com/jkeifer/por-que) wheel (a union of the `file` and
-`metadata` dump roots). `npm run wheel` extracts it to
-`static/vendor/por-que.schema.json` (gitignored), and `npm run generate` emits
-TypeScript types and standalone runtime validators from it into
-`src/generated/` (gitignored) — so the validator can never drift from the
-parser the app actually runs. The `dev`, `build`, `test`, `typecheck`, and
-`lint` scripts all run `generate` first, so from a fresh clone:
-
-```bash
-npm ci
-npm run wheel
-npm run dev  # or test / build / typecheck / lint
-```
+Contributions are welcome — [open an
+issue](https://github.com/jkeifer/ver-por-que/issues) to report a bug or
+request a feature, or send a pull request. See
+[`CONTRIBUTING.md`](./CONTRIBUTING.md) for development setup, the architecture,
+and the test/gate commands.
 
 ## License
 
