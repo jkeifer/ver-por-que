@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
     decodeStatValue,
+    formatStatValue,
     parsePredicateValue,
     unsupportedReason,
 } from '../src/business/stat-values';
@@ -199,5 +200,52 @@ describe('parsePredicateValue', () => {
         const u64 = leaf('INT64', { converted_type: 'UINT_64' });
         expect(parsePredicateValue('18446744073709551615', u64)).toBe(2n ** 64n - 1n);
         expect(parsePredicateValue('-1', u64)).toBeUndefined();
+    });
+});
+
+const le32 = (n: number): string => {
+    const v = new DataView(new ArrayBuffer(4));
+    v.setInt32(0, n, true);
+    return Buffer.from(new Uint8Array(v.buffer)).toString('base64');
+};
+const le64 = (n: bigint): string => {
+    const v = new DataView(new ArrayBuffer(8));
+    v.setBigInt64(0, n, true);
+    return Buffer.from(new Uint8Array(v.buffer)).toString('base64');
+};
+
+describe('formatStatValue', () => {
+    it('formats DATE (INT32 days since epoch) as ISO date', () => {
+        const l = leaf('INT32', { logical_type: { logical_type: 'DATE' } });
+        expect(formatStatValue(le32(19723), l)).toBe('2024-01-01');
+    });
+
+    it('formats TIME_MILLIS as time of day', () => {
+        const l = leaf('INT32', { logical_type: { logical_type: 'TIME', unit: 'MILLIS' } });
+        expect(formatStatValue(le32(3_661_000), l)).toBe('01:01:01');
+    });
+
+    it('formats a UTC TIMESTAMP_MICROS as ISO instant with Z', () => {
+        const l = leaf('INT64', {
+            logical_type: { logical_type: 'TIMESTAMP', unit: 'MICROS', is_adjusted_to_utc: true },
+        });
+        expect(formatStatValue(le64(1_704_067_200_000_000n), l)).toBe('2024-01-01T00:00:00.000Z');
+    });
+
+    it('drops the Z for a local (non-UTC) timestamp', () => {
+        const l = leaf('INT64', {
+            logical_type: { logical_type: 'TIMESTAMP', unit: 'MICROS', is_adjusted_to_utc: false },
+        });
+        expect(formatStatValue(le64(1_704_067_200_000_000n), l)).toBe('2024-01-01T00:00:00.000');
+    });
+
+    it('formats a UUID FIXED_LEN_BYTE_ARRAY as canonical hex', () => {
+        const l = leaf('FIXED_LEN_BYTE_ARRAY', { logical_type: { logical_type: 'UUID' } });
+        const bytes = b64(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
+        expect(formatStatValue(bytes, l)).toBe('00010203-0405-0607-0809-0a0b0c0d0e0f');
+    });
+
+    it('falls back to the plain decoded value for non-temporal types', () => {
+        expect(formatStatValue(b64(0x2a, 0, 0, 0), leaf('INT32'))).toBe('42');
     });
 });
