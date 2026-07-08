@@ -72,25 +72,62 @@ describe('decodeStatValue', () => {
         expect(decodeStatValue('SGVsbG8=', leaf('BYTE_ARRAY'))).toBeUndefined();
         // INT96: unsupported physical type.
         expect(decodeStatValue(b64(...Array<number>(12).fill(0)), leaf('INT96'))).toBeUndefined();
-        // Decimals: the raw int ignores the scale.
-        expect(
-            decodeStatValue(b64(1, 0, 0, 0), leaf('INT32', { converted_type: 'DECIMAL' }))
-        ).toBeUndefined();
-        // Unsigned ints: the sign bit breaks signed ordering.
-        expect(
-            decodeStatValue(b64(1, 0, 0, 0), leaf('INT32', { converted_type: 'UINT_32' }))
-        ).toBeUndefined();
-        expect(
-            decodeStatValue(
-                b64(1, 0, 0, 0),
-                leaf('INT32', {
-                    logical_type: { logical_type: 'INTEGER', bit_width: 32, is_signed: false },
-                })
-            )
-        ).toBeUndefined();
         // Wrong byte length and corrupt base64.
         expect(decodeStatValue(b64(1, 0), leaf('INT32'))).toBeUndefined();
         expect(decodeStatValue('%%%not-base64%%%', leaf('INT32'))).toBeUndefined();
+    });
+
+    it('decodes DECIMAL INT32-backed, scaled', () => {
+        // unscaled 12345, scale 2 -> 123.45
+        const l = leaf('INT32', { converted_type: 'DECIMAL', scale: 2 });
+        expect(decodeStatValue(b64(0x39, 0x30, 0, 0), l)).toBeCloseTo(123.45, 10);
+        // scale from the logical type object instead of the leaf field.
+        const lt = leaf('INT32', {
+            logical_type: { logical_type: 'DECIMAL', precision: 9, scale: 2 },
+        });
+        expect(decodeStatValue(b64(0x39, 0x30, 0, 0), lt)).toBeCloseTo(123.45, 10);
+    });
+
+    it('decodes DECIMAL INT64-backed, scaled', () => {
+        // unscaled 1000000, scale 3 -> 1000.0
+        const l = leaf('INT64', { converted_type: 'DECIMAL', scale: 3 });
+        expect(decodeStatValue(b64(0x40, 0x42, 0x0f, 0, 0, 0, 0, 0), l)).toBeCloseTo(1000, 10);
+    });
+
+    it('decodes DECIMAL FIXED_LEN_BYTE_ARRAY big-endian two-s-complement', () => {
+        const l = leaf('FIXED_LEN_BYTE_ARRAY', { converted_type: 'DECIMAL', scale: 2 });
+        // 0x0000...12345 big-endian, scale 2 -> 745.65 (0x012345 = 74565)
+        expect(decodeStatValue(b64(0x01, 0x23, 0x45), l)).toBeCloseTo(745.65, 10);
+        // Negative: 0xFFFFFF = -1 (two's-complement, 3 bytes), scale 2 -> -0.01
+        expect(decodeStatValue(b64(0xff, 0xff, 0xff), l)).toBeCloseTo(-0.01, 10);
+        // 0xFF38 = -200 over 2 bytes, scale 2 -> -2.0
+        expect(decodeStatValue(b64(0xff, 0x38), l)).toBeCloseTo(-2, 10);
+    });
+
+    it('decodes DECIMAL BYTE_ARRAY big-endian', () => {
+        const l = leaf('BYTE_ARRAY', {
+            logical_type: { logical_type: 'DECIMAL', precision: 10, scale: 4 },
+        });
+        // 0x0F4240 = 1000000, scale 4 -> 100.0
+        expect(decodeStatValue(b64(0x0f, 0x42, 0x40), l)).toBeCloseTo(100, 10);
+    });
+
+    it('decodes unsigned INT32 above 2^31 as a positive number', () => {
+        // 0xFFFFFFFF -> 4294967295 (would be -1 if signed).
+        const conv = leaf('INT32', { converted_type: 'UINT_32' });
+        expect(decodeStatValue(b64(0xff, 0xff, 0xff, 0xff), conv)).toBe(4294967295);
+        const log = leaf('INT32', {
+            logical_type: { logical_type: 'INTEGER', bit_width: 32, is_signed: false },
+        });
+        expect(decodeStatValue(b64(0xff, 0xff, 0xff, 0xff), log)).toBe(4294967295);
+    });
+
+    it('decodes unsigned INT64 large value as a positive bigint', () => {
+        // 0xFFFFFFFFFFFFFFFF -> 2^64 - 1 (would be -1 if signed).
+        const l = leaf('INT64', { converted_type: 'UINT_64' });
+        expect(decodeStatValue(b64(0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff), l)).toBe(
+            2n ** 64n - 1n
+        );
     });
 });
 
@@ -104,12 +141,24 @@ describe('unsupportedReason', () => {
         ).toBeNull();
     });
 
+    it('is null for DECIMAL and unsigned integer leaves', () => {
+        expect(unsupportedReason(leaf('INT32', { converted_type: 'DECIMAL' }))).toBeNull();
+        expect(
+            unsupportedReason(leaf('FIXED_LEN_BYTE_ARRAY', { converted_type: 'DECIMAL' }))
+        ).toBeNull();
+        expect(unsupportedReason(leaf('INT32', { converted_type: 'UINT_32' }))).toBeNull();
+        expect(
+            unsupportedReason(
+                leaf('INT64', {
+                    logical_type: { logical_type: 'INTEGER', bit_width: 64, is_signed: false },
+                })
+            )
+        ).toBeNull();
+    });
+
     it('names the problem for unsupported types', () => {
         expect(unsupportedReason(leaf('INT96'))).toContain('INT96');
         expect(unsupportedReason(leaf('BYTE_ARRAY'))).toContain('raw binary');
-        expect(unsupportedReason(leaf('INT32', { converted_type: 'DECIMAL' }))).toContain(
-            'DECIMAL'
-        );
     });
 });
 
@@ -133,5 +182,22 @@ describe('parsePredicateValue', () => {
         expect(parsePredicateValue('abc', leaf('DOUBLE'))).toBeUndefined();
         expect(parsePredicateValue('', leaf('DOUBLE'))).toBeUndefined();
         expect(parsePredicateValue('yes', leaf('BOOLEAN'))).toBeUndefined();
+    });
+
+    it('parses DECIMAL predicates to the same scaled-double representation', () => {
+        // Predicate 123.45 must equal the decoded INT32 DECIMAL stat above.
+        const l = leaf('INT32', { converted_type: 'DECIMAL', scale: 2 });
+        expect(parsePredicateValue('123.45', l)).toBe(123.45);
+        expect(decodeStatValue(b64(0x39, 0x30, 0, 0), l)).toBe(parsePredicateValue('123.45', l));
+        expect(parsePredicateValue('', l)).toBeUndefined();
+    });
+
+    it('parses unsigned predicates and rejects negatives', () => {
+        const u32 = leaf('INT32', { converted_type: 'UINT_32' });
+        expect(parsePredicateValue('4294967295', u32)).toBe(4294967295);
+        expect(parsePredicateValue('-1', u32)).toBeUndefined();
+        const u64 = leaf('INT64', { converted_type: 'UINT_64' });
+        expect(parsePredicateValue('18446744073709551615', u64)).toBe(2n ** 64n - 1n);
+        expect(parsePredicateValue('-1', u64)).toBeUndefined();
     });
 });
