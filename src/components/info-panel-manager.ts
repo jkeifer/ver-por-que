@@ -6,7 +6,13 @@
  * shape-sniffing dispatch — the node's kind already says what it is.
  */
 import { formatBytes, formatNumber, formatOffset } from '../format';
-import { logicalTypeLabel, displayType } from '../domain/parquet-type-resolver';
+import { logicalTypeLabel } from '../domain/parquet-type-resolver';
+import {
+    columnDisplayType,
+    geoparquetColumns,
+    isWkbColumn,
+    type GeoColumn,
+} from '../domain/geoparquet';
 import { OP_LABEL } from '../business/pruning';
 import type { Resolution } from '../business/query-model';
 import {
@@ -39,55 +45,6 @@ function columnChunkCount(dump: AnyDump): number {
         return dump.column_chunks.length;
     }
     return dump.metadata.row_groups.reduce((n, g) => n + Object.keys(g.column_chunks).length, 0);
-}
-
-/** One column's entry in the GeoParquet `geo` metadata. */
-interface GeoColumn {
-    encoding?: string;
-    /** [xmin, ymin, xmax, ymax] or [xmin, ymin, zmin, xmax, ymax, zmax]. */
-    bbox?: number[];
-    geometry_types?: string[];
-}
-
-/**
- * GeoParquet (used by Overture and most geo tooling) predates the native
- * Parquet GEOMETRY logical type: the geometry column is a plain BYTE_ARRAY and
- * its WKB encoding + spatial extent are declared in the file's `geo`
- * key-value metadata instead. Returns the per-column `geo` entries, keyed by
- * column name (empty when the file isn't GeoParquet).
- */
-function geoparquetColumns(dump: AnyDump): Record<string, GeoColumn> {
-    const entry = dump.metadata.key_value_metadata?.find(e => e.key === 'geo');
-    if (!entry?.value) {
-        return {};
-    }
-    try {
-        return (JSON.parse(entry.value) as { columns?: Record<string, GeoColumn> }).columns ?? {};
-    } catch {
-        return {};
-    }
-}
-
-/** WKB geometry column: a native GEOMETRY/GEOGRAPHY leaf, or a GeoParquet column. */
-function isWkbColumn(leaf: SchemaLeaf | null | undefined, geo: GeoColumn | undefined): boolean {
-    const lt = leaf?.logical_type?.logical_type;
-    return lt === 'GEOMETRY' || lt === 'GEOGRAPHY' || geo?.encoding === 'WKB';
-}
-
-/**
- * Display type for a column, GeoParquet-aware. A GeoParquet geometry column has
- * no logical type, so the pure leaf displayType falls back to BYTE_ARRAY; name
- * it from the `geo` metadata instead. Used consistently by every column view.
- */
-function columnDisplayType(
-    leaf: SchemaLeaf | null | undefined,
-    geo: GeoColumn | undefined,
-    physicalFallback: string
-): string {
-    if (geo?.encoding === 'WKB') {
-        return 'WKB geometry (GeoParquet)';
-    }
-    return leaf ? displayType(leaf) : physicalFallback;
 }
 
 const METADATA_ONLY_NOTE =
