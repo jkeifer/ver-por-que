@@ -855,11 +855,17 @@ code {
 .query-matrix-wrap {
     margin-bottom: var(--spacing-sm);
     overflow-x: auto;
+    /* The rightmost column's diagonal label leans up and to the right, past the
+       last cell; reserve room for it so it doesn't trip the overflow scrollbar. */
+    padding-right: 2rem;
 }
 
 .query-matrix {
     table-layout: fixed;
-    width: auto;
+    /* Track the container both ways: columns grow to fill a wide page and
+       shrink on a narrow one. The nowrap row-head text is a natural floor —
+       past that the wrap's overflow-x scrolls. */
+    width: 100%;
     border-collapse: collapse;
     font-family: var(--font-mono);
     font-size: 0.8rem;
@@ -867,10 +873,12 @@ code {
 
 /* Diagonal, full-length column labels: 30° off vertical, ascending to the
  * right. The label is absolutely positioned so its (untransformed) width never
- * widens the column; the th just reserves height + a narrow width. */
+ * widens the column; the th just reserves height. No fixed width — fixed-table
+ * layout then splits the row's leftover space equally across the data columns,
+ * so they fill a wide page and shrink on a narrow one without ever overflowing
+ * (a fixed width here would be a floor that forces a scrollbar + resize flicker). */
 .query-matrix thead th:not(.qm-rowhead) {
     position: relative;
-    width: 1.9rem;
     height: 7rem;
     padding: 0;
     vertical-align: bottom;
