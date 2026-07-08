@@ -269,9 +269,13 @@ function renderPreviewWindow(result: HTMLElement, view: PreviewWindowView): void
     result.querySelector('.value-preview-next')?.addEventListener('click', () => view.onNext());
 }
 
-/** A label/value row; an optional third element is the full value to copy when
- *  the displayed value is truncated. */
-type Row = [string, string | number] | [string, string | number, string];
+/** A label/value row. An optional third element is a copy payload: a plain
+ *  string (the full value, when truncated), or `{ wkb }` base64 to copy as
+ *  GeoJSON (converted lazily on click). */
+type Row =
+    | [string, string | number]
+    | [string, string | number, string]
+    | [string, string | number, { wkb: string }];
 
 /** A copy-to-clipboard button carrying the full (untruncated) value. */
 function copyButton(full: string, label = 'Copy full value'): string {
@@ -403,12 +407,12 @@ function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null, wkb = false
             return [label, 'N/A'];
         }
         if (wkb) {
-            // WKB min/max are geometries too: show the summary, copy full GeoJSON.
+            // WKB min/max are geometries too: show the summary, copy full GeoJSON
+            // (lazy — carry the base64, convert on click, same as the preview).
             const bytes = base64Bytes(v);
             const summary = bytes && describeWkb(bytes);
             if (summary) {
-                const geojson = bytes && wkbToGeoJson(bytes);
-                return geojson ? [label, summary, JSON.stringify(geojson)] : [label, summary];
+                return [label, summary, { wkb: v }];
             }
         }
         const full = (leaf ? formatStatValue(v, leaf) : undefined) ?? v;
@@ -1428,11 +1432,18 @@ export class InfoPanelManager {
         const body =
             section.html ??
             `<div class="info-grid">${(section.rows ?? [])
-                .map(
-                    ([label, value, copy]) =>
+                .map(([label, value, copy]) => {
+                    const btn =
+                        copy === undefined
+                            ? ''
+                            : typeof copy === 'string'
+                              ? copyButton(copy)
+                              : copyGeoJsonButton(copy.wkb);
+                    return (
                         `<div class="info-item"><span class="info-label">${escapeHtml(String(label))}:</span>` +
-                        `<span class="info-value">${escapeHtml(String(value))}${copy !== undefined ? copyButton(copy) : ''}</span></div>`
-                )
+                        `<span class="info-value">${escapeHtml(String(value))}${btn}</span></div>`
+                    );
+                })
                 .join('')}</div>`;
         const card = section.html ? 'large-card' : 'regular-card';
         const recovery =
