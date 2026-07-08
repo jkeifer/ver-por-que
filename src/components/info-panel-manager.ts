@@ -41,6 +41,31 @@ function columnChunkCount(dump: AnyDump): number {
     return dump.metadata.row_groups.reduce((n, g) => n + Object.keys(g.column_chunks).length, 0);
 }
 
+/**
+ * GeoParquet (used by Overture and most geo tooling) predates the native
+ * Parquet GEOMETRY logical type: the geometry column is a plain BYTE_ARRAY and
+ * its WKB encoding is declared in the file's `geo` key-value metadata instead.
+ * Returns the set of top-level column names whose GeoParquet encoding is WKB.
+ */
+function geoparquetWkbColumns(dump: AnyDump): Set<string> {
+    const entry = dump.metadata.key_value_metadata?.find(e => e.key === 'geo');
+    if (!entry?.value) {
+        return new Set();
+    }
+    try {
+        const geo = JSON.parse(entry.value) as {
+            columns?: Record<string, { encoding?: string }>;
+        };
+        return new Set(
+            Object.entries(geo.columns ?? {})
+                .filter(([, c]) => c.encoding === 'WKB')
+                .map(([name]) => name)
+        );
+    } catch {
+        return new Set();
+    }
+}
+
 const METADATA_ONLY_NOTE =
     'Page detail is not in a metadata-only dump — load the original .parquet to see pages.';
 
@@ -963,7 +988,12 @@ export class InfoPanelManager {
         if (preview && this.valuePreview) {
             const leaf = findSchemaLeaf(dump.metadata.schema_root, preview.column);
             const lt = leaf?.logical_type?.logical_type;
-            const isWkb = lt === 'GEOMETRY' || lt === 'GEOGRAPHY';
+            // Native GEOMETRY/GEOGRAPHY logical types, or a GeoParquet WKB column
+            // (plain BYTE_ARRAY described in the `geo` metadata, e.g. Overture).
+            const isWkb =
+                lt === 'GEOMETRY' ||
+                lt === 'GEOGRAPHY' ||
+                geoparquetWkbColumns(dump).has(preview.column);
             this.infoPanel
                 .querySelector('.info-sections')!
                 .appendChild(this.buildValuePreviewSection(preview, isWkb));
