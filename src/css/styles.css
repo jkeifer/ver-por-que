@@ -755,6 +755,13 @@ code {
     opacity: 0.2;
 }
 
+/* A dimmed box is 0.2 fill over the near-white page — always pale, whatever the
+ * fill — so the contrast class (computed from the full-opacity fill) can pick
+ * white text that's then unreadable. Force dark text on the sibling label. */
+.segment.segment-dimmed ~ .segment-label {
+    fill: var(--text-on-light);
+}
+
 /* Lens switcher: byte layout vs treemap over the same segment tree */
 .lens-switcher {
     display: flex;
