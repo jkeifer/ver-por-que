@@ -70,6 +70,11 @@ jobs:
       - name: Install uv
         if: steps.resolve.outputs.work == 'true'
         uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          # Script deps are declared inline (PEP 723), so there's no lockfile to
+          # key a cache on — and we want the latest por-que resolved each run
+          # anyway. A never-invalidating cache would defeat that.
+          enable-cache: false
 
       - name: Dump this theme (uv provisions por-que from the script)
         if: steps.resolve.outputs.work == 'true'
