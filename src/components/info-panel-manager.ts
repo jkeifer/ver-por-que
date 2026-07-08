@@ -295,19 +295,33 @@ function countColumns(node: SchemaRoot | SchemaGroup | SchemaLeaf): number {
     return Object.values(children).reduce((sum, c) => sum + countColumns(c), 0);
 }
 
+/** X/Y (+ optional Z/M) range rows from a normalized bounding box. */
+function bboxRows(b: {
+    xmin?: number | null;
+    xmax?: number | null;
+    ymin?: number | null;
+    ymax?: number | null;
+    zmin?: number | null;
+    zmax?: number | null;
+    mmin?: number | null;
+    mmax?: number | null;
+}): Row[] {
+    const rows: Row[] = [
+        ['X Range', `${b.xmin} … ${b.xmax}`],
+        ['Y Range', `${b.ymin} … ${b.ymax}`],
+    ];
+    if (isSet(b.zmin) && isSet(b.zmax)) {
+        rows.push(['Z Range', `${b.zmin} … ${b.zmax}`]);
+    }
+    if (isSet(b.mmin) && isSet(b.mmax)) {
+        rows.push(['M Range', `${b.mmin} … ${b.mmax}`]);
+    }
+    return rows;
+}
+
 /** Bounding box + geometry-type inventory for GEOMETRY/GEOGRAPHY columns. */
 function geospatialRows(gs: NonNullable<ColumnMetadata['geospatial_statistics']>): Row[] {
-    const rows: Row[] = [];
-    const b = gs.bbox;
-    if (b) {
-        rows.push(['X Range', `${b.xmin} … ${b.xmax}`], ['Y Range', `${b.ymin} … ${b.ymax}`]);
-        if (isSet(b.zmin) && isSet(b.zmax)) {
-            rows.push(['Z Range', `${b.zmin} … ${b.zmax}`]);
-        }
-        if (isSet(b.mmin) && isSet(b.mmax)) {
-            rows.push(['M Range', `${b.mmin} … ${b.mmax}`]);
-        }
-    }
+    const rows: Row[] = gs.bbox ? bboxRows(gs.bbox) : [];
     if (gs.geospatial_types?.length) {
         rows.push(['Geometry Types', gs.geospatial_types.join(', ')]);
     }
@@ -316,16 +330,15 @@ function geospatialRows(gs: NonNullable<ColumnMetadata['geospatial_statistics']>
 
 /** Bounding-box + geometry-type rows from a GeoParquet column entry. */
 function geoparquetRows(g: GeoColumn): Row[] {
-    const rows: Row[] = [];
     const b = g.bbox;
-    if (b && (b.length === 4 || b.length === 6)) {
-        const xmax = b.length === 6 ? b[3] : b[2];
-        const ymax = b.length === 6 ? b[4] : b[3];
-        rows.push(['X Range', `${b[0]} … ${xmax}`], ['Y Range', `${b[1]} … ${ymax}`]);
-        if (b.length === 6) {
-            rows.push(['Z Range', `${b[2]} … ${b[5]}`]);
-        }
-    }
+    // GeoParquet packs the bbox positionally: [xmin,ymin,xmax,ymax] (2D) or
+    // [xmin,ymin,zmin,xmax,ymax,zmax] (3D). Normalize to the named shape.
+    const rows: Row[] =
+        b?.length === 4
+            ? bboxRows({ xmin: b[0], ymin: b[1], xmax: b[2], ymax: b[3] })
+            : b?.length === 6
+              ? bboxRows({ xmin: b[0], ymin: b[1], zmin: b[2], xmax: b[3], ymax: b[4], zmax: b[5] })
+              : [];
     if (g.geometry_types?.length) {
         rows.push(['Geometry Types', g.geometry_types.join(', ')]);
     }
