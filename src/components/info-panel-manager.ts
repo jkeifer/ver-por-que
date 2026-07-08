@@ -16,7 +16,7 @@ import {
     type Kind,
     type SegmentNode,
 } from '../business/segment-tree';
-import { base64Bytes, decodeStatValue, parsePredicateValue } from '../business/stat-values';
+import { base64Bytes, formatStatValue, parsePredicateValue } from '../business/stat-values';
 import { describeWkb } from '../business/wkb';
 import type { PreviewEntry, PreviewResult, PreviewValue } from '../js/worker/pyodide-parquet';
 import type {
@@ -344,8 +344,8 @@ function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null, wkb = false
                 return summary;
             }
         }
-        const decoded = leaf ? decodeStatValue(v, leaf) : undefined;
-        const s = String(decoded ?? v);
+        const display = leaf ? formatStatValue(v, leaf) : undefined;
+        const s = display ?? v;
         return s.length > 50 ? `${s.slice(0, 47)}...` : s;
     };
     return [
@@ -600,12 +600,17 @@ const PANELS: Registry = {
                     ['Physical Type', meta?.type ?? leaf?.type ?? 'Unknown'],
                     ['Logical Type', (leaf && logicalTypeLabel(leaf.logical_type)) ?? 'None'],
                     ['Converted Type', leaf?.converted_type ?? 'None'],
-                    ['Display Type', leaf ? displayType(leaf) : (meta?.type ?? 'Unknown')],
-                    // GeoParquet geometry has no native logical type; call it out
-                    // so BYTE_ARRAY/None doesn't read as an opaque blob column.
-                    ...(geo?.encoding === 'WKB'
-                        ? ([['Geospatial', 'WKB geometry (GeoParquet)']] as Row[])
-                        : []),
+                    // GeoParquet geometry has no native logical type, so the pure
+                    // leaf displayType falls back to BYTE_ARRAY; name it from the
+                    // `geo` metadata instead so it doesn't read as an opaque blob.
+                    [
+                        'Display Type',
+                        geo?.encoding === 'WKB'
+                            ? 'WKB geometry (GeoParquet)'
+                            : leaf
+                              ? displayType(leaf)
+                              : (meta?.type ?? 'Unknown'),
+                    ],
                 ],
             },
             {

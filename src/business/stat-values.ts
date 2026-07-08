@@ -163,6 +163,93 @@ export function unsupportedReason(leaf: SchemaLeaf): string | null {
     }
 }
 
+const UNIT_PER_MS: Record<'MILLIS' | 'MICROS' | 'NANOS', number> = {
+    MILLIS: 1,
+    MICROS: 1_000,
+    NANOS: 1_000_000,
+};
+
+/** Temporal kind + unit of a leaf (from logical or legacy converted type), else null. */
+function temporalType(
+    leaf: SchemaLeaf
+): { kind: 'DATE' | 'TIME' | 'TIMESTAMP'; unit: 'MILLIS' | 'MICROS' | 'NANOS' } | null {
+    const lt = leaf.logical_type;
+    if (lt?.logical_type === 'DATE') {
+        return { kind: 'DATE', unit: 'MILLIS' };
+    }
+    if (lt?.logical_type === 'TIME') {
+        return { kind: 'TIME', unit: lt.unit ?? 'MILLIS' };
+    }
+    if (lt?.logical_type === 'TIMESTAMP') {
+        return { kind: 'TIMESTAMP', unit: lt.unit ?? 'MILLIS' };
+    }
+    switch (leaf.converted_type) {
+        case 'DATE':
+            return { kind: 'DATE', unit: 'MILLIS' };
+        case 'TIME_MILLIS':
+            return { kind: 'TIME', unit: 'MILLIS' };
+        case 'TIME_MICROS':
+            return { kind: 'TIME', unit: 'MICROS' };
+        case 'TIMESTAMP_MILLIS':
+            return { kind: 'TIMESTAMP', unit: 'MILLIS' };
+        case 'TIMESTAMP_MICROS':
+            return { kind: 'TIMESTAMP', unit: 'MICROS' };
+        default:
+            return null;
+    }
+}
+
+function isUtcAdjusted(leaf: SchemaLeaf): boolean {
+    const lt = leaf.logical_type;
+    return (
+        (lt?.logical_type === 'TIMESTAMP' || lt?.logical_type === 'TIME') &&
+        lt.is_adjusted_to_utc === true
+    );
+}
+
+/** 16 raw bytes → canonical 8-4-4-4-12 hex UUID. */
+function formatUuid(bytes: Uint8Array): string {
+    const hex = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+/**
+ * Human display string for a statistics value: DATE/TIME/TIMESTAMP as ISO and
+ * UUID as canonical hex, layered on top of the comparable value
+ * `decodeStatValue` produces. Display ONLY — the pruning engine keeps using the
+ * raw comparable value (an ISO string wouldn't compare correctly). `undefined`
+ * means "nothing better than the raw bytes", so callers fall back to those.
+ */
+export function formatStatValue(b64: string, leaf: SchemaLeaf): string | undefined {
+    if (leaf.logical_type?.logical_type === 'UUID' && leaf.type === 'FIXED_LEN_BYTE_ARRAY') {
+        const bytes = base64Bytes(b64);
+        return bytes?.length === 16 ? formatUuid(bytes) : undefined;
+    }
+    const decoded = decodeStatValue(b64, leaf);
+    if (decoded === undefined) {
+        return undefined;
+    }
+    const t = temporalType(leaf);
+    if (t && (typeof decoded === 'number' || typeof decoded === 'bigint')) {
+        // ponytail: Number() loses nanosecond precision far from epoch; this is
+        // display only, so acceptable — the comparable value stays exact.
+        const raw = Number(decoded);
+        if (t.kind === 'DATE') {
+            return new Date(raw * 86_400_000).toISOString().slice(0, 10);
+        }
+        const ms = raw / UNIT_PER_MS[t.unit];
+        if (t.kind === 'TIME') {
+            return new Date(ms)
+                .toISOString()
+                .slice(11, 23)
+                .replace(/\.000$/, '');
+        }
+        const iso = new Date(ms).toISOString();
+        return isUtcAdjusted(leaf) ? iso : iso.replace('Z', '');
+    }
+    return String(decoded);
+}
+
 /**
  * Parse user input as a comparable value for the column's type. Returns
  * `undefined` when the input doesn't parse for that type — a UI-level input
