@@ -41,28 +41,30 @@ function columnChunkCount(dump: AnyDump): number {
     return dump.metadata.row_groups.reduce((n, g) => n + Object.keys(g.column_chunks).length, 0);
 }
 
+/** One column's entry in the GeoParquet `geo` metadata. */
+interface GeoColumn {
+    encoding?: string;
+    /** [xmin, ymin, xmax, ymax] or [xmin, ymin, zmin, xmax, ymax, zmax]. */
+    bbox?: number[];
+    geometry_types?: string[];
+}
+
 /**
  * GeoParquet (used by Overture and most geo tooling) predates the native
  * Parquet GEOMETRY logical type: the geometry column is a plain BYTE_ARRAY and
- * its WKB encoding is declared in the file's `geo` key-value metadata instead.
- * Returns the set of top-level column names whose GeoParquet encoding is WKB.
+ * its WKB encoding + spatial extent are declared in the file's `geo`
+ * key-value metadata instead. Returns the per-column `geo` entries, keyed by
+ * column name (empty when the file isn't GeoParquet).
  */
-function geoparquetWkbColumns(dump: AnyDump): Set<string> {
+function geoparquetColumns(dump: AnyDump): Record<string, GeoColumn> {
     const entry = dump.metadata.key_value_metadata?.find(e => e.key === 'geo');
     if (!entry?.value) {
-        return new Set();
+        return {};
     }
     try {
-        const geo = JSON.parse(entry.value) as {
-            columns?: Record<string, { encoding?: string }>;
-        };
-        return new Set(
-            Object.entries(geo.columns ?? {})
-                .filter(([, c]) => c.encoding === 'WKB')
-                .map(([name]) => name)
-        );
+        return (JSON.parse(entry.value) as { columns?: Record<string, GeoColumn> }).columns ?? {};
     } catch {
-        return new Set();
+        return {};
     }
 }
 
@@ -295,6 +297,27 @@ function geospatialRows(gs: NonNullable<ColumnMetadata['geospatial_statistics']>
     }
     if (gs.geospatial_types?.length) {
         rows.push(['Geometry Types', gs.geospatial_types.join(', ')]);
+    }
+    return rows;
+}
+
+/** Bounding-box + geometry-type rows from a GeoParquet column entry. */
+function geoparquetRows(g: GeoColumn): Row[] {
+    const rows: Row[] = [];
+    const b = g.bbox;
+    if (b && (b.length === 4 || b.length === 6)) {
+        const xmax = b.length === 6 ? b[3] : b[2];
+        const ymax = b.length === 6 ? b[4] : b[3];
+        rows.push(['X Range', `${b[0]} … ${xmax}`], ['Y Range', `${b[1]} … ${ymax}`]);
+        if (b.length === 6) {
+            rows.push(['Z Range', `${b[2]} … ${b[5]}`]);
+        }
+    }
+    if (g.geometry_types?.length) {
+        rows.push(['Geometry Types', g.geometry_types.join(', ')]);
+    }
+    if (g.encoding) {
+        rows.push(['Encoding', `${g.encoding} (GeoParquet)`]);
     }
     return rows;
 }
@@ -550,7 +573,7 @@ const PANELS: Registry = {
         return [layout(node), { title: 'Row Group', rows }];
     },
 
-    column_chunk: node => {
+    column_chunk: (node, dump) => {
         const { chunk, meta, leaf } = node;
         const sections: Section[] = [
             layout(node),
@@ -613,6 +636,17 @@ const PANELS: Registry = {
         }
         if (meta?.geospatial_statistics) {
             const rows = geospatialRows(meta.geospatial_statistics);
+            if (rows.length) {
+                sections.push({ title: 'Geospatial Statistics', rows });
+            }
+        }
+        // GeoParquet spatial extent lives in the file's `geo` metadata, not on
+        // the chunk (Overture writes no native geospatial_statistics), so a
+        // WKB blob column would otherwise show only uncomparable raw min/max.
+        const path = meta?.path_in_schema ?? leaf?.name;
+        const geo = path ? geoparquetColumns(dump)[path] : undefined;
+        if (geo) {
+            const rows = geoparquetRows(geo);
             if (rows.length) {
                 sections.push({ title: 'Geospatial Statistics', rows });
             }
@@ -993,7 +1027,7 @@ export class InfoPanelManager {
             const isWkb =
                 lt === 'GEOMETRY' ||
                 lt === 'GEOGRAPHY' ||
-                geoparquetWkbColumns(dump).has(preview.column);
+                geoparquetColumns(dump)[preview.column]?.encoding === 'WKB';
             this.infoPanel
                 .querySelector('.info-sections')!
                 .appendChild(this.buildValuePreviewSection(preview, isWkb));
