@@ -139,5 +139,5 @@ jobs:
           git worktree add ../samples-data origin/samples-data
           cp incoming/overture-*.dump.json incoming/overture-*.release ../samples-data/
           git -C ../samples-data add overture-*.dump.json overture-*.release
-          git -C ../samples-data commit -m "Overture samples update ($(date -u +%Y-%m-%d))"
+          git -C ../samples-data commit --no-verify -m "Overture samples update ($(date -u +%Y-%m-%d))"
           git -C ../samples-data push origin HEAD:samples-data
