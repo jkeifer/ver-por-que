@@ -116,9 +116,17 @@
 .loaded-file-info {
     display: flex;
     justify-content: space-between;
-    align-items: center;
+    align-items: flex-start;
     flex-wrap: wrap;
     gap: var(--spacing-md);
+}
+
+.file-details {
+    /* Take the row and allow shrinking so long paths wrap instead of
+       shoving the buttons around; min-width:0 lets a flex item shrink
+       below its content width. */
+    flex: 1 1 16rem;
+    min-width: 0;
 }
 
 .file-details h4 {
@@ -134,7 +142,7 @@
     font-size: 0.85rem;
     color: var(--text-secondary);
     margin: 0;
-    word-break: break-all;
+    overflow-wrap: anywhere;
 }
 
 .file-structure-section {
@@ -707,6 +715,12 @@ code {
         flex-direction: column;
     }
 
+    .file-actions {
+        flex-direction: column;
+        align-items: stretch;
+        width: 100%;
+    }
+
     .info-sections {
         grid-template-columns: 1fr;
     }
@@ -1049,6 +1063,10 @@ code {
     display: flex;
     flex-wrap: wrap;
     gap: var(--spacing-sm);
+    /* Never squish the buttons; keep them right-aligned whether they share
+       the row with the path or wrap onto their own line. */
+    flex-shrink: 0;
+    margin-left: auto;
 }
 
 /* Segment labels */
