@@ -111,13 +111,17 @@ export class TreemapVisualizer implements Visualizer {
         if (node.children.length > 0) {
             this.path = [...this.path, node];
             this.selectedLeafId = null;
+        } else if (this.selectedLeafId === node.id) {
+            this.selectedLeafId = null; // clicking the selected page deselects it
         } else {
             this.selectedLeafId = node.id;
         }
         this.render();
-        this.onSelectionChange?.(node.id);
+        // Deselecting falls back to the current level (the drilled parent).
+        const active = this.selectedLeafId ? node : this.path[this.path.length - 1]!;
+        this.onSelectionChange?.(active === this.root ? null : active.id);
         if (this.infoPanelManager && this.dump) {
-            this.infoPanelManager.show(node, this.dump);
+            this.infoPanelManager.show(active, this.dump);
         }
     }
 
@@ -180,15 +184,22 @@ export class TreemapVisualizer implements Visualizer {
     private renderBreadcrumb(): HTMLDivElement {
         const crumb = document.createElement('div');
         crumb.className = 'treemap-breadcrumb';
-        this.path.forEach((node, index) => {
+        // The selected page (a leaf, not in the path) trails as a final crumb so
+        // the drilled parent above it becomes clickable to deselect back to it.
+        const leaf = this.selectedLeafId
+            ? (this.path[this.path.length - 1]!.children.find(c => c.id === this.selectedLeafId) ??
+              null)
+            : null;
+        const nodes = leaf ? [...this.path, leaf] : this.path;
+        nodes.forEach((node, index) => {
             const button = document.createElement('button');
             button.type = 'button';
             button.className = 'treemap-crumb';
             button.textContent = node === this.root ? 'FILE' : node.name;
-            button.disabled = index === this.path.length - 1;
+            button.disabled = index === nodes.length - 1;
             button.addEventListener('click', () => this.handleBreadcrumbClick(index));
             crumb.appendChild(button);
-            if (index < this.path.length - 1) {
+            if (index < nodes.length - 1) {
                 const sep = document.createElement('span');
                 sep.className = 'treemap-crumb-sep';
                 sep.textContent = '›';
