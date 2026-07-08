@@ -427,19 +427,16 @@ function columnMetaSections(
             rows: statRows(meta.statistics, leaf, isWkbColumn(leaf, geo)),
         });
     }
-    if (meta.geospatial_statistics) {
-        const rows = geospatialRows(meta.geospatial_statistics);
-        if (rows.length) {
-            sections.push({ title: 'Geospatial Statistics', rows });
-        }
-    }
-    // GeoParquet spatial extent lives in the file's `geo` metadata, not on the
-    // chunk (Overture writes no native geospatial_statistics).
-    if (geo) {
-        const rows = geoparquetRows(geo);
-        if (rows.length) {
-            sections.push({ title: 'Geospatial Statistics', rows });
-        }
+    // Prefer native geospatial_statistics; fall back to the file's `geo` block
+    // (Overture writes GeoParquet metadata and no native stats). Never both, so
+    // the panel can't show two "Geospatial Statistics" sections.
+    const geoRows = meta.geospatial_statistics
+        ? geospatialRows(meta.geospatial_statistics)
+        : geo
+          ? geoparquetRows(geo)
+          : [];
+    if (geoRows.length) {
+        sections.push({ title: 'Geospatial Statistics', rows: geoRows });
     }
     if (meta.size_statistics) {
         const rows = sizeStatRows(meta.size_statistics);
