@@ -16,7 +16,8 @@ import {
     type Kind,
     type SegmentNode,
 } from '../business/segment-tree';
-import { decodeStatValue, parsePredicateValue } from '../business/stat-values';
+import { base64Bytes, decodeStatValue, parsePredicateValue } from '../business/stat-values';
+import { describeWkb } from '../business/wkb';
 import type { PreviewEntry, PreviewResult, PreviewValue } from '../js/worker/pyodide-parquet';
 import type {
     AnyDump,
@@ -113,6 +114,19 @@ function renderPreviewFailure(codec: string): string {
         `<div class="value-preview-codec-note">This chunk is ${name}-compressed and ` +
         `${name.toLowerCase()} can't be decoded in-browser.</div>`
     );
+}
+
+/**
+ * Rewrite a GEOMETRY/GEOGRAPHY cell (raw WKB shipped as base64) into a readable
+ * summary. Falls back to the original base64 on nulls, non-strings, or bytes
+ * that don't parse as WKB — so a non-geometry value is never mangled.
+ */
+function wkbCell(value: PreviewValue): PreviewValue {
+    if (typeof value !== 'string') {
+        return value;
+    }
+    const bytes = base64Bytes(value);
+    return (bytes && describeWkb(bytes)) ?? value;
 }
 
 /** A single value cell: NULL is explicit; long values ellipsize. */
@@ -947,9 +961,12 @@ export class InfoPanelManager {
                 .appendChild(this.buildBloomProbeSection(node, dump));
         }
         if (preview && this.valuePreview) {
+            const leaf = findSchemaLeaf(dump.metadata.schema_root, preview.column);
+            const lt = leaf?.logical_type?.logical_type;
+            const isWkb = lt === 'GEOMETRY' || lt === 'GEOGRAPHY';
             this.infoPanel
                 .querySelector('.info-sections')!
-                .appendChild(this.buildValuePreviewSection(preview));
+                .appendChild(this.buildValuePreviewSection(preview, isWkb));
         }
         // Query section last: it anchors before the interactive sections above,
         // matching where a later setQuery will re-insert it.
@@ -965,7 +982,7 @@ export class InfoPanelManager {
     }
 
     /** Interactive value preview: decode this page's values on demand. */
-    private buildValuePreviewSection(target: PreviewTarget): HTMLElement {
+    private buildValuePreviewSection(target: PreviewTarget, isWkb: boolean): HTMLElement {
         const section = document.createElement('div');
         section.className = 'info-section large-card value-preview-section';
         section.innerHTML =
@@ -1001,7 +1018,9 @@ export class InfoPanelManager {
                         return;
                     }
                     renderPreviewWindow(result, {
-                        entries: res.values,
+                        entries: isWkb
+                            ? res.values.map(e => ({ ...e, value: wkbCell(e.value) }))
+                            : res.values,
                         start: offset,
                         next: res.next,
                         total: res.total,

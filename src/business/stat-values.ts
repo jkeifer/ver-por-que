@@ -11,7 +11,7 @@ import type { SchemaLeaf } from '../types';
 /** A decoded, comparable statistics value. */
 export type StatValue = number | bigint | boolean | string;
 
-function base64Bytes(b64: string): Uint8Array | undefined {
+export function base64Bytes(b64: string): Uint8Array | undefined {
     // Dumps serialize stat bytes as base64, but some values arrive base64url
     // (`-`/`_` for `+`/`/`) — atob only accepts standard base64, so normalize
     // the URL-safe alphabet back before decoding. Without this, any stat whose
