@@ -298,6 +298,27 @@ export class SvgByteVisualizer implements Visualizer {
         segments: SegmentLayout[],
         levelIndex: number
     ): void {
+        // Opaque backing over the segment rows: dimmed (query-pruned) rects drop
+        // to opacity 0.2, so without this they'd composite over — and reveal —
+        // the child level sliding underneath them during a fold. Painted first
+        // (so it sits behind this level's segments but above the funnels), it
+        // gives the 0.2 rects an opaque backdrop: the dim still reads as a fade
+        // over the page background, but the child stays hidden.
+        if (segments.length > 0) {
+            const top = Math.min(...segments.map(s => s.y));
+            const bottom = Math.max(...segments.map(s => s.y + s.height));
+            target.appendChild(
+                this.createSvgElement('rect', {
+                    x: 0,
+                    y: top,
+                    width: this.width,
+                    height: bottom - top,
+                    fill: 'var(--bg-secondary)',
+                    class: 'level-backing',
+                    'pointer-events': 'none',
+                })
+            );
+        }
         segments.forEach((segmentLayout, segmentIndex) => {
             this.createSegmentElements(segmentLayout, target, levelIndex, segmentIndex);
         });
