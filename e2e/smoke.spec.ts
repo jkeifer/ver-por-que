@@ -322,6 +322,21 @@ test('value preview is available on a JSON dump with a fetchable source', async 
     await expect(panel.locator('.value-preview-btn')).toHaveCount(1);
 });
 
+test('decodes a GeoParquet geometry column (WKB stats + GeoJSON copy)', async ({ page }) => {
+    await page.goto('/#node=rg_0_col_geometry');
+    await page.locator('#file-input').setInputFiles(fixture('geoparquet_expected.json'));
+
+    const panel = page.locator('#info-panel-container');
+    await expect(panel).toContainText('Column Chunk geometry');
+    // GeoParquet geometry (no logical type) is named, not shown as BYTE_ARRAY.
+    await expect(panel).toContainText('WKB geometry (GeoParquet)');
+    // Spatial extent from the `geo` metadata, and the WKB max decoded (not base64).
+    await expect(panel).toContainText('Geospatial Statistics');
+    await expect(panel).toContainText('MULTIPOLYGON');
+    // The decoded geometry stat offers a copy-as-GeoJSON button.
+    await expect(panel.locator('button.copy-btn[title="Copy as GeoJSON"]').first()).toBeVisible();
+});
+
 test('downloads the loaded dump as re-validating JSON', async ({ page }) => {
     await loadFixture(page, 'data_index_bloom_encoding_stats_expected.json');
     await expect(page.locator('#loaded-file-source')).toContainText('.parquet');
