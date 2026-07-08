@@ -20,8 +20,18 @@ import type { Resolution } from './business/query-model';
 import { ParquetWorkerClient } from './js/worker/client';
 import type { AnyDump } from './types';
 import { BUILD_INFO } from './build-info.js';
+import samples from '../samples.json';
 
 const DB_NAME = 'ParquetExplorerDB';
+
+/** A sample card: title/desc/meta + the dump URL it loads and its attribution. */
+interface Sample {
+    title: string;
+    description: string;
+    meta: string;
+    url: string;
+    source: { name: string; url: string };
+}
 
 /** The two renderers over the same segment tree. 'bytes' is the default. */
 type Lens = 'bytes' | 'treemap';
@@ -128,9 +138,7 @@ class ParquetExplorer {
             }
         });
 
-        for (const link of document.querySelectorAll<HTMLElement>('.sample-link')) {
-            link.addEventListener('click', () => void this.loadURL(link.dataset.url!));
-        }
+        this.renderSamples();
 
         document
             .getElementById('lens-bytes')!
@@ -146,6 +154,42 @@ class ParquetExplorer {
         document
             .getElementById('download-dump-btn')!
             .addEventListener('click', () => this.downloadDump());
+    }
+
+    /** Build the sample cards from the imported manifest into `.samples-list`. */
+    private renderSamples(): void {
+        const list = document.querySelector('.samples-list');
+        if (!list) {
+            return;
+        }
+        for (const sample of samples as Sample[]) {
+            const card = document.createElement('div');
+            card.className = 'sample-card';
+
+            const button = document.createElement('button');
+            button.className = 'sample-link';
+            for (const [cls, text] of [
+                ['sample-title', sample.title],
+                ['sample-desc', sample.description],
+                ['sample-meta', sample.meta],
+            ] as const) {
+                const span = document.createElement('span');
+                span.className = cls;
+                span.textContent = text;
+                button.append(span);
+            }
+            button.addEventListener('click', () => void this.loadURL(sample.url));
+
+            const source = document.createElement('a');
+            source.className = 'sample-source';
+            source.href = sample.source.url;
+            source.target = '_blank';
+            source.rel = 'noopener';
+            source.textContent = sample.source.name;
+
+            card.append(button, source);
+            list.append(card);
+        }
     }
 
     /** Download the loaded dump as `<source-basename>.dump.json`. */
