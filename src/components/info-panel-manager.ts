@@ -389,6 +389,49 @@ function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null, wkb = false
     return rows;
 }
 
+/**
+ * Statistics + geospatial + size/encoding sections for a column's metadata.
+ * Shared by the physical `column_chunk` view and the metadata-only `chunk_meta`
+ * view so both decode WKB min/max and surface the same extents consistently.
+ */
+function columnMetaSections(
+    meta: ColumnMetadata,
+    leaf: SchemaLeaf | null | undefined,
+    geo: GeoColumn | undefined
+): Section[] {
+    const sections: Section[] = [];
+    if (meta.statistics) {
+        sections.push({
+            title: 'Statistics',
+            rows: statRows(meta.statistics, leaf, isWkbColumn(leaf, geo)),
+        });
+    }
+    if (meta.geospatial_statistics) {
+        const rows = geospatialRows(meta.geospatial_statistics);
+        if (rows.length) {
+            sections.push({ title: 'Geospatial Statistics', rows });
+        }
+    }
+    // GeoParquet spatial extent lives in the file's `geo` metadata, not on the
+    // chunk (Overture writes no native geospatial_statistics).
+    if (geo) {
+        const rows = geoparquetRows(geo);
+        if (rows.length) {
+            sections.push({ title: 'Geospatial Statistics', rows });
+        }
+    }
+    if (meta.size_statistics) {
+        const rows = sizeStatRows(meta.size_statistics);
+        if (rows.length) {
+            sections.push({ title: 'Size Statistics', rows });
+        }
+    }
+    if (meta.encoding_stats?.length) {
+        sections.push({ title: 'Encoding Stats', rows: encodingStatRows(meta.encoding_stats) });
+    }
+    return sections;
+}
+
 /** Aggregate page-type / encoding counts across all data pages (overview). */
 function pageSummary(dump: AnyDump): Section[] {
     // A metadata-only export carries no page structure to summarize.
@@ -634,7 +677,6 @@ const PANELS: Registry = {
         const { chunk, meta, leaf } = node;
         const path = meta?.path_in_schema ?? leaf?.name;
         const geo = path ? geoparquetColumns(dump)[path] : undefined;
-        const wkb = isWkbColumn(leaf, geo);
         const sections: Section[] = [
             layout(node),
             {
@@ -710,32 +752,8 @@ const PANELS: Registry = {
                 degraded: 'metadata-only',
             });
         }
-        if (meta?.statistics) {
-            sections.push({ title: 'Statistics', rows: statRows(meta.statistics, leaf, wkb) });
-        }
-        if (meta?.geospatial_statistics) {
-            const rows = geospatialRows(meta.geospatial_statistics);
-            if (rows.length) {
-                sections.push({ title: 'Geospatial Statistics', rows });
-            }
-        }
-        // GeoParquet spatial extent lives in the file's `geo` metadata, not on
-        // the chunk (Overture writes no native geospatial_statistics), so a
-        // WKB blob column would otherwise show only uncomparable raw min/max.
-        if (geo) {
-            const rows = geoparquetRows(geo);
-            if (rows.length) {
-                sections.push({ title: 'Geospatial Statistics', rows });
-            }
-        }
-        if (meta?.size_statistics) {
-            const rows = sizeStatRows(meta.size_statistics);
-            if (rows.length) {
-                sections.push({ title: 'Size Statistics', rows });
-            }
-        }
-        if (meta?.encoding_stats?.length) {
-            sections.push({ title: 'Encoding Stats', rows: encodingStatRows(meta.encoding_stats) });
+        if (meta) {
+            sections.push(...columnMetaSections(meta, leaf, geo));
         }
         return sections;
     },
@@ -979,8 +997,10 @@ const PANELS: Registry = {
         ];
     },
 
-    chunk_meta: node => {
+    chunk_meta: (node, dump) => {
         const m = node.meta;
+        const leaf = findSchemaLeaf(dump.metadata.schema_root, node.path);
+        const geo = geoparquetColumns(dump)[node.path];
         const sections: Section[] = [
             layout(node),
             {
@@ -988,6 +1008,11 @@ const PANELS: Registry = {
                 rows: [
                     ['Column', node.path],
                     ['Physical Type', m.type],
+                    // GeoParquet geometry has no logical type; name it so BYTE_ARRAY
+                    // doesn't read as an opaque blob (mirrors the column_chunk view).
+                    ...(geo?.encoding === 'WKB'
+                        ? ([['Interpreted As', 'WKB geometry (GeoParquet)']] as Row[])
+                        : []),
                     ['Codec', m.codec],
                     ['Encodings', m.encodings.join(', ')],
                     ['Values', formatNumber(m.num_values)],
@@ -996,10 +1021,8 @@ const PANELS: Registry = {
                     ['Data Page Offset', formatOffset(m.data_page_offset)],
                 ],
             },
+            ...columnMetaSections(m, leaf, geo),
         ];
-        if (m.statistics) {
-            sections.push({ title: 'Statistics', rows: statRows(m.statistics) });
-        }
         return sections;
     },
 
