@@ -774,6 +774,18 @@ export class SvgByteVisualizer implements Visualizer {
     }
 
     private handleKeyDown(event: KeyboardEvent): void {
+        // This listener is on `document`, so Escape/Backspace here would hijack
+        // typing (predicate value, bloom probe, URL). Ignore it while an
+        // editable element is focused.
+        const target = event.target as HTMLElement | null;
+        if (
+            target &&
+            (target.tagName === 'INPUT' ||
+                target.tagName === 'TEXTAREA' ||
+                target.isContentEditable)
+        ) {
+            return;
+        }
         switch (event.key) {
             case 'Escape':
                 this.selectedSegments.clear();
