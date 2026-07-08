@@ -11,13 +11,14 @@ import {
 } from '../business/segment-layout-calculator';
 import { describe, findPath, type SegmentNode } from '../business/segment-tree';
 import type { AnyDump } from '../types';
-import type { InfoPanelManager } from './info-panel-manager';
+import { escapeHtml, type InfoPanelManager } from './info-panel-manager';
+import { FunnelLayer } from './svg-funnels';
 import type { Visualizer } from './visualizer';
 
-type FunnelElement = SVGElement & { labelElement?: SVGElement | null };
-type SegmentRect = SVGElement & { labelElement?: SVGElement | null };
+export type FunnelElement = SVGElement & { labelElement?: SVGElement | null };
+export type SegmentRect = SVGElement & { labelElement?: SVGElement | null };
 
-interface Level {
+export interface Level {
     name: string;
     parentSegmentId: string | null;
     segments: SegmentNode[];
@@ -50,6 +51,7 @@ export class SvgByteVisualizer implements Visualizer {
     onSelectionChange: ((id: string | null) => void) | null = null;
 
     private tooltip!: HTMLDivElement;
+    private funnels!: FunnelLayer;
     private infoPanelManager: InfoPanelManager | null;
     private resizeTimeout?: ReturnType<typeof setTimeout>;
 
@@ -70,6 +72,12 @@ export class SvgByteVisualizer implements Visualizer {
 
     private init(): void {
         this.createSVG();
+        this.funnels = new FunnelLayer(
+            this.svg,
+            this.config,
+            (tag, attrs) => this.createSvgElement(tag, attrs),
+            () => this.width
+        );
         this.setupEventListeners();
         this.createTooltip();
     }
@@ -385,108 +393,6 @@ export class SvgByteVisualizer implements Visualizer {
         });
     }
 
-    private createFunnelConnection(childLevel: Level, childLevelIndex: number): void {
-        const parentLevel = this.levels[childLevelIndex - 1];
-        if (!parentLevel) {
-            return;
-        }
-
-        const parentSegmentLayout = parentLevel.layout.segments.find(
-            s => s.segment.id === childLevel.parentSegmentId
-        );
-        if (!parentSegmentLayout) {
-            return;
-        }
-
-        const parentY =
-            parentLevel.layout.y + parentLevel.layout.height - this.config.SEGMENT_MARGIN;
-        const childY = childLevel.layout.y + this.config.SEGMENT_MARGIN;
-        const parentLeft = parentSegmentLayout.x;
-        const parentRight = parentSegmentLayout.x + parentSegmentLayout.width;
-
-        const funnel = this.createFunnel(
-            this.funnelPoints(parentLeft, parentRight, parentY, this.width, childY),
-            childLevel.parentSegmentId,
-            childLevelIndex,
-            false
-        );
-
-        childLevel.funnelElement = funnel;
-        this.createFunnelLabel(
-            parentSegmentLayout,
-            parentLeft,
-            parentRight,
-            parentY,
-            parentY,
-            funnel
-        );
-    }
-
-    /** Build the trapezoid points string shared by all funnel shapes. */
-    private funnelPoints(
-        parentLeft: number,
-        parentRight: number,
-        parentY: number,
-        childRight: number,
-        childY: number
-    ): string {
-        return [
-            `${parentLeft},${parentY}`,
-            `${parentRight},${parentY}`,
-            `${childRight},${childY}`,
-            `0,${childY}`,
-        ].join(' ');
-    }
-
-    /** Create + insert a funnel polygon behind the level groups. */
-    private createFunnel(
-        points: string,
-        parentSegmentId: string | null,
-        childLevelIndex: number,
-        animated: boolean
-    ): FunnelElement {
-        const funnel = this.createSvgElement('polygon', {
-            points: points,
-            fill: VisualizationConfig.getCSSVariable('--funnel-fill'),
-            class: animated ? 'funnel-connection animated-funnel' : 'funnel-connection',
-            'data-parent-segment': parentSegmentId ?? '',
-            'data-child-level': childLevelIndex,
-            style: animated
-                ? 'pointer-events: none; transition: points 300ms cubic-bezier(0.4, 0, 0.2, 1);'
-                : 'pointer-events: none;',
-        }) as FunnelElement;
-
-        const firstLevel = this.svg.querySelector('.level');
-        if (firstLevel) {
-            this.svg.insertBefore(funnel, firstLevel);
-        } else {
-            this.svg.appendChild(funnel);
-        }
-        return funnel;
-    }
-
-    /** Remove a level's funnel element and its label from the DOM. */
-    private removeFunnel(level: Level): void {
-        const funnel = level.funnelElement;
-        if (funnel && funnel.parentNode) {
-            if (funnel.labelElement && funnel.labelElement.parentNode) {
-                funnel.labelElement.parentNode.removeChild(funnel.labelElement);
-            }
-            funnel.parentNode.removeChild(funnel);
-        }
-    }
-
-    /** Remove only a level's funnel label (keeps the funnel). */
-    private removeFunnelLabel(level: Level): void {
-        const funnel = level.funnelElement;
-        if (funnel && funnel.labelElement) {
-            if (funnel.labelElement.parentNode) {
-                funnel.labelElement.parentNode.removeChild(funnel.labelElement);
-            }
-            funnel.labelElement = null;
-        }
-    }
-
     private setupSegmentEventListeners(
         rect: SVGElement,
         segment: SegmentNode,
@@ -536,7 +442,7 @@ export class SvgByteVisualizer implements Visualizer {
 
     private animateSlideDown(level: Level, levelIndex: number): void {
         const group = level.svgGroup;
-        const parentLevel = this._findParentLevel(level);
+        const parentLevel = this.findParentLevel(level);
 
         let startY = level.layout.y;
         if (parentLevel) {
@@ -544,7 +450,13 @@ export class SvgByteVisualizer implements Visualizer {
         }
 
         if (parentLevel && level.parentSegmentId) {
-            this.createAnimatedFunnel(level, levelIndex, parentLevel, startY, level.layout.y);
+            this.funnels.createAnimatedFunnel(
+                level,
+                levelIndex,
+                parentLevel,
+                startY,
+                level.layout.y
+            );
         }
 
         group.setAttribute('transform', `translate(0, ${startY})`);
@@ -563,154 +475,6 @@ export class SvgByteVisualizer implements Visualizer {
         setTimeout(() => {
             level.animationState = 'visible';
         }, ANIM_MS);
-    }
-
-    private createAnimatedFunnel(
-        childLevel: Level,
-        childLevelIndex: number,
-        parentLevel: Level,
-        startY: number,
-        finalY: number
-    ): void {
-        const parentSegmentLayout = parentLevel.layout.segments.find(
-            s => s.segment.id === childLevel.parentSegmentId
-        );
-        if (!parentSegmentLayout) {
-            return;
-        }
-
-        const parentY =
-            parentLevel.layout.y + parentLevel.layout.height - this.config.SEGMENT_MARGIN;
-        const initialChildY = startY + this.config.SEGMENT_MARGIN;
-        const finalChildY = finalY + this.config.SEGMENT_MARGIN;
-
-        const parentLeft = parentSegmentLayout.x;
-        const parentRight = parentSegmentLayout.x + parentSegmentLayout.width;
-
-        const funnel = this.createFunnel(
-            this.funnelPoints(parentLeft, parentRight, parentY, this.width, initialChildY),
-            childLevel.parentSegmentId,
-            childLevelIndex,
-            true
-        );
-
-        childLevel.funnelElement = funnel;
-        this.createFunnelLabel(
-            parentSegmentLayout,
-            parentLeft,
-            parentRight,
-            parentY,
-            parentY,
-            funnel
-        );
-
-        requestAnimationFrame(() => {
-            funnel.setAttribute(
-                'points',
-                this.funnelPoints(parentLeft, parentRight, parentY, this.width, finalChildY)
-            );
-        });
-    }
-
-    private createFunnelLabel(
-        parentSegmentLayout: SegmentLayout,
-        parentLeft: number,
-        parentRight: number,
-        initialParentY: number,
-        finalParentY: number,
-        funnelElement: FunnelElement
-    ): void {
-        const segment = parentSegmentLayout.segment;
-
-        const segmentRect = this.svg.querySelector(
-            `.segment[data-segment-id="${segment.id}"]`
-        ) as SegmentRect | null;
-
-        if (segmentRect && segmentRect.labelElement) {
-            return;
-        }
-
-        const segmentWidth = parentRight - parentLeft;
-        const labelX = parentLeft + segmentWidth / 2;
-        const funnelMidY =
-            initialParentY + ((finalParentY || initialParentY) - initialParentY) / 2 + 15;
-        const labelY = funnelMidY;
-
-        const label = this.createSvgElement('text', {
-            x: labelX,
-            y: labelY,
-            'text-anchor': 'middle',
-            'dominant-baseline': 'central',
-            fill: 'var(--text-primary)',
-            'font-family': 'var(--font-sans)',
-            'font-size': '11px',
-            'font-weight': '500',
-            class: 'funnel-label',
-            'pointer-events': 'none',
-            style: 'user-select: none; transition: opacity 300ms ease;',
-        });
-
-        label.textContent = segment.name;
-
-        const firstLevel = this.svg.querySelector('.level');
-        if (firstLevel) {
-            this.svg.insertBefore(label, firstLevel);
-        } else {
-            this.svg.appendChild(label);
-        }
-
-        funnelElement.labelElement = label;
-
-        requestAnimationFrame(() => {
-            const textBBox = (label as SVGGraphicsElement).getBBox();
-            const svgWidth = this.width;
-
-            const parentTop = initialParentY;
-            const childTop = initialParentY + 30;
-            const labelProgress = Math.min(
-                1,
-                Math.max(0, (labelY - parentTop) / Math.max(1, childTop - parentTop))
-            );
-
-            const funnelLeftAtLabel = parentLeft - parentLeft * labelProgress;
-            const funnelRightAtLabel =
-                parentLeft + segmentWidth + (svgWidth - parentLeft - segmentWidth) * labelProgress;
-
-            const labelLeft = labelX - textBBox.width / 2;
-            const labelRight = labelX + textBBox.width / 2;
-
-            let adjustedX = labelX;
-            let anchor = 'middle';
-            const margin = 5;
-
-            if (labelRight > funnelRightAtLabel - margin) {
-                adjustedX = funnelRightAtLabel - margin;
-                anchor = 'end';
-            } else if (labelLeft < funnelLeftAtLabel + margin) {
-                adjustedX = funnelLeftAtLabel + margin;
-                anchor = 'start';
-            }
-
-            if (adjustedX !== labelX || anchor !== 'middle') {
-                label.setAttribute('x', String(adjustedX));
-                label.setAttribute('text-anchor', anchor);
-            }
-
-            const funnelWidth = funnelRightAtLabel - funnelLeftAtLabel;
-            const maxLabelWidth = funnelWidth - 2 * margin;
-            if (textBBox.width > maxLabelWidth) {
-                let text = segment.name;
-                label.textContent = text;
-
-                while (
-                    text.length > 5 &&
-                    (label as SVGGraphicsElement).getBBox().width > maxLabelWidth
-                ) {
-                    text = text.slice(0, -1);
-                    label.textContent = text + '…';
-                }
-            }
-        });
     }
 
     private removeLevelsFrom(index: number): void {
@@ -749,7 +513,7 @@ export class SvgByteVisualizer implements Visualizer {
         }
 
         const parentLevel =
-            explicitParent !== undefined ? explicitParent : this._findParentLevel(level);
+            explicitParent !== undefined ? explicitParent : this.findParentLevel(level);
 
         if (parentLevel && parentLevel.svgGroup) {
             this.svg.insertBefore(group, parentLevel.svgGroup);
@@ -763,7 +527,7 @@ export class SvgByteVisualizer implements Visualizer {
         }
 
         if (level.funnelElement && parentLevel) {
-            this.animateFunnelSlideUp(level, parentLevel, targetY);
+            this.funnels.animateFunnelSlideUp(level, parentLevel, targetY);
         }
 
         group.style.transition = 'transform 300ms cubic-bezier(0.4, 0, 0.2, 1)';
@@ -776,35 +540,8 @@ export class SvgByteVisualizer implements Visualizer {
             if (group.parentNode) {
                 group.parentNode.removeChild(group);
             }
-            this.removeFunnel(level);
+            this.funnels.removeFunnel(level);
         }, ANIM_MS);
-    }
-
-    private animateFunnelSlideUp(childLevel: Level, parentLevel: Level, targetY: number): void {
-        const funnel = childLevel.funnelElement;
-        if (!funnel) {
-            return;
-        }
-
-        const parentSegmentLayout = parentLevel.layout.segments.find(
-            s => s.segment.id === childLevel.parentSegmentId
-        );
-        if (!parentSegmentLayout) {
-            return;
-        }
-
-        const targetParentY =
-            parentLevel.layout.y + parentLevel.layout.height - this.config.SEGMENT_MARGIN;
-        const targetChildY = targetY + this.config.SEGMENT_MARGIN;
-        const parentLeft = parentSegmentLayout.x;
-        const parentRight = parentSegmentLayout.x + parentSegmentLayout.width;
-
-        requestAnimationFrame(() => {
-            funnel.setAttribute(
-                'points',
-                this.funnelPoints(parentLeft, parentRight, targetParentY, this.width, targetChildY)
-            );
-        });
     }
 
     private handleSegmentClick(segment: SegmentNode, levelIndex: number): void {
@@ -868,7 +605,7 @@ export class SvgByteVisualizer implements Visualizer {
         const levelsToRemove = this.levels.slice(childIndex);
 
         // Drop funnel labels up front so they don't overlap during animation.
-        levelsToRemove.forEach(level => this.removeFunnelLabel(level));
+        levelsToRemove.forEach(level => this.funnels.removeFunnelLabel(level));
 
         const currentHeight = this.calculateContentHeight();
         this.levels = this.levels.slice(0, childIndex);
@@ -898,17 +635,7 @@ export class SvgByteVisualizer implements Visualizer {
 
         levelsToRemove.reverse().forEach((level, i) => {
             setTimeout(() => {
-                let parentLevel: Level | null = null;
-                if (level.parentSegmentId) {
-                    parentLevel =
-                        this.levels.find(l =>
-                            l.layout?.segments?.some(s => s.segment.id === level.parentSegmentId)
-                        ) ??
-                        levelsToRemove.find(l =>
-                            l.layout?.segments?.some(s => s.segment.id === level.parentSegmentId)
-                        ) ??
-                        null;
-                }
+                const parentLevel = this.findParentLevel(level, levelsToRemove);
                 this.animateSlideUp(level, parentLevel);
             }, i * 50);
         });
@@ -956,8 +683,8 @@ export class SvgByteVisualizer implements Visualizer {
         const label = describe(segment);
         let content =
             label && label !== segment.name
-                ? `<strong>${label}</strong><br/>`
-                : `<strong>${segment.name}</strong><br/>`;
+                ? `<strong>${escapeHtml(label)}</strong><br/>`
+                : `<strong>${escapeHtml(segment.name)}</strong><br/>`;
 
         content += `Range: ${formatBytes(segment.start)} - ${formatBytes(segment.end)}<br/>`;
         content += `Size: ${formatBytes(segment.end - segment.start)}`;
@@ -1032,7 +759,7 @@ export class SvgByteVisualizer implements Visualizer {
     }
 
     private updateLevelGroupLayout(level: Level, levelIndex: number): void {
-        this.removeFunnel(level);
+        this.funnels.removeFunnel(level);
 
         level.svgGroup.innerHTML = '';
         level.svgGroup.setAttribute('transform', `translate(0, ${level.layout.y})`);
@@ -1040,7 +767,7 @@ export class SvgByteVisualizer implements Visualizer {
         this.renderSegments(level.svgGroup, level.layout.segments, levelIndex);
 
         if (level.parentSegmentId && levelIndex > 0 && level.animationState === 'visible') {
-            this.createFunnelConnection(level, levelIndex);
+            this.funnels.createFunnelConnection(this.levels[levelIndex - 1], level, levelIndex);
         }
 
         this.updateSelectionDisplay();
@@ -1068,15 +795,18 @@ export class SvgByteVisualizer implements Visualizer {
         }
     }
 
-    private _findParentLevel(level: Level): Level | null {
+    /**
+     * Find the level whose layout contains this level's parent segment. Current
+     * levels are searched first, then any `extraPools` (e.g. a batch of levels
+     * mid-removal) so funnels stay anchored while their parent slides away.
+     */
+    private findParentLevel(level: Level, extraPools: Level[] = []): Level | null {
         if (!level.parentSegmentId) {
             return null;
         }
-        return (
-            this.levels.find(l =>
-                l.layout?.segments?.some(s => s.segment.id === level.parentSegmentId)
-            ) ?? null
-        );
+        const match = (l: Level): boolean =>
+            l.layout?.segments?.some(s => s.segment.id === level.parentSegmentId) ?? false;
+        return this.levels.find(match) ?? extraPools.find(match) ?? null;
     }
 
     /** Clean up resources: unbind listeners and remove the tooltip element. */
