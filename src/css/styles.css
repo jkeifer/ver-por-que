@@ -532,8 +532,13 @@ code {
     display: inline-block;
 }
 
+.btn:disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
 /* Shared rollover for every button; .btn-primary:hover overrides the colors below. */
-.btn:hover {
+.btn:hover:not(:disabled) {
     background: var(--bg-tertiary);
     border-color: var(--text-secondary);
     transform: translateY(-1px);
@@ -1254,12 +1259,6 @@ code {
 
 /* Value preview (Value Preview section) */
 .value-preview-codec-note,
-.value-preview-header {
-    font-size: 0.85rem;
-    color: var(--text-secondary);
-    margin-bottom: var(--spacing-sm);
-}
-
 .value-preview-btn {
     margin-bottom: var(--spacing-sm);
 }
@@ -1268,10 +1267,37 @@ code {
     display: flex;
     align-items: center;
     gap: var(--spacing-xs);
-    margin-bottom: var(--spacing-sm);
     font-size: 0.8rem;
     color: var(--text-secondary);
     cursor: pointer;
+}
+
+/* Footer under the value window: range/count text on the left, pager right. */
+.value-preview-pager {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-sm);
+}
+
+/* Left side of the footer: range text with the hide-nulls toggle beside it. */
+.value-preview-info {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-md);
+    flex-wrap: wrap;
+}
+
+.value-preview-range {
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.value-preview-buttons {
+    display: flex;
+    gap: var(--spacing-sm);
+    flex-shrink: 0;
 }
 
 /* Scroll container: the table's thead sticks to its top edge. */
@@ -1314,11 +1340,16 @@ code {
     background: var(--bg-tertiary);
 }
 
-/* Narrow, muted gutter columns: index and the two Dremel levels. */
+/* Muted gutter columns. The index holds an absolute page position (up to ~7
+   digits on a million-value page), so it's wider than the small Dremel levels. */
 .value-preview-table th:first-child,
+.value-preview-index {
+    width: 6em;
+    color: var(--text-muted);
+}
+
 .value-preview-table th:nth-child(3),
 .value-preview-table th:nth-child(4),
-.value-preview-index,
 .value-preview-level {
     width: 3em;
     color: var(--text-muted);

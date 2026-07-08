@@ -203,11 +203,14 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         expectValidDump(await parse(bloomFile, 'data_index_bloom_encoding_with_length.parquet'));
 
         // The one String column (UNCOMPRESSED, PLAIN) has a single data page,
-        // so page 0 is the whole column: all 14 values, no cap.
-        const page = await parse.preview(0, 'String', 0);
+        // so page 0 is the whole column: all 14 values. A window wide enough to
+        // hold them returns the lot, and reports the page's true total.
+        const page = await parse.preview(0, 'String', 0, 0, 100, false);
         if (page.error !== undefined) {
             throw new Error(`unexpected codec failure: ${page.codec}`);
         }
+        expect(page.total).toBe(14);
+        expect(page.nulls).toBe(0);
         expect(page.values).toHaveLength(14);
         expect(page.values.slice(0, 3).map(v => v.value)).toEqual(['Hello', 'This is', 'a']);
         expect(page.values[13]!.value).toBe('dog');
@@ -216,8 +219,49 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
             true
         );
 
+        // Pagination: a bounded window returns only its slice but still reports
+        // the whole page's total; a later offset resumes exactly where the full
+        // page leaves off (served from the worker's decoded-page cache, not a
+        // re-decode). Windows match the corresponding slice of the full page.
+        const first = await parse.preview(0, 'String', 0, 0, 5, false);
+        const rest = await parse.preview(0, 'String', 0, 10, 5, false);
+        if (first.error !== undefined || rest.error !== undefined) {
+            throw new Error('unexpected codec failure while paginating');
+        }
+        expect(first.total).toBe(14);
+        expect(first.values.map(v => v.value)).toEqual(page.values.slice(0, 5).map(v => v.value));
+        expect(rest.values).toHaveLength(4); // offset 10, only 10..13 remain
+        expect(rest.values.map(v => v.value)).toEqual(page.values.slice(10, 14).map(v => v.value));
+
         // Unknown columns reject rather than guess.
-        await expect(parse.preview(0, 'nope', 0)).rejects.toThrow(/KeyError|nope/);
+        await expect(parse.preview(0, 'nope', 0, 0, 100, false)).rejects.toThrow(/KeyError|nope/);
+    });
+
+    it('skips nulls by scanning the page, with sparse indices and a spanning range', async () => {
+        // Column 'n' is [1, null, null, 2, null, null]: non-null at 0 and 3.
+        const sparse = new Uint8Array(readFileSync(fixturePath('sparse_nulls.parquet')));
+        expectValidDump(await parse(sparse, 'sparse_nulls.parquet'));
+
+        // Without skipping, the window is the raw slice: nulls included, in order.
+        const raw = await parse.preview(0, 'n', 0, 0, 100, false);
+        if (raw.error !== undefined) {
+            throw new Error(`unexpected codec failure: ${raw.codec}`);
+        }
+        expect(raw.total).toBe(6);
+        expect(raw.nulls).toBe(4);
+        expect(raw.values.map(v => v.value)).toEqual([1, null, null, 2, null, null]);
+
+        // Skipping nulls scans the whole page for the 2 non-null values, keeps
+        // their true (sparse) indices, and reports next = total (trailing nulls
+        // absorbed) so the range spans the entire page — the 1-of-10000 case.
+        const skipped = await parse.preview(0, 'n', 0, 0, 100, true);
+        if (skipped.error !== undefined) {
+            throw new Error(`codec failure: ${skipped.codec}`);
+        }
+        expect(skipped.values.map(v => v.value)).toEqual([1, 2]);
+        expect(skipped.values.map(v => v.index)).toEqual([0, 3]);
+        expect(skipped.total).toBe(6);
+        expect(skipped.next).toBe(6); // whole page consumed → range 1–6 of 6, no next page
     });
 
     it('boots from a JSON dump + URL and probes via range reads, no re-parse', async () => {
@@ -237,7 +281,7 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
             // the spans the dump already located.
             await expect(parse.probeBloom(0, 'String', 'Hello')).resolves.toBe(true);
             await expect(parse.probeBloom(0, 'String', 'zzzzzz-not-here')).resolves.toBe(false);
-            const page = await parse.preview(0, 'String', 0);
+            const page = await parse.preview(0, 'String', 0, 0, 100, false);
             if (page.error !== undefined) {
                 throw new Error(`unexpected codec failure: ${page.codec}`);
             }
@@ -258,7 +302,7 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         // por-que ships a pure-python snappy fallback used when the
         // python-snappy C extension is absent (as under pyodide), so SNAPPY
         // values now decode in-browser instead of returning codec_unavailable.
-        const page = await parse.preview(0, 'id', 0);
+        const page = await parse.preview(0, 'id', 0, 0, 100, false);
         if (page.error !== undefined) {
             throw new Error(`unexpected codec failure: ${page.codec}`);
         }

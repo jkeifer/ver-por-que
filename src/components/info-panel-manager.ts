@@ -73,17 +73,24 @@ export interface RecoveryActions {
 export type BloomProbe = (rowGroup: number, column: string, value: string) => Promise<boolean>;
 
 /**
- * Decodes every value of a single data page in the worker's current file. Only
- * raw-parquet loads have one, same as BloomProbe.
+ * Decodes a window of a data page in the worker's current file, starting at
+ * value `offset`; with `skipNulls` the window is up to `limit` non-null values.
+ * Only raw-parquet loads have one, same as BloomProbe.
  */
 export type ValuePreview = (
     rowGroup: number,
     column: string,
-    pageIndex: number
+    pageIndex: number,
+    offset: number,
+    limit: number,
+    skipNulls: boolean
 ) => Promise<PreviewResult>;
 
 /** Long values are cut with an ellipsis in the preview list. */
 const PREVIEW_VALUE_MAX_CHARS = 80;
+
+/** Values shown per preview page; the worker decodes the whole page once. */
+const PREVIEW_PAGE_SIZE = 100;
 
 /** Where a value preview points: a data page's coordinates in the worker's file. */
 interface PreviewTarget {
@@ -112,17 +119,12 @@ function previewValueCell(value: PreviewValue): string {
     );
 }
 
-/**
- * tbody rows for the current null-filter state. The `#` column keeps each
- * value's true page index even when nulls are filtered out.
- */
-function renderPreviewRows(entries: PreviewEntry[], hideNulls: boolean): string {
+/** tbody rows; `#` is each value's own absolute page index (sparse under null-skip). */
+function renderPreviewRows(entries: PreviewEntry[]): string {
     return entries
-        .map((entry, index) => ({ entry, index }))
-        .filter(({ entry }) => !hideNulls || entry.value !== null)
         .map(
-            ({ entry, index }) =>
-                `<tr><td class="value-preview-index">${index}</td>` +
+            entry =>
+                `<tr><td class="value-preview-index">${entry.index}</td>` +
                 `<td class="value-preview-value">${previewValueCell(entry.value)}</td>` +
                 `<td class="value-preview-level">${entry.def}</td>` +
                 `<td class="value-preview-level">${entry.rep}</td></tr>`
@@ -130,31 +132,68 @@ function renderPreviewRows(entries: PreviewEntry[], hideNulls: boolean): string 
         .join('');
 }
 
+/** One rendered window plus the controls that drive it. */
+interface PreviewWindowView {
+    entries: PreviewEntry[];
+    /** Value index this window's span starts at (the requested offset). */
+    start: number;
+    /** Value index the next window starts at (one past this span). */
+    next: number;
+    total: number;
+    nulls: number;
+    hideNulls: boolean;
+    canPrev: boolean;
+    onToggleNulls: (hide: boolean) => void;
+    onPrev: () => void;
+    onNext: () => void;
+}
+
 /**
- * Fills `result` with the page's values as a scrollable table (frozen header,
- * zebra rows) plus a "hide nulls" toggle when the page actually has nulls.
+ * Fills `result` with one window of a page's values (scrollable table, frozen
+ * header, zebra rows) and a footer that pairs the range/count text and the
+ * "hide nulls" toggle with the prev/next pager. Callers keep the current table
+ * in place until this swaps it in, so paging never flashes. The range spans the
+ * value indices this window consumed (`start`..`next`), which under null-skip
+ * can be far wider than the handful of rows shown.
  */
-function renderPreviewTable(result: HTMLElement, entries: PreviewEntry[]): void {
-    const nulls = entries.reduce((n, e) => n + (e.value === null ? 1 : 0), 0);
-    const count = `${formatNumber(entries.length)} value${entries.length === 1 ? '' : 's'}`;
-    const header = nulls > 0 ? `${count} · ${formatNumber(nulls)} null` : count;
-    const filter =
+function renderPreviewWindow(result: HTMLElement, view: PreviewWindowView): void {
+    const { entries, start, next, total, nulls, hideNulls } = view;
+    const range =
+        total === 0
+            ? '0 values'
+            : `${formatNumber(start + 1)}–${formatNumber(next)} of ${formatNumber(total)} ` +
+              `value${total === 1 ? '' : 's'}`;
+    const info = nulls > 0 ? `${range} · ${formatNumber(nulls)} null` : range;
+    const toggle =
         nulls > 0
             ? `<label class="value-preview-filter">` +
-              `<input type="checkbox" class="value-preview-hide-nulls"> hide nulls</label>`
+              `<input type="checkbox" class="value-preview-hide-nulls"${hideNulls ? ' checked' : ''}> ` +
+              `hide nulls</label>`
+            : '';
+    const canNext = next < total;
+    const buttons =
+        view.canPrev || canNext
+            ? `<div class="value-preview-buttons">` +
+              `<button type="button" class="btn btn-sm value-preview-prev"` +
+              `${view.canPrev ? '' : ' disabled'}>‹ Prev</button>` +
+              `<button type="button" class="btn btn-sm value-preview-next"` +
+              `${canNext ? '' : ' disabled'}>Next ›</button></div>`
             : '';
     result.innerHTML =
-        `<div class="value-preview-header">${header}</div>` +
-        filter +
         `<div class="value-preview-table-wrap"><table class="value-preview-table">` +
         `<thead><tr><th>#</th><th>Value</th><th title="definition level">def</th>` +
         `<th title="repetition level">rep</th></tr></thead>` +
-        `<tbody>${renderPreviewRows(entries, false)}</tbody></table></div>`;
-    const toggle = result.querySelector<HTMLInputElement>('.value-preview-hide-nulls');
-    const tbody = result.querySelector('tbody')!;
-    toggle?.addEventListener('change', () => {
-        tbody.innerHTML = renderPreviewRows(entries, toggle.checked);
-    });
+        `<tbody>${renderPreviewRows(entries)}</tbody></table></div>` +
+        `<div class="value-preview-pager">` +
+        `<div class="value-preview-info"><span class="value-preview-range">${info}</span>${toggle}</div>` +
+        `${buttons}</div>`;
+    result
+        .querySelector<HTMLInputElement>('.value-preview-hide-nulls')
+        ?.addEventListener('change', e =>
+            view.onToggleNulls((e.target as HTMLInputElement).checked)
+        );
+    result.querySelector('.value-preview-prev')?.addEventListener('click', () => view.onPrev());
+    result.querySelector('.value-preview-next')?.addEventListener('click', () => view.onNext());
 }
 
 type Row = [string, string | number];
@@ -903,24 +942,57 @@ export class InfoPanelManager {
             `<div class="value-preview-result"></div>`;
         const button = section.querySelector<HTMLButtonElement>('.value-preview-btn')!;
         const result = section.querySelector<HTMLElement>('.value-preview-result')!;
-        button.addEventListener('click', () => {
-            button.disabled = true;
-            result.textContent = 'Decoding values...';
-            this.valuePreview!(target.rowGroup, target.column, target.pageIndex).then(
+        // "hide nulls" is a worker-side scan mode, not a client filter: each
+        // window is up to PREVIEW_PAGE_SIZE non-null values, so its span can skip
+        // over far more of the page. That makes window starts irregular, so Prev
+        // walks a history of the starts we paged through rather than arithmetic.
+        let hideNulls = false;
+        const history: number[] = [];
+        // Fetch one window and render it with its pager; prev/next/toggle re-invoke
+        // this. The first call decodes the page (may read bytes / fail); later
+        // calls hit the worker's cached page, so they're local and effectively
+        // can't fail. Pager nav leaves the current table in place until the new
+        // window swaps in (no blanking flash); only the initial click spins.
+        const load = (offset: number): void => {
+            this.valuePreview!(
+                target.rowGroup,
+                target.column,
+                target.pageIndex,
+                offset,
+                PREVIEW_PAGE_SIZE,
+                hideNulls
+            ).then(
                 res => {
+                    button.remove();
                     if (res.error !== undefined) {
                         result.innerHTML = renderPreviewFailure(res.codec);
-                        button.disabled = false;
                         return;
                     }
-                    // Values are rendered: the one-shot decode is done, so the
-                    // button retires and the table takes over.
-                    button.remove();
-                    renderPreviewTable(result, res.values);
+                    renderPreviewWindow(result, {
+                        entries: res.values,
+                        start: offset,
+                        next: res.next,
+                        total: res.total,
+                        nulls: res.nulls,
+                        hideNulls,
+                        canPrev: history.length > 0,
+                        // Toggling the mode resets to the top of the page.
+                        onToggleNulls: hide => {
+                            hideNulls = hide;
+                            history.length = 0;
+                            load(0);
+                        },
+                        onPrev: () => load(history.pop() ?? 0),
+                        onNext: () => {
+                            history.push(offset);
+                            load(res.next);
+                        },
+                    });
                 },
                 (error: unknown) => {
-                    button.disabled = false;
                     if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
+                        button.remove();
+                        result.innerHTML = '';
                         this.appendRecovery(
                             result,
                             RANGE_UNSUPPORTED_MESSAGE,
@@ -930,11 +1002,17 @@ export class InfoPanelManager {
                         return;
                     }
                     // Pyodide errors embed the python traceback; the last line
-                    // is the actual exception.
+                    // is the actual exception. Keep the button so it's retryable.
                     const message = (error as Error).message.trim();
+                    button.disabled = false;
                     result.textContent = `Preview failed: ${message.split('\n').pop()!}`;
                 }
             );
+        };
+        button.addEventListener('click', () => {
+            button.disabled = true;
+            result.textContent = 'Decoding values...';
+            load(0);
         });
         return section;
     }
