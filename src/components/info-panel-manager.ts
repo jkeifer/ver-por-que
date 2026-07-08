@@ -18,7 +18,14 @@ import {
 } from '../business/segment-tree';
 import { decodeStatValue, parsePredicateValue } from '../business/stat-values';
 import type { PreviewEntry, PreviewResult, PreviewValue } from '../js/worker/pyodide-parquet';
-import type { AnyDump, ColumnStatistics, SchemaGroup, SchemaLeaf, SchemaRoot } from '../types';
+import type {
+    AnyDump,
+    ColumnMetadata,
+    ColumnStatistics,
+    SchemaGroup,
+    SchemaLeaf,
+    SchemaRoot,
+} from '../types';
 
 /** A metadata-only export lacks the physical `column_chunks` array. */
 function isMetadataOnly(dump: AnyDump): boolean {
@@ -232,6 +239,25 @@ function countColumns(node: SchemaRoot | SchemaGroup | SchemaLeaf): number {
         return node.element_type === 'group' || node.element_type === 'root' ? 0 : 1;
     }
     return Object.values(children).reduce((sum, c) => sum + countColumns(c), 0);
+}
+
+/** Bounding box + geometry-type inventory for GEOMETRY/GEOGRAPHY columns. */
+function geospatialRows(gs: NonNullable<ColumnMetadata['geospatial_statistics']>): Row[] {
+    const rows: Row[] = [];
+    const b = gs.bbox;
+    if (b) {
+        rows.push(['X Range', `${b.xmin} … ${b.xmax}`], ['Y Range', `${b.ymin} … ${b.ymax}`]);
+        if (isSet(b.zmin) && isSet(b.zmax)) {
+            rows.push(['Z Range', `${b.zmin} … ${b.zmax}`]);
+        }
+        if (isSet(b.mmin) && isSet(b.mmax)) {
+            rows.push(['M Range', `${b.mmin} … ${b.mmax}`]);
+        }
+    }
+    if (gs.geospatial_types?.length) {
+        rows.push(['Geometry Types', gs.geospatial_types.join(', ')]);
+    }
+    return rows;
 }
 
 function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null): Row[] {
@@ -545,6 +571,12 @@ const PANELS: Registry = {
         }
         if (meta?.statistics) {
             sections.push({ title: 'Statistics', rows: statRows(meta.statistics, leaf) });
+        }
+        if (meta?.geospatial_statistics) {
+            const rows = geospatialRows(meta.geospatial_statistics);
+            if (rows.length) {
+                sections.push({ title: 'Geospatial Statistics', rows });
+            }
         }
         return sections;
     },
