@@ -5,6 +5,9 @@ node_modules/
 dist/
 src/build-info.js
 
+# Overture structure dumps produced by scripts/dump-overture.py
+dist-overture/
+
 # Generated from the wheel-extracted schema by `npm run generate`
 src/generated/
 

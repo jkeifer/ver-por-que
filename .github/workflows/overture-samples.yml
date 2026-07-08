@@ -1,0 +1,141 @@
+# Weekly refresh of the Overture Maps sample dumps.
+#
+# scripts/dump-overture.py resolves the latest Overture release via the STAC
+# catalog and footer-reads one parquet part per theme with por-que (self-
+# contained: the script's inline uv metadata declares por-que, so `uv run`
+# provisions it). Validated structure dumps are published to the orphan
+# `samples-data` branch at fixed paths; samples.json points the Overture sample
+# cards at those raw.githubusercontent URLs.
+#
+# Shape: one matrix job PER THEME resolves the release + parquet URL first and
+# does work only if that theme's published release changed (isolation — a flaky
+# S3 read on one theme can't sink the others). A single fan-in `publish` job
+# then validates and commits whatever themes produced a dump, so the four theme
+# jobs never race to push the same branch.
+#
+# ONE-TIME BOOTSTRAP (human, not this workflow):
+#   The `samples-data` branch must exist before the Overture cards work (until
+#   then they 404). Create it once as an orphan with no shared history:
+#       git checkout --orphan samples-data && git rm -rf .
+#       git commit --allow-empty -m "init samples-data" && git push origin samples-data
+#   Then run this workflow once via workflow_dispatch to populate it.
+
+name: Overture samples
+
+on:
+  schedule:
+    # Mondays 06:00 UTC. Overture releases roughly monthly; the per-theme
+    # resolve step makes an unchanged week a cheap no-op (no uv/npm setup).
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: overture-samples
+  cancel-in-progress: false
+
+jobs:
+  theme:
+    strategy:
+      fail-fast: false
+      matrix:
+        theme: [buildings, places, transportation, divisions]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Stdlib-only resolve (no por-que): get this theme's latest release + URL
+      # and compare against the release already published for it. Work happens
+      # only when they differ — so an unchanged theme ends here.
+      - id: resolve
+        run: |
+          set -euo pipefail
+          RESOLVED=$(python scripts/dump-overture.py --resolve '${{ matrix.theme }}')
+          echo "$RESOLVED" >> "$GITHUB_OUTPUT"   # sets steps.resolve.outputs.release + .url
+          RELEASE=$(echo "$RESOLVED" | sed -n 's/^release=//p')
+          PUBLISHED=$(curl -fsSL \
+            "https://raw.githubusercontent.com/${{ github.repository }}/samples-data/overture-${{ matrix.theme }}.release" \
+            2>/dev/null | tr -d '[:space:]' || echo "")
+          echo "published=$PUBLISHED"
+          if [ "$RELEASE" = "$PUBLISHED" ]; then
+            echo "work=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::${{ matrix.theme }} already at $RELEASE; nothing to do"
+          else
+            echo "work=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install uv
+        if: steps.resolve.outputs.work == 'true'
+        uses: astral-sh/setup-uv@v5
+
+      - name: Dump this theme (uv provisions por-que from the script)
+        if: steps.resolve.outputs.work == 'true'
+        run: uv run scripts/dump-overture.py --theme '${{ matrix.theme }}' dist-overture
+
+      - name: Upload dump artifact
+        if: steps.resolve.outputs.work == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: overture-${{ matrix.theme }}
+          path: |
+            dist-overture/overture-${{ matrix.theme }}.dump.json
+            dist-overture/overture-${{ matrix.theme }}.release
+          if-no-files-found: error
+
+  publish:
+    needs: theme
+    # Run even if some theme jobs were skipped (no work) or failed — publish
+    # whatever succeeded.
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: incoming
+          pattern: overture-*
+          merge-multiple: true
+
+      # No artifacts => every theme was already current => nothing to publish.
+      - id: collect
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          files=(incoming/overture-*.dump.json)
+          echo "count=${#files[@]}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v4
+        if: steps.collect.outputs.count != '0'
+        with:
+          node-version: 24
+          cache: npm
+
+      # Validate every produced dump with the app's exact ajv validator before
+      # it can be published (regenerate the validators from the pinned schema).
+      - name: Validate dumps
+        if: steps.collect.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run wheel
+          npm run generate
+          node scripts/validate-dump.mjs incoming/overture-*.dump.json
+
+      - name: Publish to samples-data
+        if: steps.collect.outputs.count != '0'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git fetch origin samples-data
+          git worktree add ../samples-data origin/samples-data
+          cp incoming/overture-*.dump.json incoming/overture-*.release ../samples-data/
+          git -C ../samples-data add overture-*.dump.json overture-*.release
+          git -C ../samples-data commit -m "Overture samples update ($(date -u +%Y-%m-%d))"
+          git -C ../samples-data push origin HEAD:samples-data
