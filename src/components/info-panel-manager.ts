@@ -168,9 +168,10 @@ function previewValueCell(value: PreviewValue): string {
         return '<span class="value-preview-null">NULL</span>';
     }
     const s = String(value);
-    return escapeHtml(
-        s.length > PREVIEW_VALUE_MAX_CHARS ? `${s.slice(0, PREVIEW_VALUE_MAX_CHARS - 1)}…` : s
-    );
+    if (s.length > PREVIEW_VALUE_MAX_CHARS) {
+        return escapeHtml(`${s.slice(0, PREVIEW_VALUE_MAX_CHARS - 1)}…`) + copyButton(s);
+    }
+    return escapeHtml(s);
 }
 
 /** tbody rows; `#` is each value's own absolute page index (sparse under null-skip). */
@@ -250,7 +251,22 @@ function renderPreviewWindow(result: HTMLElement, view: PreviewWindowView): void
     result.querySelector('.value-preview-next')?.addEventListener('click', () => view.onNext());
 }
 
-type Row = [string, string | number];
+/** A label/value row; an optional third element is the full value to copy when
+ *  the displayed value is truncated. */
+type Row = [string, string | number] | [string, string | number, string];
+
+/** A copy-to-clipboard button carrying the full (untruncated) value. */
+function copyButton(full: string): string {
+    return (
+        `<button type="button" class="copy-btn" data-copy="${escapeHtml(full)}"` +
+        ` title="Copy full value" aria-label="Copy full value">⧉</button>`
+    );
+}
+
+/** Truncate for display, returning `[shown, full]` where full is set only when clipped. */
+function truncateCopy(full: string, max: number): [string, string?] {
+    return full.length > max ? [`${full.slice(0, max - 3)}...`, full] : [full];
+}
 interface Section {
     title: string;
     rows?: Row[];
@@ -352,25 +368,23 @@ function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null, wkb = false
     // min/max_value are base64 raw physical bytes; decode with the leaf's type
     // when we can, else fall back to the raw string (INT96/binary =
     // decodeStatValue returns undefined, matching the pruning engine's honesty).
-    const val = (v: string | null | undefined): string => {
+    const cell = (label: string, v: string | null | undefined): Row => {
         if (v === null || v === undefined) {
-            return 'N/A';
+            return [label, 'N/A'];
         }
+        let full: string | undefined;
         if (wkb) {
             // WKB min/max are geometries too; summarize like the value preview.
             const bytes = base64Bytes(v);
-            const summary = bytes && describeWkb(bytes);
-            if (summary) {
-                return summary;
-            }
+            full = (bytes && describeWkb(bytes)) || undefined;
         }
-        const display = leaf ? formatStatValue(v, leaf) : undefined;
-        const s = display ?? v;
-        return s.length > 50 ? `${s.slice(0, 47)}...` : s;
+        full ??= (leaf ? formatStatValue(v, leaf) : undefined) ?? v;
+        const [shown, copy] = truncateCopy(full, 50);
+        return copy === undefined ? [label, shown] : [label, shown, copy];
     };
     const rows: Row[] = [
-        ['Min Value', val(stats.min_value)],
-        ['Max Value', val(stats.max_value)],
+        cell('Min Value', stats.min_value),
+        cell('Max Value', stats.max_value),
         ['Null Count', stats.null_count === null ? 'N/A' : formatNumber(stats.null_count)],
         [
             'Distinct Count',
@@ -929,7 +943,7 @@ const PANELS: Registry = {
         return [layout(node), { title: 'Schema Group', rows }];
     },
 
-    schema_leaf: node => {
+    schema_leaf: (node, dump) => {
         const l = node.node;
         const rows: Row[] = [
             ['Name', l.name],
@@ -938,6 +952,10 @@ const PANELS: Registry = {
             ['Logical Type', logicalTypeLabel(l.logical_type) ?? 'None'],
             ['Converted Type', l.converted_type ?? 'None'],
         ];
+        // GeoParquet geometry has no logical type; name it (mirrors the chunk views).
+        if (geoparquetColumns(dump)[l.name]?.encoding === 'WKB') {
+            rows.push(['Interpreted As', 'WKB geometry (GeoParquet)']);
+        }
         if (isSet(l.field_id)) {
             rows.push(['Field ID', l.field_id]);
         }
@@ -1030,10 +1048,10 @@ const PANELS: Registry = {
         layout(node),
         {
             title: 'Key-Value Metadata',
-            rows: node.entries.map(e => [
-                e.key,
-                e.value.length > 50 ? `${e.value.slice(0, 47)}...` : e.value,
-            ]),
+            rows: node.entries.map((e): Row => {
+                const [shown, copy] = truncateCopy(e.value, 50);
+                return copy === undefined ? [e.key, shown] : [e.key, shown, copy];
+            }),
         },
     ],
 
@@ -1076,6 +1094,16 @@ export class InfoPanelManager {
         this.infoPanel.className = 'info-panel';
         this.infoPanel.style.display = 'none';
         this.container.appendChild(this.infoPanel);
+        // Delegated: copy buttons live in truncated stat/kv/preview cells that
+        // are re-rendered often, so listen once on the stable panel.
+        this.infoPanel.addEventListener('click', e => {
+            const btn = (e.target as HTMLElement).closest('.copy-btn');
+            if (btn instanceof HTMLElement && btn.dataset.copy !== undefined) {
+                void navigator.clipboard?.writeText(btn.dataset.copy);
+                btn.classList.add('copied');
+                window.setTimeout(() => btn.classList.remove('copied'), 1000);
+            }
+        });
     }
 
     /**
@@ -1373,8 +1401,9 @@ export class InfoPanelManager {
             section.html ??
             `<div class="info-grid">${(section.rows ?? [])
                 .map(
-                    ([label, value]) =>
-                        `<div class="info-item"><span class="info-label">${escapeHtml(String(label))}:</span><span class="info-value">${escapeHtml(String(value))}</span></div>`
+                    ([label, value, copy]) =>
+                        `<div class="info-item"><span class="info-label">${escapeHtml(String(label))}:</span>` +
+                        `<span class="info-value">${escapeHtml(String(value))}${copy !== undefined ? copyButton(copy) : ''}</span></div>`
                 )
                 .join('')}</div>`;
         const card = section.html ? 'large-card' : 'regular-card';

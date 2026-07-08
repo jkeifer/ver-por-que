@@ -734,6 +734,28 @@ code {
     flex-grow: 1;
 }
 
+.copy-btn {
+    margin-left: var(--spacing-xs);
+    padding: 0 4px;
+    border: none;
+    background: none;
+    color: var(--text-secondary);
+    cursor: pointer;
+    font-size: 0.85rem;
+    line-height: 1;
+    opacity: 0.55;
+    vertical-align: baseline;
+}
+
+.copy-btn:hover {
+    opacity: 1;
+}
+
+.copy-btn.copied {
+    color: var(--success, #2e7d32);
+    opacity: 1;
+}
+
 /* Responsive design */
 @media (max-width: 768px) {
     .app-main {
