@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # Weekly bump of the SHA-pinned action refs (and their version comments).
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # One PR for all action bumps instead of one per action.
+      actions:
+        patterns:
+          - "*"
