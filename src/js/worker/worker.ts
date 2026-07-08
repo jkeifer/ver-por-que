@@ -91,8 +91,15 @@ ctx.addEventListener('message', event => {
                 return;
             }
             if (req.preview) {
-                const { rowGroup, column, pageIndex } = req.preview;
-                const preview = await parser.preview(rowGroup, column, pageIndex);
+                const { rowGroup, column, pageIndex, offset, limit, skipNulls } = req.preview;
+                const preview = await parser.preview(
+                    rowGroup,
+                    column,
+                    pageIndex,
+                    offset,
+                    limit,
+                    skipNulls
+                );
                 ctx.postMessage({ id: req.id, ok: true, preview });
                 return;
             }

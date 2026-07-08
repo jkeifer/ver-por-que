@@ -57,14 +57,22 @@ export interface ProbeBloomRequest {
 }
 
 /**
- * Decode every value of a single data page in the worker's current file.
- * Codec-unavailable failures come back as a typed success payload
- * (PreviewResult), never an error response.
+ * Decode one `[offset, offset+limit)` window of a data page in the worker's
+ * current file (the page is decoded once and cached, so pagination re-slices
+ * rather than re-decodes). Codec-unavailable failures come back as a typed
+ * success payload (PreviewResult), never an error response.
  */
 export interface PreviewRequest {
     id: number;
     manifestUrl: string;
-    preview: { rowGroup: number; column: string; pageIndex: number };
+    preview: {
+        rowGroup: number;
+        column: string;
+        pageIndex: number;
+        offset: number;
+        limit: number;
+        skipNulls: boolean;
+    };
     warmup?: undefined;
     probe?: undefined;
     boot?: undefined;

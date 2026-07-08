@@ -106,11 +106,22 @@ export class ParquetWorkerClient {
     }
 
     /**
-     * Decodes every value of a single data page in the worker's current file.
+     * Decodes a window of a data page in the worker's current file, starting at
+     * value `offset`. With `skipNulls`, the window is up to `limit` non-null
+     * values. The page is decoded once and cached, so paging is cheap.
      * Codec-unavailable results resolve (typed), never reject.
      */
-    preview(rowGroup: number, column: string, pageIndex: number): Promise<PreviewResult> {
-        return this.request({ preview: { rowGroup, column, pageIndex } }).then(msg => msg.preview!);
+    preview(
+        rowGroup: number,
+        column: string,
+        pageIndex: number,
+        offset: number,
+        limit: number,
+        skipNulls: boolean
+    ): Promise<PreviewResult> {
+        return this.request({
+            preview: { rowGroup, column, pageIndex, offset, limit, skipNulls },
+        }).then(msg => msg.preview!);
     }
 
     /**

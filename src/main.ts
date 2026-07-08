@@ -303,8 +303,8 @@ class ParquetExplorer {
 
     /** Value decoder routed at the same worker current-file slot. */
     private workerValuePreview(): ValuePreview {
-        return (rowGroup, column, pageIndex) =>
-            this.workerClient!.preview(rowGroup, column, pageIndex);
+        return (rowGroup, column, pageIndex, offset, limit, skipNulls) =>
+            this.workerClient!.preview(rowGroup, column, pageIndex, offset, limit, skipNulls);
     }
 
     private ensureWorkerClient(): ParquetWorkerClient {
@@ -397,9 +397,16 @@ class ParquetExplorer {
                 this.ensureWorkerBooted(url).then(() =>
                     this.workerClient!.probeBloom(rowGroup, column, value)
                 );
-            this.valuePreview = (rowGroup, column, pageIndex) =>
+            this.valuePreview = (rowGroup, column, pageIndex, offset, limit, skipNulls) =>
                 this.ensureWorkerBooted(url).then(() =>
-                    this.workerClient!.preview(rowGroup, column, pageIndex)
+                    this.workerClient!.preview(
+                        rowGroup,
+                        column,
+                        pageIndex,
+                        offset,
+                        limit,
+                        skipNulls
+                    )
                 );
         }
     }
