@@ -756,27 +756,22 @@ const PANELS: Registry = {
         return sections;
     },
 
-    dictionary_page: node => [
-        layout(node),
-        {
-            title: 'Dictionary Page',
-            rows: [
-                ['Page Type', node.page.page_type ?? 'DICTIONARY_PAGE'],
-                ['Encoding', node.page.encoding],
-                ['Values', formatNumber(node.page.num_values)],
-                ['Header Size', formatBytes(node.page.header_size)],
-                ['Compressed Size', formatBytes(node.page.compressed_page_size)],
-                ['Uncompressed Size', formatBytes(node.page.uncompressed_page_size)],
-                [
-                    'Compression Ratio',
-                    ratio(node.page.compressed_page_size, node.page.uncompressed_page_size),
-                ],
-                ...(isSet(node.page.is_sorted)
-                    ? ([['Sorted', node.page.is_sorted ? 'Yes' : 'No']] as Row[])
-                    : []),
-            ],
-        },
-    ],
+    dictionary_page: node => {
+        const p = node.page;
+        const rows: Row[] = [
+            ['Page Type', p.page_type ?? 'DICTIONARY_PAGE'],
+            ['Encoding', p.encoding],
+            ['Values', formatNumber(p.num_values)],
+            ['Header Size', formatBytes(p.header_size)],
+            ['Compressed Size', formatBytes(p.compressed_page_size)],
+            ['Uncompressed Size', formatBytes(p.uncompressed_page_size)],
+            ['Compression Ratio', ratio(p.compressed_page_size, p.uncompressed_page_size)],
+        ];
+        if (isSet(p.is_sorted)) {
+            rows.push(['Sorted', p.is_sorted ? 'Yes' : 'No']);
+        }
+        return [layout(node), { title: 'Dictionary Page', rows }];
+    },
 
     data_page: (node, dump) => {
         const p = node.page;
@@ -820,68 +815,57 @@ const PANELS: Registry = {
         },
     ],
 
-    column_index: node => [
-        layout(node),
-        {
-            title: 'Column Index',
-            degraded: node.index ? undefined : 'metadata-only',
-            rows: [
-                ['Column', node.path],
-                // index === null in a metadata-only export: span only, no contents.
-                ...(node.index
-                    ? ([
-                          ['Boundary Order', node.index.boundary_order],
-                          ['Pages', formatNumber(node.index.null_pages.length)],
-                          ...(node.index.null_counts?.length
-                              ? [
-                                    [
-                                        'Total Nulls',
-                                        formatNumber(
-                                            node.index.null_counts.reduce((a, b) => a + b, 0)
-                                        ),
-                                    ],
-                                ]
-                              : []),
-                          ...(node.index.definition_level_histograms?.length ||
-                          node.index.repetition_level_histograms?.length
-                              ? [['Level Histograms', 'present']]
-                              : []),
-                      ] as Row[])
-                    : ([['Detail', METADATA_ONLY_NOTE]] as Row[])),
-                ['Purpose', 'Per-page min/max and null stats for predicate push-down'],
-            ],
-        },
-    ],
+    column_index: node => {
+        const rows: Row[] = [['Column', node.path]];
+        // index === null in a metadata-only export: span only, no contents.
+        if (node.index) {
+            rows.push(
+                ['Boundary Order', node.index.boundary_order],
+                ['Pages', formatNumber(node.index.null_pages.length)]
+            );
+            if (node.index.null_counts?.length) {
+                rows.push([
+                    'Total Nulls',
+                    formatNumber(node.index.null_counts.reduce((a, b) => a + b, 0)),
+                ]);
+            }
+            if (
+                node.index.definition_level_histograms?.length ||
+                node.index.repetition_level_histograms?.length
+            ) {
+                rows.push(['Level Histograms', 'present']);
+            }
+        } else {
+            rows.push(['Detail', METADATA_ONLY_NOTE]);
+        }
+        rows.push(['Purpose', 'Per-page min/max and null stats for predicate push-down']);
+        return [
+            layout(node),
+            { title: 'Column Index', degraded: node.index ? undefined : 'metadata-only', rows },
+        ];
+    },
 
-    offset_index: node => [
-        layout(node),
-        {
-            title: 'Offset Index',
-            degraded: node.index ? undefined : 'metadata-only',
-            rows: [
-                ['Column', node.path],
-                ...(node.index
-                    ? ([
-                          ['Page Locations', formatNumber(node.index.page_locations.length)],
-                          ...(node.index.unencoded_byte_array_data_bytes?.length
-                              ? [
-                                    [
-                                        'Unencoded Size',
-                                        formatBytes(
-                                            node.index.unencoded_byte_array_data_bytes.reduce(
-                                                (a, b) => a + b,
-                                                0
-                                            )
-                                        ),
-                                    ],
-                                ]
-                              : []),
-                      ] as Row[])
-                    : ([['Detail', METADATA_ONLY_NOTE]] as Row[])),
-                ['Purpose', 'Page byte offsets and row ranges for seeking'],
-            ],
-        },
-    ],
+    offset_index: node => {
+        const rows: Row[] = [['Column', node.path]];
+        if (node.index) {
+            rows.push(['Page Locations', formatNumber(node.index.page_locations.length)]);
+            if (node.index.unencoded_byte_array_data_bytes?.length) {
+                rows.push([
+                    'Unencoded Size',
+                    formatBytes(
+                        node.index.unencoded_byte_array_data_bytes.reduce((a, b) => a + b, 0)
+                    ),
+                ]);
+            }
+        } else {
+            rows.push(['Detail', METADATA_ONLY_NOTE]);
+        }
+        rows.push(['Purpose', 'Page byte offsets and row ranges for seeking']);
+        return [
+            layout(node),
+            { title: 'Offset Index', degraded: node.index ? undefined : 'metadata-only', rows },
+        ];
+    },
 
     bloom_filter: node => [
         layout(node),
