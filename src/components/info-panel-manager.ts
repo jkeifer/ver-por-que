@@ -328,6 +328,26 @@ function geoparquetRows(g: GeoColumn): Row[] {
     return rows;
 }
 
+/** Per-level histograms + unencoded footprint from a column's size statistics. */
+function sizeStatRows(ss: NonNullable<ColumnMetadata['size_statistics']>): Row[] {
+    const rows: Row[] = [];
+    if (isSet(ss.unencoded_byte_array_data_bytes)) {
+        rows.push(['Unencoded Size', formatBytes(ss.unencoded_byte_array_data_bytes)]);
+    }
+    if (ss.definition_level_histogram?.length) {
+        rows.push(['Definition Levels', `[${ss.definition_level_histogram.join(', ')}]`]);
+    }
+    if (ss.repetition_level_histogram?.length) {
+        rows.push(['Repetition Levels', `[${ss.repetition_level_histogram.join(', ')}]`]);
+    }
+    return rows;
+}
+
+/** One "page-type · encoding → count" row per entry in the column's encoding stats. */
+function encodingStatRows(es: NonNullable<ColumnMetadata['encoding_stats']>): Row[] {
+    return es.map(s => [`${s.page_type} · ${s.encoding}`, formatNumber(s.count)]);
+}
+
 function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null, wkb = false): Row[] {
     // min/max_value are base64 raw physical bytes; decode with the leaf's type
     // when we can, else fall back to the raw string (INT96/binary =
@@ -348,7 +368,7 @@ function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null, wkb = false
         const s = display ?? v;
         return s.length > 50 ? `${s.slice(0, 47)}...` : s;
     };
-    return [
+    const rows: Row[] = [
         ['Min Value', val(stats.min_value)],
         ['Max Value', val(stats.max_value)],
         ['Null Count', stats.null_count === null ? 'N/A' : formatNumber(stats.null_count)],
@@ -359,6 +379,14 @@ function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null, wkb = false
                 : formatNumber(stats.distinct_count),
         ],
     ];
+    // Exact/estimated flags matter for trusting min/max after row skipping.
+    if (isSet(stats.is_min_value_exact)) {
+        rows.push(['Min Exact', stats.is_min_value_exact ? 'Yes' : 'No']);
+    }
+    if (isSet(stats.is_max_value_exact)) {
+        rows.push(['Max Exact', stats.is_max_value_exact ? 'Yes' : 'No']);
+    }
+    return rows;
 }
 
 /** Aggregate page-type / encoding counts across all data pages (overview). */
@@ -583,6 +611,21 @@ const PANELS: Registry = {
                 ['Uncompressed Size', formatBytes(cs.total_uncompressed)],
                 ['Compression Ratio', ratio(cs.total_compressed, cs.total_uncompressed)]
             );
+            const sc = node.group.sorting_columns;
+            if (sc?.length) {
+                // column_idx indexes the row group's columns in schema order.
+                const names = Object.keys(node.group.column_chunks);
+                rows.push([
+                    'Sorted By',
+                    sc
+                        .map(
+                            s =>
+                                `${names[s.column_idx] ?? `col ${s.column_idx}`} ` +
+                                `${s.descending ? 'DESC' : 'ASC'}${s.nulls_first ? ' (nulls first)' : ''}`
+                        )
+                        .join(', '),
+                ]);
+            }
         }
         return [layout(node), { title: 'Row Group', rows }];
     },
@@ -641,6 +684,15 @@ const PANELS: Registry = {
                     formatOffset(meta.dictionary_page_offset),
                 ]);
             }
+            if (isSet(meta.index_page_offset)) {
+                pageRows.push(['Index Page Offset', formatOffset(meta.index_page_offset)]);
+            }
+            if (isSet(meta.bloom_filter_offset)) {
+                pageRows.push([
+                    'Bloom Filter',
+                    `present @ ${formatOffset(meta.bloom_filter_offset)}`,
+                ]);
+            }
         }
         // chunk === null => metadata-only export: page structure isn't in the dump.
         if (chunk) {
@@ -676,6 +728,15 @@ const PANELS: Registry = {
                 sections.push({ title: 'Geospatial Statistics', rows });
             }
         }
+        if (meta?.size_statistics) {
+            const rows = sizeStatRows(meta.size_statistics);
+            if (rows.length) {
+                sections.push({ title: 'Size Statistics', rows });
+            }
+        }
+        if (meta?.encoding_stats?.length) {
+            sections.push({ title: 'Encoding Stats', rows: encodingStatRows(meta.encoding_stats) });
+        }
         return sections;
     },
 
@@ -694,6 +755,9 @@ const PANELS: Registry = {
                     'Compression Ratio',
                     ratio(node.page.compressed_page_size, node.page.uncompressed_page_size),
                 ],
+                ...(isSet(node.page.is_sorted)
+                    ? ([['Sorted', node.page.is_sorted ? 'Yes' : 'No']] as Row[])
+                    : []),
             ],
         },
     ],
@@ -709,6 +773,15 @@ const PANELS: Registry = {
             ['Uncompressed Size', formatBytes(p.uncompressed_page_size)],
             ['Compression Ratio', ratio(p.compressed_page_size, p.uncompressed_page_size)],
         ];
+        // V2 pages carry row/null counts and the level bytes inline (unlike V1).
+        if ('num_rows' in p) {
+            rows.push(
+                ['Rows', formatNumber(p.num_rows)],
+                ['Nulls', formatNumber(p.num_nulls)],
+                ['Definition Levels Size', formatBytes(p.definition_levels_byte_length)],
+                ['Repetition Levels Size', formatBytes(p.repetition_levels_byte_length)]
+            );
+        }
         const sections: Section[] = [layout(node), { title: 'Data Page', rows }];
         if (p.statistics) {
             const leaf = findSchemaLeaf(dump.metadata.schema_root, node.path);
@@ -743,6 +816,20 @@ const PANELS: Registry = {
                     ? ([
                           ['Boundary Order', node.index.boundary_order],
                           ['Pages', formatNumber(node.index.null_pages.length)],
+                          ...(node.index.null_counts?.length
+                              ? [
+                                    [
+                                        'Total Nulls',
+                                        formatNumber(
+                                            node.index.null_counts.reduce((a, b) => a + b, 0)
+                                        ),
+                                    ],
+                                ]
+                              : []),
+                          ...(node.index.definition_level_histograms?.length ||
+                          node.index.repetition_level_histograms?.length
+                              ? [['Level Histograms', 'present']]
+                              : []),
                       ] as Row[])
                     : ([['Detail', METADATA_ONLY_NOTE]] as Row[])),
                 ['Purpose', 'Per-page min/max and null stats for predicate push-down'],
@@ -760,6 +847,19 @@ const PANELS: Registry = {
                 ...(node.index
                     ? ([
                           ['Page Locations', formatNumber(node.index.page_locations.length)],
+                          ...(node.index.unencoded_byte_array_data_bytes?.length
+                              ? [
+                                    [
+                                        'Unencoded Size',
+                                        formatBytes(
+                                            node.index.unencoded_byte_array_data_bytes.reduce(
+                                                (a, b) => a + b,
+                                                0
+                                            )
+                                        ),
+                                    ],
+                                ]
+                              : []),
                       ] as Row[])
                     : ([['Detail', METADATA_ONLY_NOTE]] as Row[])),
                 ['Purpose', 'Page byte offsets and row ranges for seeking'],
@@ -831,6 +931,9 @@ const PANELS: Registry = {
         }
         if (isSet(l.scale)) {
             rows.push(['Scale', l.scale]);
+        }
+        if (isSet(l.list_semantics)) {
+            rows.push(['List Semantics', l.list_semantics]);
         }
         return [layout(node), { title: 'Schema Column', rows }];
     },
