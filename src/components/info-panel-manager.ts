@@ -74,6 +74,22 @@ function isWkbColumn(leaf: SchemaLeaf | null | undefined, geo: GeoColumn | undef
     return lt === 'GEOMETRY' || lt === 'GEOGRAPHY' || geo?.encoding === 'WKB';
 }
 
+/**
+ * Display type for a column, GeoParquet-aware. A GeoParquet geometry column has
+ * no logical type, so the pure leaf displayType falls back to BYTE_ARRAY; name
+ * it from the `geo` metadata instead. Used consistently by every column view.
+ */
+function columnDisplayType(
+    leaf: SchemaLeaf | null | undefined,
+    geo: GeoColumn | undefined,
+    physicalFallback: string
+): string {
+    if (geo?.encoding === 'WKB') {
+        return 'WKB geometry (GeoParquet)';
+    }
+    return leaf ? displayType(leaf) : physicalFallback;
+}
+
 const METADATA_ONLY_NOTE =
     'Page detail is not in a metadata-only dump — load the original .parquet to see pages.';
 
@@ -163,9 +179,8 @@ function previewValueCell(value: PreviewValue, isWkb = false): string {
         const bytes = base64Bytes(value);
         const summary = bytes && describeWkb(bytes);
         if (summary) {
-            const geojson = bytes && wkbToGeoJson(bytes);
-            const copy = geojson ? copyButton(JSON.stringify(geojson), 'Copy as GeoJSON') : '';
-            return escapeHtml(summary) + copy;
+            // Carry the base64 WKB, not the GeoJSON; convert on click (see button).
+            return escapeHtml(summary) + copyGeoJsonButton(value);
         }
     }
     const s = String(value);
@@ -263,6 +278,18 @@ function copyButton(full: string, label = 'Copy full value'): string {
     return (
         `<button type="button" class="copy-btn" data-copy="${escapeHtml(full)}"` +
         ` title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">⧉</button>`
+    );
+}
+
+/**
+ * Copy button that holds base64 WKB and converts it to GeoJSON on click. A
+ * preview page can hold 100 large geometries, so embedding each one's GeoJSON
+ * up front would put megabytes in the DOM; convert lazily instead.
+ */
+function copyGeoJsonButton(base64Wkb: string): string {
+    return (
+        `<button type="button" class="copy-btn" data-copy-wkb="${escapeHtml(base64Wkb)}"` +
+        ` title="Copy as GeoJSON" aria-label="Copy as GeoJSON">⧉</button>`
     );
 }
 
@@ -705,17 +732,7 @@ const PANELS: Registry = {
                     ['Physical Type', meta?.type ?? leaf?.type ?? 'Unknown'],
                     ['Logical Type', (leaf && logicalTypeLabel(leaf.logical_type)) ?? 'None'],
                     ['Converted Type', leaf?.converted_type ?? 'None'],
-                    // GeoParquet geometry has no native logical type, so the pure
-                    // leaf displayType falls back to BYTE_ARRAY; name it from the
-                    // `geo` metadata instead so it doesn't read as an opaque blob.
-                    [
-                        'Display Type',
-                        geo?.encoding === 'WKB'
-                            ? 'WKB geometry (GeoParquet)'
-                            : leaf
-                              ? displayType(leaf)
-                              : (meta?.type ?? 'Unknown'),
-                    ],
+                    ['Display Type', columnDisplayType(leaf, geo, meta?.type ?? 'Unknown')],
                 ],
             },
             {
@@ -951,17 +968,15 @@ const PANELS: Registry = {
 
     schema_leaf: (node, dump) => {
         const l = node.node;
+        const geo = geoparquetColumns(dump)[l.name];
         const rows: Row[] = [
             ['Name', l.name],
             ['Physical Type', l.type],
             ['Repetition', l.repetition],
             ['Logical Type', logicalTypeLabel(l.logical_type) ?? 'None'],
             ['Converted Type', l.converted_type ?? 'None'],
+            ['Display Type', columnDisplayType(l, geo, l.type)],
         ];
-        // GeoParquet geometry has no logical type; name it (mirrors the chunk views).
-        if (geoparquetColumns(dump)[l.name]?.encoding === 'WKB') {
-            rows.push(['Interpreted As', 'WKB geometry (GeoParquet)']);
-        }
         if (isSet(l.field_id)) {
             rows.push(['Field ID', l.field_id]);
         }
@@ -1032,11 +1047,7 @@ const PANELS: Registry = {
                 rows: [
                     ['Column', node.path],
                     ['Physical Type', m.type],
-                    // GeoParquet geometry has no logical type; name it so BYTE_ARRAY
-                    // doesn't read as an opaque blob (mirrors the column_chunk view).
-                    ...(geo?.encoding === 'WKB'
-                        ? ([['Interpreted As', 'WKB geometry (GeoParquet)']] as Row[])
-                        : []),
+                    ['Display Type', columnDisplayType(leaf, geo, m.type)],
                     ['Codec', m.codec],
                     ['Encodings', m.encodings.join(', ')],
                     ['Values', formatNumber(m.num_values)],
@@ -1104,8 +1115,20 @@ export class InfoPanelManager {
         // are re-rendered often, so listen once on the stable panel.
         this.infoPanel.addEventListener('click', e => {
             const btn = (e.target as HTMLElement).closest('.copy-btn');
-            if (btn instanceof HTMLElement && btn.dataset.copy !== undefined) {
-                void navigator.clipboard?.writeText(btn.dataset.copy);
+            if (!(btn instanceof HTMLElement)) {
+                return;
+            }
+            let text: string | undefined;
+            if (btn.dataset.copyWkb !== undefined) {
+                // Lazy: decode base64 WKB to GeoJSON only when actually copied.
+                const bytes = base64Bytes(btn.dataset.copyWkb);
+                const geo = bytes && wkbToGeoJson(bytes);
+                text = geo ? JSON.stringify(geo) : undefined;
+            } else if (btn.dataset.copy !== undefined) {
+                text = btn.dataset.copy;
+            }
+            if (text !== undefined) {
+                void navigator.clipboard?.writeText(text);
                 btn.classList.add('copied');
                 window.setTimeout(() => btn.classList.remove('copied'), 1000);
             }
