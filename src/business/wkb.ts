@@ -4,9 +4,14 @@
  * Parquet GEOMETRY/GEOGRAPHY columns store ISO WKB in BYTE_ARRAY. This turns
  * those bytes into a short human summary — a point's coordinates, or a
  * geometry's type and total point count — never full WKT: a multipolygon's
- * coordinates would swamp the preview. Anything it can't parse (EWKB with an
- * SRID prefix, truncated bytes, unknown type codes) returns null, so the caller
- * falls back to showing the raw base64.
+ * coordinates would swamp the preview. Anything it can't parse (truncated
+ * bytes, unknown/curve type codes) returns null, so the caller falls back to
+ * showing the raw base64.
+ *
+ * ISO WKB is the Parquet-spec encoding; PostGIS EWKB (Z/M/SRID flagged in the
+ * type's high bits, with an inline SRID) is also read leniently for data that
+ * came from non-conformant writers — the SRID is skipped (CRS lives in Parquet
+ * metadata, and GeoJSON is WGS84 by definition).
  */
 
 /** WKB geometry type codes (base, before ISO Z/M dimension offsets). */
@@ -43,6 +48,42 @@ function read32(r: Reader, le: boolean): number {
     return v;
 }
 
+// EWKB flags the high bits of the type word (vs ISO WKB's +1000/2000/3000).
+const EWKB_Z = 0x80000000;
+const EWKB_M = 0x40000000;
+const EWKB_SRID = 0x20000000;
+
+/**
+ * Read a geometry header: byte order, then the type word decoded to a base
+ * type code and dimensionality, transparently handling both ISO WKB and EWKB.
+ * An EWKB inline SRID is consumed and discarded. Throws on unknown type codes
+ * (including curves, which GeoJSON can't represent).
+ */
+function readHeader(r: Reader): { le: boolean; code: number; hasZ: boolean; hasM: boolean } {
+    const le = readByteOrder(r);
+    const raw = read32(r, le);
+    let code: number;
+    let hasZ: boolean;
+    let hasM: boolean;
+    if (raw & (EWKB_Z | EWKB_M | EWKB_SRID)) {
+        code = raw & 0x0fffffff; // strip Z/M/SRID/bbox flag bits
+        hasZ = (raw & EWKB_Z) !== 0;
+        hasM = (raw & EWKB_M) !== 0;
+        if (raw & EWKB_SRID) {
+            read32(r, le); // skip the 4-byte SRID
+        }
+    } else {
+        code = raw % 1000; // ISO Z(1000)/M(2000)/ZM(3000) offset
+        const kind = Math.floor(raw / 1000);
+        hasZ = kind === 1 || kind === 3;
+        hasM = kind === 2 || kind === 3;
+    }
+    if (!(code in NAMES)) {
+        throw new Error('unknown geometry type');
+    }
+    return { le, code, hasZ, hasM };
+}
+
 /** Read `count` coordinates of `dim` doubles each; keep the first x,y seen. */
 function readCoords(r: Reader, le: boolean, count: number, dim: number, firstXY: number[]): void {
     for (let i = 0; i < count; i++) {
@@ -57,14 +98,9 @@ function readCoords(r: Reader, le: boolean, count: number, dim: number, firstXY:
 
 /** Read one geometry at the cursor, accumulating its total point count. */
 function readGeom(r: Reader, firstXY: number[]): { code: number; kind: number; points: number } {
-    const le = readByteOrder(r);
-    const raw = read32(r, le);
-    const code = raw % 1000; // strip ISO Z(1000)/M(2000)/ZM(3000) offset
-    const kind = Math.floor(raw / 1000);
-    if (!(code in NAMES) || !(kind in DIM_SUFFIX)) {
-        throw new Error('unknown geometry type');
-    }
-    const dim = 2 + (kind === 1 || kind === 3 ? 1 : 0) + (kind === 2 || kind === 3 ? 1 : 0);
+    const { le, code, hasZ, hasM } = readHeader(r);
+    const kind = (hasZ ? 1 : 0) + (hasM ? 2 : 0); // index into DIM_SUFFIX
+    const dim = 2 + (hasZ ? 1 : 0) + (hasM ? 1 : 0);
     let points = 0;
     switch (code) {
         case 1: // POINT
@@ -141,15 +177,7 @@ export interface GeoJsonGeometry {
  * third ordinate; an M measure is consumed but dropped (GeoJSON has no M).
  */
 function readGeometry(r: Reader): GeoJsonGeometry {
-    const le = readByteOrder(r);
-    const raw = read32(r, le);
-    const code = raw % 1000;
-    const kind = Math.floor(raw / 1000);
-    if (!(code in NAMES)) {
-        throw new Error('unknown geometry type');
-    }
-    const hasZ = kind === 1 || kind === 3;
-    const hasM = kind === 2 || kind === 3;
+    const { le, code, hasZ, hasM } = readHeader(r);
     const coord = (): Position => {
         const p: Position = [r.view.getFloat64(r.pos, le), r.view.getFloat64(r.pos + 8, le)];
         r.pos += 16;
