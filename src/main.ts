@@ -727,60 +727,7 @@ class ParquetExplorer {
         }
     }
 
-    private loadFromIndexedDB(): Promise<StoredFile | null> {
-        return new Promise(resolve => {
-            const request = indexedDB.open(DB_NAME, 1);
-
-            request.onerror = () => resolve(null);
-
-            request.onupgradeneeded = event => {
-                const db = (event.target as IDBOpenDBRequest).result;
-                if (!db.objectStoreNames.contains('files')) {
-                    db.createObjectStore('files', { keyPath: 'id' });
-                }
-            };
-
-            request.onsuccess = event => {
-                const db = (event.target as IDBOpenDBRequest).result;
-
-                if (!db.objectStoreNames.contains('files')) {
-                    db.close();
-                    const deleteRequest = indexedDB.deleteDatabase(DB_NAME);
-                    deleteRequest.onsuccess = () => resolve(null);
-                    deleteRequest.onerror = () => resolve(null);
-                    return;
-                }
-
-                try {
-                    const transaction = db.transaction(['files'], 'readonly');
-                    const store = transaction.objectStore('files');
-                    const getRequest = store.get('current-file');
-
-                    getRequest.onsuccess = () => {
-                        db.close();
-                        resolve((getRequest.result as StoredFile | undefined) ?? null);
-                    };
-                    getRequest.onerror = () => {
-                        db.close();
-                        resolve(null);
-                    };
-                } catch {
-                    db.close();
-                    resolve(null);
-                }
-            };
-        });
-    }
-
-    private async saveToStorage(data: AnyDump, source: string): Promise<void> {
-        try {
-            await this.saveToIndexedDB(data, source);
-        } catch (error) {
-            console.warn('Failed to save to IndexedDB:', error);
-        }
-    }
-
-    private saveToIndexedDB(data: AnyDump, source: string): Promise<void> {
+    private openDB(): Promise<IDBDatabase> {
         return new Promise((resolve, reject) => {
             const request = indexedDB.open(DB_NAME, 1);
 
@@ -793,29 +740,85 @@ class ParquetExplorer {
                 }
             };
 
-            request.onsuccess = event => {
-                const db = (event.target as IDBOpenDBRequest).result;
-                const transaction = db.transaction(['files'], 'readwrite');
-                const store = transaction.objectStore('files');
+            request.onsuccess = () => resolve(request.result);
+        });
+    }
 
-                const fileData: StoredFile = {
-                    id: 'current-file',
-                    data: data,
-                    source: source,
-                    timestamp: Date.now(),
-                };
-
-                const putRequest = store.put(fileData);
-                putRequest.onsuccess = () => {
-                    db.close();
-                    resolve();
-                };
-                putRequest.onerror = () => {
-                    db.close();
-                    reject(putRequest.error);
-                };
+    private async withStore<T>(
+        mode: IDBTransactionMode,
+        run: (store: IDBObjectStore) => IDBRequest<T>
+    ): Promise<T> {
+        const db = await this.openDB();
+        return new Promise<T>((resolve, reject) => {
+            const request = run(db.transaction(['files'], mode).objectStore('files'));
+            request.onsuccess = () => {
+                db.close();
+                resolve(request.result);
+            };
+            request.onerror = () => {
+                db.close();
+                reject(request.error);
             };
         });
+    }
+
+    private async loadFromIndexedDB(): Promise<StoredFile | null> {
+        let db: IDBDatabase;
+        try {
+            db = await this.openDB();
+        } catch {
+            return null;
+        }
+
+        // onupgradeneeded only fires on a version bump, so a pre-existing v1 DB
+        // that somehow lost the 'files' store won't get it recreated by openDB.
+        // Recover by deleting the DB so the next open rebuilds it clean.
+        if (!db.objectStoreNames.contains('files')) {
+            db.close();
+            return new Promise(resolve => {
+                const deleteRequest = indexedDB.deleteDatabase(DB_NAME);
+                deleteRequest.onsuccess = () => resolve(null);
+                deleteRequest.onerror = () => resolve(null);
+            });
+        }
+
+        return new Promise(resolve => {
+            try {
+                const getRequest = db
+                    .transaction(['files'], 'readonly')
+                    .objectStore('files')
+                    .get('current-file');
+                getRequest.onsuccess = () => {
+                    db.close();
+                    resolve((getRequest.result as StoredFile | undefined) ?? null);
+                };
+                getRequest.onerror = () => {
+                    db.close();
+                    resolve(null);
+                };
+            } catch {
+                db.close();
+                resolve(null);
+            }
+        });
+    }
+
+    private async saveToStorage(data: AnyDump, source: string): Promise<void> {
+        try {
+            await this.saveToIndexedDB(data, source);
+        } catch (error) {
+            console.warn('Failed to save to IndexedDB:', error);
+        }
+    }
+
+    private async saveToIndexedDB(data: AnyDump, source: string): Promise<void> {
+        const fileData: StoredFile = {
+            id: 'current-file',
+            data: data,
+            source: source,
+            timestamp: Date.now(),
+        };
+        await this.withStore('readwrite', store => store.put(fileData));
     }
 
     private async clearStorage(): Promise<void> {
