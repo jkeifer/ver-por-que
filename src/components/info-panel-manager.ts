@@ -9,7 +9,13 @@ import { formatBytes, formatNumber, formatOffset } from '../format';
 import { logicalTypeLabel, displayType } from '../domain/parquet-type-resolver';
 import { OP_LABEL } from '../business/pruning';
 import type { Resolution } from '../business/query-model';
-import { describe, findSchemaLeaf, type Kind, type SegmentNode } from '../business/segment-tree';
+import {
+    describe,
+    findSchemaLeaf,
+    isSet,
+    type Kind,
+    type SegmentNode,
+} from '../business/segment-tree';
 import { decodeStatValue, parsePredicateValue } from '../business/stat-values';
 import type { PreviewEntry, PreviewResult, PreviewValue } from '../js/worker/pyodide-parquet';
 import type { AnyDump, ColumnStatistics, SchemaGroup, SchemaLeaf, SchemaRoot } from '../types';
@@ -177,11 +183,6 @@ function layout(node: SegmentNode): Section {
     };
 }
 
-/** True when a nullable/optional value is actually set. */
-function present<T>(v: T | null | undefined): v is T {
-    return v !== null && v !== undefined;
-}
-
 function ratio(compressed: number, uncompressed: number): string {
     return uncompressed > 0 ? `${((compressed / uncompressed) * 100).toFixed(1)}%` : 'N/A';
 }
@@ -220,17 +221,19 @@ function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null): Row[] {
 }
 
 /** Aggregate page-type / encoding counts across all data pages (overview). */
-function pageSummary(dump: AnyDump): Section | null {
+function pageSummary(dump: AnyDump): Section[] {
     // A metadata-only export carries no page structure to summarize.
     if (!('column_chunks' in dump)) {
-        return {
-            title: 'Data Pages',
-            rows: [['Detail', METADATA_ONLY_NOTE]],
-            degraded: 'metadata-only',
-        };
+        return [
+            {
+                title: 'Data Pages',
+                rows: [['Detail', METADATA_ONLY_NOTE]],
+                degraded: 'metadata-only',
+            },
+        ];
     }
     if (dump.column_chunks.length === 0) {
-        return null;
+        return [];
     }
     const pageTypes: Record<string, number> = {};
     const encodings: Record<string, number> = {};
@@ -259,21 +262,32 @@ function pageSummary(dump: AnyDump): Section | null {
         }
     }
     const pct = (n: number): string => (total > 0 ? ((n / total) * 100).toFixed(1) : '0.0');
-    const rows: Row[] = [
-        ['Total Pages', formatNumber(total)],
-        ['Average Page Size', formatBytes(total > 0 ? bytes / total : 0)],
+    const sections: Section[] = [
+        {
+            title: 'Data Page Summary',
+            rows: [
+                ['Total Pages', formatNumber(total)],
+                ['Average Page Size', formatBytes(total > 0 ? bytes / total : 0)],
+            ],
+        },
     ];
-    const list = (m: Record<string, number>): string =>
-        Object.entries(m)
-            .map(([k, n]) => `${k}: ${formatNumber(n)} (${pct(n)}%)`)
-            .join('<br>');
+    // Trusted html: each key/count is escaped, so a crafted encoding/page-type
+    // name can't inject markup. Rendered as its own card, one item per row.
+    const breakdown = (m: Record<string, number>): string =>
+        `<div class="info-grid">${Object.entries(m)
+            .map(
+                ([k, n]) =>
+                    `<div class="info-item"><span class="info-label">${escapeHtml(k)}:</span>` +
+                    `<span class="info-value">${formatNumber(n)} (${pct(n)}%)</span></div>`
+            )
+            .join('')}</div>`;
     if (Object.keys(pageTypes).length > 0) {
-        rows.push(['Page Types', list(pageTypes)]);
+        sections.push({ title: 'Page Types', html: breakdown(pageTypes) });
     }
     if (Object.keys(encodings).length > 0) {
-        rows.push(['Encodings', list(encodings)]);
+        sections.push({ title: 'Encodings', html: breakdown(encodings) });
     }
-    return { title: 'Data Page Summary', rows };
+    return sections;
 }
 
 // -- JSON value viewer (kept for key-value entries) --------------------------
@@ -374,10 +388,7 @@ const PANELS: Registry = {
                 ],
             },
         ];
-        const summary = pageSummary(dump);
-        if (summary) {
-            sections.push(summary);
-        }
+        sections.push(...pageSummary(dump));
         return sections;
     },
 
@@ -467,10 +478,10 @@ const PANELS: Registry = {
             },
         ];
         const values = chunk?.num_values ?? meta?.num_values;
-        const pageRows: Row[] = present(values) ? [['Values', formatNumber(values)]] : [];
+        const pageRows: Row[] = isSet(values) ? [['Values', formatNumber(values)]] : [];
         if (meta) {
             pageRows.push(['Data Page Offset', formatOffset(meta.data_page_offset)]);
-            if (present(meta.dictionary_page_offset)) {
+            if (isSet(meta.dictionary_page_offset)) {
                 pageRows.push([
                     'Dictionary Page Offset',
                     formatOffset(meta.dictionary_page_offset),
@@ -617,7 +628,7 @@ const PANELS: Registry = {
             ['Repetition', g.repetition],
             ['Children', g.num_children],
         ];
-        if (present(g.field_id)) {
+        if (isSet(g.field_id)) {
             rows.push(['Field ID', g.field_id]);
         }
         if (g.converted_type) {
@@ -639,16 +650,16 @@ const PANELS: Registry = {
             ['Logical Type', logicalTypeLabel(l.logical_type) ?? 'None'],
             ['Converted Type', l.converted_type ?? 'None'],
         ];
-        if (present(l.field_id)) {
+        if (isSet(l.field_id)) {
             rows.push(['Field ID', l.field_id]);
         }
-        if (present(l.type_length)) {
+        if (isSet(l.type_length)) {
             rows.push(['Type Length', l.type_length]);
         }
-        if (present(l.precision)) {
+        if (isSet(l.precision)) {
             rows.push(['Precision', l.precision]);
         }
-        if (present(l.scale)) {
+        if (isSet(l.scale)) {
             rows.push(['Scale', l.scale]);
         }
         return [layout(node), { title: 'Schema Column', rows }];
@@ -789,12 +800,9 @@ export class InfoPanelManager {
         const label = predicates.map(p => `${p.column} ${OP_LABEL[p.op]} ${p.value}`).join(' AND ');
         const rows: Row[] = [];
         if (predicates.length > 0) {
-            rows.push([
-                predicates.length === 1 ? 'Predicate' : 'Predicates (AND)',
-                escapeHtml(label),
-            ]);
+            rows.push([predicates.length === 1 ? 'Predicate' : 'Predicates (AND)', label]);
         }
-        rows.push(['Decision', escapeHtml(status.reason)]);
+        rows.push(['Decision', status.reason]);
         return { title: 'Query Pruning', rows };
     }
 
@@ -996,7 +1004,7 @@ export class InfoPanelManager {
             `<div class="info-grid">${(section.rows ?? [])
                 .map(
                     ([label, value]) =>
-                        `<div class="info-item"><span class="info-label">${label}:</span><span class="info-value">${value}</span></div>`
+                        `<div class="info-item"><span class="info-label">${escapeHtml(String(label))}:</span><span class="info-value">${escapeHtml(String(value))}</span></div>`
                 )
                 .join('')}</div>`;
         const card = section.html ? 'large-card' : 'regular-card';
