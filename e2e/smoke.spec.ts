@@ -439,3 +439,29 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
     await expect(preview).toContainText('14 values');
     await expect(preview).toContainText('Hello');
 });
+
+test(
+    'decodes geometry values in the preview through pyodide',
+    { tag: '@slow' },
+    async ({ page }) => {
+        test.skip(!hasWheel, 'run `npm run wheel` to stage the por-que/hctef wheels first');
+        test.setTimeout(240_000);
+
+        // Permalink targets the geometry data page; it applies once the parse lands.
+        await page.goto('/#node=rg_0_col_geometry_data_0');
+        await page.locator('#file-input').setInputFiles(fixture('geoparquet.parquet'));
+
+        const panel = page.locator('#info-panel-container');
+        await expect(panel).toContainText('Value Preview', { timeout: 210_000 });
+        await page.locator('.value-preview-btn').click();
+
+        // The live worker decodes the WKB BYTE_ARRAY page; the cells show geometry
+        // summaries (not base64), each with a copy-as-GeoJSON button.
+        const preview = page.locator('.value-preview-result');
+        await expect(preview).toContainText('POINT(30 10)');
+        await expect(preview).toContainText('MULTIPOLYGON');
+        await expect(
+            preview.locator('button.copy-btn[title="Copy as GeoJSON"]').first()
+        ).toBeVisible();
+    }
+);
