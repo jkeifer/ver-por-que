@@ -782,12 +782,42 @@ export class InfoPanelManager {
         this.container.appendChild(this.infoPanel);
     }
 
-    /** Set (or clear) the query overlay and refresh the open panel. */
+    /**
+     * Set (or clear) the query overlay. Only the "Query Pruning" section
+     * depends on the query, so this patches that one section in place rather
+     * than rebuilding the whole panel — a full rebuild on every query edit
+     * (each column toggle / keystroke) re-rendered unrelated DOM, including an
+     * open value-preview table, which was both wasteful and janky.
+     */
     setQuery(resolution: Resolution | null): void {
         this.query = resolution;
         if (this.current) {
-            this.show(this.current.node, this.current.dump);
+            this.updateQuerySection();
         }
+    }
+
+    /**
+     * Insert, replace, or remove just the current node's "Query Pruning"
+     * section. Placed before the interactive bloom/preview sections so its
+     * position is identical whether it's built during show() or a later
+     * setQuery, and so patching it never disturbs those live widgets.
+     */
+    private updateQuerySection(): void {
+        const container = this.infoPanel.querySelector('.info-sections');
+        if (!container) {
+            return;
+        }
+        container.querySelector('.query-pruning-section')?.remove();
+        const section = this.current ? this.querySection(this.current.node) : null;
+        if (!section) {
+            return;
+        }
+        const wrap = document.createElement('div');
+        wrap.innerHTML = this.renderSection(section);
+        const el = wrap.firstElementChild as HTMLElement;
+        el.classList.add('query-pruning-section');
+        const anchor = container.querySelector('.bloom-probe-section, .value-preview-section');
+        container.insertBefore(el, anchor);
     }
 
     /** The query decision for this node, if the query resolved a status for it. */
@@ -814,10 +844,6 @@ export class InfoPanelManager {
         const handler = PANELS[node.kind] as (n: SegmentNode, d: AnyDump) => Section[];
         const heading = node.kind === 'file' ? 'File Overview' : describe(node);
         const sections = handler(node, dump);
-        const query = this.querySection(node);
-        if (query) {
-            sections.push(query);
-        }
         if (node.kind === 'bloom_filter' && !this.bloomProbe) {
             // No live worker file (JSON dump, metadata export, or restore):
             // same degradation pattern as METADATA_ONLY_NOTE.
@@ -854,6 +880,9 @@ export class InfoPanelManager {
                 .querySelector('.info-sections')!
                 .appendChild(this.buildValuePreviewSection(preview));
         }
+        // Query section last: it anchors before the interactive sections above,
+        // matching where a later setQuery will re-insert it.
+        this.updateQuerySection();
     }
 
     /** The page a node previews, or null when it has none (only data pages do). */
