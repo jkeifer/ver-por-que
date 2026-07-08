@@ -39,34 +39,56 @@ function isStringLeaf(leaf: SchemaLeaf): boolean {
     return !lt && (leaf.converted_type === 'UTF8' || leaf.converted_type === 'ENUM');
 }
 
-/**
- * True when an INT32/INT64 leaf's raw bytes compare correctly as a plain
- * signed integer. DECIMAL (scale) and unsigned INTEGER (sign bit) do not.
- */
-function isPlainSignedInt(leaf: SchemaLeaf): boolean {
+/** True when the leaf is a DECIMAL (any physical backing). */
+function isDecimal(leaf: SchemaLeaf): boolean {
+    return leaf.logical_type?.logical_type === 'DECIMAL' || leaf.converted_type === 'DECIMAL';
+}
+
+/** DECIMAL scale, from either the logical type or the leaf-level field. */
+function decimalScale(leaf: SchemaLeaf): number {
     const lt = leaf.logical_type;
-    if (lt?.logical_type === 'DECIMAL') {
-        return false;
+    if (lt?.logical_type === 'DECIMAL' && typeof lt.scale === 'number') {
+        return lt.scale;
     }
+    return leaf.scale ?? 0;
+}
+
+/** True when the leaf is an unsigned INTEGER (sign bit is a value bit). */
+function isUnsignedInt(leaf: SchemaLeaf): boolean {
+    const lt = leaf.logical_type;
     if (lt?.logical_type === 'INTEGER' && lt.is_signed === false) {
-        return false;
+        return true;
     }
-    if (leaf.converted_type === 'DECIMAL') {
-        return false;
+    return !!leaf.converted_type?.startsWith('UINT_');
+}
+
+/** Big-endian two's-complement integer over any-length bytes (DECIMAL FLBA/BYTE_ARRAY). */
+function bigEndianTwosComplement(bytes: Uint8Array): bigint {
+    if (bytes.length === 0) {
+        return 0n;
     }
-    if (leaf.converted_type?.startsWith('UINT_')) {
-        return false;
+    let n = 0n;
+    let negative = false;
+    let first = true;
+    for (const b of bytes) {
+        if (first) {
+            negative = (b & 0x80) !== 0;
+            first = false;
+        }
+        n = (n << 8n) | BigInt(b);
     }
-    return true;
+    // Sign-extend from the high bit of the first (most significant) byte.
+    return negative ? n - (1n << BigInt(bytes.length * 8)) : n;
 }
 
 /**
  * Decode one base64 statistics value for a schema leaf.
  *
- * Supported exactly: INT32/INT64 (little-endian, signed), FLOAT/DOUBLE
- * (LE IEEE754), BOOLEAN, and BYTE_ARRAY/FIXED_LEN_BYTE_ARRAY with a
- * String/ENUM logical type (UTF-8). Everything else — INT96, decimals,
- * unsigned ints, UUIDs, raw binary — returns `undefined` = cannot evaluate.
+ * Supported exactly: INT32/INT64 (little-endian, signed or unsigned),
+ * FLOAT/DOUBLE (LE IEEE754), BOOLEAN, DECIMAL (INT/FLBA/BYTE_ARRAY backing,
+ * decoded to a scaled double), and BYTE_ARRAY/FIXED_LEN_BYTE_ARRAY with a
+ * String/ENUM logical type (UTF-8). Everything else — INT96, UUIDs, raw
+ * binary — returns `undefined` = cannot evaluate.
  */
 export function decodeStatValue(b64: string, leaf: SchemaLeaf): StatValue | undefined {
     const bytes = base64Bytes(b64);
@@ -76,13 +98,30 @@ export function decodeStatValue(b64: string, leaf: SchemaLeaf): StatValue | unde
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     switch (leaf.type) {
         case 'INT32':
-            return bytes.length === 4 && isPlainSignedInt(leaf)
-                ? view.getInt32(0, true)
-                : undefined;
+            if (bytes.length !== 4) {
+                return undefined;
+            }
+            if (isDecimal(leaf)) {
+                // ponytail: number (double) result loses precision past ~2^53;
+                // decode to exact bignum decimal if precision ever matters.
+                return view.getInt32(0, true) / 10 ** decimalScale(leaf);
+            }
+            if (isUnsignedInt(leaf)) {
+                return view.getUint32(0, true);
+            }
+            return view.getInt32(0, true);
         case 'INT64':
-            return bytes.length === 8 && isPlainSignedInt(leaf)
-                ? view.getBigInt64(0, true)
-                : undefined;
+            if (bytes.length !== 8) {
+                return undefined;
+            }
+            if (isDecimal(leaf)) {
+                // ponytail: see INT32 DECIMAL note — double, not exact bignum.
+                return Number(view.getBigInt64(0, true)) / 10 ** decimalScale(leaf);
+            }
+            if (isUnsignedInt(leaf)) {
+                return view.getBigUint64(0, true);
+            }
+            return view.getBigInt64(0, true);
         case 'FLOAT':
             return bytes.length === 4 ? view.getFloat32(0, true) : undefined;
         case 'DOUBLE':
@@ -91,6 +130,11 @@ export function decodeStatValue(b64: string, leaf: SchemaLeaf): StatValue | unde
             return bytes.length === 1 ? bytes[0] !== 0 : undefined;
         case 'BYTE_ARRAY':
         case 'FIXED_LEN_BYTE_ARRAY':
+            if (isDecimal(leaf)) {
+                // Big-endian two's-complement unscaled int, any length (FLBA
+                // width = type_length). ponytail: double result, see INT32 note.
+                return Number(bigEndianTwosComplement(bytes)) / 10 ** decimalScale(leaf);
+            }
             return isStringLeaf(leaf) ? new TextDecoder().decode(bytes) : undefined;
         default:
             // INT96 and anything future: no honest comparison exists.
@@ -103,16 +147,15 @@ export function unsupportedReason(leaf: SchemaLeaf): string | null {
     switch (leaf.type) {
         case 'INT32':
         case 'INT64':
-            return isPlainSignedInt(leaf)
-                ? null
-                : `${leaf.type} with ${leaf.logical_type?.logical_type ?? leaf.converted_type ?? 'a modified'} interpretation is not comparable as a plain signed integer`;
+            // DECIMAL and unsigned ints are now decoded; plain signed always was.
+            return null;
         case 'FLOAT':
         case 'DOUBLE':
         case 'BOOLEAN':
             return null;
         case 'BYTE_ARRAY':
         case 'FIXED_LEN_BYTE_ARRAY':
-            return isStringLeaf(leaf)
+            return isStringLeaf(leaf) || isDecimal(leaf)
                 ? null
                 : `${leaf.type} without a string logical type is raw binary`;
         default:
@@ -127,14 +170,28 @@ export function unsupportedReason(leaf: SchemaLeaf): string | null {
  */
 export function parsePredicateValue(input: string, leaf: SchemaLeaf): StatValue | undefined {
     const text = input.trim();
+    // DECIMAL decodes to a float, so predicates must parse the same way to
+    // stay comparable, regardless of physical backing.
+    if (isDecimal(leaf)) {
+        const n = Number(text);
+        return text !== '' && !Number.isNaN(n) ? n : undefined;
+    }
     switch (leaf.type) {
         case 'INT32': {
             const n = Number(text);
-            return text !== '' && Number.isInteger(n) ? n : undefined;
+            if (text === '' || !Number.isInteger(n)) {
+                return undefined;
+            }
+            // Unsigned decodes as Number; reject negatives.
+            return isUnsignedInt(leaf) && n < 0 ? undefined : n;
         }
         case 'INT64': {
             try {
-                return text === '' ? undefined : BigInt(text);
+                if (text === '') {
+                    return undefined;
+                }
+                const n = BigInt(text);
+                return isUnsignedInt(leaf) && n < 0n ? undefined : n;
             } catch {
                 return undefined;
             }
