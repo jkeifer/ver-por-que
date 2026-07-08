@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { describeWkb } from '../src/business/wkb';
+import { describeWkb, wkbToGeoJson } from '../src/business/wkb';
 
 /** Build a WKB byte string from a spec of tokens. */
 function wkb(le: boolean, ...tokens: Array<['u8' | 'u32', number] | ['f64', number]>): Uint8Array {
@@ -64,5 +64,59 @@ describe('describeWkb', () => {
 
     it('returns null on an unknown geometry type', () => {
         expect(describeWkb(wkb(true, ['u8', 1], ['u32', 99]))).toBeNull();
+    });
+});
+
+describe('wkbToGeoJson', () => {
+    it('parses a POINT to GeoJSON', () => {
+        const bytes = wkb(true, ['u8', 1], ['u32', 1], ['f64', 30], ['f64', 10]);
+        expect(wkbToGeoJson(bytes)).toEqual({ type: 'Point', coordinates: [30, 10] });
+    });
+
+    it('parses a POLYGON ring to nested coordinates', () => {
+        const bytes = wkb(
+            true,
+            ['u8', 1],
+            ['u32', 3],
+            ['u32', 1],
+            ['u32', 4],
+            ['f64', 0],
+            ['f64', 0],
+            ['f64', 1],
+            ['f64', 0],
+            ['f64', 0],
+            ['f64', 1],
+            ['f64', 0],
+            ['f64', 0]
+        );
+        expect(wkbToGeoJson(bytes)).toEqual({
+            type: 'Polygon',
+            coordinates: [
+                [
+                    [0, 0],
+                    [1, 0],
+                    [0, 1],
+                    [0, 0],
+                ],
+            ],
+        });
+    });
+
+    it('keeps Z and drops M for a POINT ZM', () => {
+        // type 3001 = POINT ZM: x, y, z, m
+        const bytes = wkb(
+            true,
+            ['u8', 1],
+            ['u32', 3001],
+            ['f64', 1],
+            ['f64', 2],
+            ['f64', 3],
+            ['f64', 4]
+        );
+        expect(wkbToGeoJson(bytes)).toEqual({ type: 'Point', coordinates: [1, 2, 3] });
+    });
+
+    it('returns null on unparseable bytes', () => {
+        expect(wkbToGeoJson(wkb(true, ['u8', 1], ['u32', 99]))).toBeNull();
     });
 });

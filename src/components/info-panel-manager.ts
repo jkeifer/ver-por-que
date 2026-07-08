@@ -17,7 +17,7 @@ import {
     type SegmentNode,
 } from '../business/segment-tree';
 import { base64Bytes, formatStatValue, parsePredicateValue } from '../business/stat-values';
-import { describeWkb } from '../business/wkb';
+import { describeWkb, wkbToGeoJson } from '../business/wkb';
 import type { PreviewEntry, PreviewResult, PreviewValue } from '../js/worker/pyodide-parquet';
 import type {
     AnyDump,
@@ -150,22 +150,23 @@ function renderPreviewFailure(codec: string): string {
 }
 
 /**
- * Rewrite a GEOMETRY/GEOGRAPHY cell (raw WKB shipped as base64) into a readable
- * summary. Falls back to the original base64 on nulls, non-strings, or bytes
- * that don't parse as WKB — so a non-geometry value is never mangled.
+ * A single value cell: NULL is explicit; long values ellipsize with a copy
+ * button for the full value. A GEOMETRY/GEOGRAPHY cell (raw WKB as base64) is
+ * shown as a summary with a copy button that yields the full GeoJSON geometry;
+ * WKB that won't parse falls back to the plain-string path (never mangled).
  */
-function wkbCell(value: PreviewValue): PreviewValue {
-    if (typeof value !== 'string') {
-        return value;
-    }
-    const bytes = base64Bytes(value);
-    return (bytes && describeWkb(bytes)) ?? value;
-}
-
-/** A single value cell: NULL is explicit; long values ellipsize. */
-function previewValueCell(value: PreviewValue): string {
+function previewValueCell(value: PreviewValue, isWkb = false): string {
     if (value === null) {
         return '<span class="value-preview-null">NULL</span>';
+    }
+    if (isWkb && typeof value === 'string') {
+        const bytes = base64Bytes(value);
+        const summary = bytes && describeWkb(bytes);
+        if (summary) {
+            const geojson = bytes && wkbToGeoJson(bytes);
+            const copy = geojson ? copyButton(JSON.stringify(geojson), 'Copy as GeoJSON') : '';
+            return escapeHtml(summary) + copy;
+        }
     }
     const s = String(value);
     if (s.length > PREVIEW_VALUE_MAX_CHARS) {
@@ -175,12 +176,12 @@ function previewValueCell(value: PreviewValue): string {
 }
 
 /** tbody rows; `#` is each value's own absolute page index (sparse under null-skip). */
-function renderPreviewRows(entries: PreviewEntry[]): string {
+function renderPreviewRows(entries: PreviewEntry[], isWkb: boolean): string {
     return entries
         .map(
             entry =>
                 `<tr><td class="value-preview-index">${entry.index}</td>` +
-                `<td class="value-preview-value">${previewValueCell(entry.value)}</td>` +
+                `<td class="value-preview-value">${previewValueCell(entry.value, isWkb)}</td>` +
                 `<td class="value-preview-level">${entry.def}</td>` +
                 `<td class="value-preview-level">${entry.rep}</td></tr>`
         )
@@ -198,6 +199,8 @@ interface PreviewWindowView {
     nulls: number;
     hideNulls: boolean;
     canPrev: boolean;
+    /** Column is WKB geometry: cells show a summary + copy-as-GeoJSON. */
+    isWkb: boolean;
     onToggleNulls: (hide: boolean) => void;
     onPrev: () => void;
     onNext: () => void;
@@ -238,7 +241,7 @@ function renderPreviewWindow(result: HTMLElement, view: PreviewWindowView): void
         `<div class="value-preview-table-wrap"><table class="value-preview-table">` +
         `<thead><tr><th>#</th><th>Value</th><th title="definition level">def</th>` +
         `<th title="repetition level">rep</th></tr></thead>` +
-        `<tbody>${renderPreviewRows(entries)}</tbody></table></div>` +
+        `<tbody>${renderPreviewRows(entries, view.isWkb)}</tbody></table></div>` +
         `<div class="value-preview-pager">` +
         `<div class="value-preview-info"><span class="value-preview-range">${info}</span>${toggle}</div>` +
         `${buttons}</div>`;
@@ -256,10 +259,10 @@ function renderPreviewWindow(result: HTMLElement, view: PreviewWindowView): void
 type Row = [string, string | number] | [string, string | number, string];
 
 /** A copy-to-clipboard button carrying the full (untruncated) value. */
-function copyButton(full: string): string {
+function copyButton(full: string, label = 'Copy full value'): string {
     return (
         `<button type="button" class="copy-btn" data-copy="${escapeHtml(full)}"` +
-        ` title="Copy full value" aria-label="Copy full value">⧉</button>`
+        ` title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">⧉</button>`
     );
 }
 
@@ -372,13 +375,16 @@ function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null, wkb = false
         if (v === null || v === undefined) {
             return [label, 'N/A'];
         }
-        let full: string | undefined;
         if (wkb) {
-            // WKB min/max are geometries too; summarize like the value preview.
+            // WKB min/max are geometries too: show the summary, copy full GeoJSON.
             const bytes = base64Bytes(v);
-            full = (bytes && describeWkb(bytes)) || undefined;
+            const summary = bytes && describeWkb(bytes);
+            if (summary) {
+                const geojson = bytes && wkbToGeoJson(bytes);
+                return geojson ? [label, summary, JSON.stringify(geojson)] : [label, summary];
+            }
         }
-        full ??= (leaf ? formatStatValue(v, leaf) : undefined) ?? v;
+        const full = (leaf ? formatStatValue(v, leaf) : undefined) ?? v;
         const [shown, copy] = truncateCopy(full, 50);
         return copy === undefined ? [label, shown] : [label, shown, copy];
     };
@@ -1258,14 +1264,13 @@ export class InfoPanelManager {
                         return;
                     }
                     renderPreviewWindow(result, {
-                        entries: isWkb
-                            ? res.values.map(e => ({ ...e, value: wkbCell(e.value) }))
-                            : res.values,
+                        entries: res.values,
                         start: offset,
                         next: res.next,
                         total: res.total,
                         nulls: res.nulls,
                         hideNulls,
+                        isWkb,
                         canPrev: history.length > 0,
                         // Toggling the mode resets to the top of the page.
                         onToggleNulls: hide => {

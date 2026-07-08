@@ -120,3 +120,101 @@ export function describeWkb(bytes: Uint8Array): string | null {
         return null;
     }
 }
+
+type Position = number[];
+export interface GeoJsonGeometry {
+    type:
+        | 'Point'
+        | 'LineString'
+        | 'Polygon'
+        | 'MultiPoint'
+        | 'MultiLineString'
+        | 'MultiPolygon'
+        | 'GeometryCollection';
+    coordinates?: unknown;
+    geometries?: GeoJsonGeometry[];
+}
+
+/**
+ * Read one geometry at the cursor into a GeoJSON geometry object, collecting
+ * every coordinate (unlike readGeom, which only counts them). Z is kept as a
+ * third ordinate; an M measure is consumed but dropped (GeoJSON has no M).
+ */
+function readGeometry(r: Reader): GeoJsonGeometry {
+    const le = readByteOrder(r);
+    const raw = read32(r, le);
+    const code = raw % 1000;
+    const kind = Math.floor(raw / 1000);
+    if (!(code in NAMES)) {
+        throw new Error('unknown geometry type');
+    }
+    const hasZ = kind === 1 || kind === 3;
+    const hasM = kind === 2 || kind === 3;
+    const coord = (): Position => {
+        const p: Position = [r.view.getFloat64(r.pos, le), r.view.getFloat64(r.pos + 8, le)];
+        r.pos += 16;
+        if (hasZ) {
+            p.push(r.view.getFloat64(r.pos, le));
+            r.pos += 8;
+        }
+        if (hasM) {
+            r.pos += 8; // consume the measure; GeoJSON can't represent it
+        }
+        return p;
+    };
+    const ring = (): Position[] => {
+        const n = read32(r, le);
+        const out: Position[] = [];
+        for (let i = 0; i < n; i++) {
+            out.push(coord());
+        }
+        return out;
+    };
+    // sub-geometries in a MULTI* carry their own header, so recurse.
+    const children = (): GeoJsonGeometry[] => {
+        const n = read32(r, le);
+        const out: GeoJsonGeometry[] = [];
+        for (let i = 0; i < n; i++) {
+            out.push(readGeometry(r));
+        }
+        return out;
+    };
+    switch (code) {
+        case 1:
+            return { type: 'Point', coordinates: coord() };
+        case 2:
+            return { type: 'LineString', coordinates: ring() };
+        case 3: {
+            const rings: Position[][] = [];
+            const n = read32(r, le);
+            for (let i = 0; i < n; i++) {
+                rings.push(ring());
+            }
+            return { type: 'Polygon', coordinates: rings };
+        }
+        case 4:
+            return { type: 'MultiPoint', coordinates: children().map(g => g.coordinates) };
+        case 5:
+            return { type: 'MultiLineString', coordinates: children().map(g => g.coordinates) };
+        case 6:
+            return { type: 'MultiPolygon', coordinates: children().map(g => g.coordinates) };
+        default:
+            return { type: 'GeometryCollection', geometries: children() };
+    }
+}
+
+/**
+ * Parse WKB bytes into a full GeoJSON geometry (all coordinates), or null when
+ * the bytes aren't parseable WKB. Used to copy the real geometry, not the
+ * summary describeWkb shows.
+ */
+export function wkbToGeoJson(bytes: Uint8Array): GeoJsonGeometry | null {
+    try {
+        return readGeometry({
+            view: new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength),
+            pos: 0,
+        });
+    } catch {
+        return null;
+    }
+}
