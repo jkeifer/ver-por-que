@@ -131,7 +131,7 @@ export type SegmentNode =
 const byStart = (a: SegmentNode, b: SegmentNode): number => a.start - b.start;
 
 /** True when a nullable/optional field is actually present. */
-function isSet<T>(v: T | null | undefined): v is T {
+export function isSet<T>(v: T | null | undefined): v is T {
     return v !== null && v !== undefined;
 }
 
@@ -750,16 +750,7 @@ export function findPath(root: SegmentNode, id: string): SegmentNode[] | null {
     return null;
 }
 
-/** Recursively find a node by id (selection restore, tests). */
+/** Find a node by id (selection restore, tests) — the last hop of its path. */
 export function findNode(root: SegmentNode, id: string): SegmentNode | null {
-    if (root.id === id) {
-        return root;
-    }
-    for (const child of root.children) {
-        const found = findNode(child, id);
-        if (found) {
-            return found;
-        }
-    }
-    return null;
+    return findPath(root, id)?.at(-1) ?? null;
 }

@@ -84,12 +84,7 @@ const notSelected = (): SegmentStatus => ({
     reason: 'Not read — column not selected for output.',
 });
 
-const prunedRowGroup = (d: Decision): SegmentStatus => ({
-    kind: 'pruned',
-    reason: `Skipped — ${explain(d)}`,
-});
-
-const prunedPage = (d: Decision): SegmentStatus => ({
+const pruned = (d: Decision): SegmentStatus => ({
     kind: 'pruned',
     reason: `Skipped — ${explain(d)}`,
 });
@@ -123,7 +118,7 @@ export function chunkStatus(ctx: QueryContext, rg: number, column: string): Segm
     }
     const rgDecision = ctx.evaluation.rowGroups.get(rg);
     if (rgDecision?.pruned) {
-        return prunedRowGroup(rgDecision);
+        return pruned(rgDecision);
     }
     if (!projected) {
         return evalOnly();
@@ -151,11 +146,11 @@ export function pageStatus(
     }
     const pageDecision = ctx.evaluation.pages.get(pageId);
     if (pageDecision?.pruned) {
-        return prunedPage(pageDecision);
+        return pruned(pageDecision);
     }
     const rgDecision = ctx.evaluation.rowGroups.get(rg);
     if (rgDecision?.pruned) {
-        return prunedRowGroup(rgDecision);
+        return pruned(rgDecision);
     }
     if (!projected) {
         return evalOnly();
@@ -166,7 +161,7 @@ export function pageStatus(
 /** A whole row group: pruned by statistics, or read. */
 function rowGroupStatus(ctx: QueryContext, rg: number): SegmentStatus {
     const d = ctx.evaluation.rowGroups.get(rg);
-    return d?.pruned ? prunedRowGroup(d) : read(true, d);
+    return d?.pruned ? pruned(d) : read(true, d);
 }
 
 /** Build the precedence context for a query. Used by `resolve` and by tests. */
