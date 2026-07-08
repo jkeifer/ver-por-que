@@ -65,6 +65,25 @@ describe('describeWkb', () => {
     it('returns null on an unknown geometry type', () => {
         expect(describeWkb(wkb(true, ['u8', 1], ['u32', 99]))).toBeNull();
     });
+
+    it('reads EWKB with an SRID prefix (PostGIS)', () => {
+        // 0x20000001 = SRID flag | POINT; SRID 4326 then the coordinate.
+        const bytes = wkb(
+            true,
+            ['u8', 1],
+            ['u32', 0x20000001],
+            ['u32', 4326],
+            ['f64', 30],
+            ['f64', 10]
+        );
+        expect(describeWkb(bytes)).toBe('POINT(30 10)');
+    });
+
+    it('reads EWKB Z (dimension flagged in the high bit)', () => {
+        // 0x80000001 = Z flag | POINT.
+        const bytes = wkb(true, ['u8', 1], ['u32', 0x80000001], ['f64', 1], ['f64', 2], ['f64', 3]);
+        expect(describeWkb(bytes)).toBe('POINT Z(1 2)');
+    });
 });
 
 describe('wkbToGeoJson', () => {
@@ -118,5 +137,17 @@ describe('wkbToGeoJson', () => {
 
     it('returns null on unparseable bytes', () => {
         expect(wkbToGeoJson(wkb(true, ['u8', 1], ['u32', 99]))).toBeNull();
+    });
+
+    it('parses EWKB with SRID, dropping the SRID', () => {
+        const bytes = wkb(
+            true,
+            ['u8', 1],
+            ['u32', 0x20000001],
+            ['u32', 4326],
+            ['f64', 30],
+            ['f64', 10]
+        );
+        expect(wkbToGeoJson(bytes)).toEqual({ type: 'Point', coordinates: [30, 10] });
     });
 });
