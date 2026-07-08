@@ -627,8 +627,11 @@ class ParquetExplorer {
     // UI state management
 
     private showLoadingScreen(): void {
+        // Leave app-main in place: the fixed, frosted overlay covers it, so the
+        // current structure stays visible (blurred) behind the modal and is only
+        // swapped when the load finishes and repopulates the UI — rather than the
+        // page going blank the instant a load starts.
         document.getElementById('loading-screen')!.style.display = 'flex';
-        document.getElementById('app-main')!.style.display = 'none';
     }
 
     private hideLoadingScreen(): void {
