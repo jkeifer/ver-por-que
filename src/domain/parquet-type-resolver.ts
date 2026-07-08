@@ -25,6 +25,9 @@ export function logicalTypeLabel(lt: LogicalTypeInfo | null | undefined): string
             return `TIMESTAMP(${lt.unit}${lt.is_adjusted_to_utc ? ', UTC' : ''})`;
         case 'TIME':
             return `TIME(${lt.unit}${lt.is_adjusted_to_utc ? ', UTC' : ''})`;
+        case 'GEOGRAPHY':
+            // GEOMETRY carries no extra display fields here; it falls to default.
+            return lt.algorithm ? `GEOGRAPHY(${lt.algorithm})` : 'GEOGRAPHY';
         default:
             return lt.logical_type ?? null;
     }
