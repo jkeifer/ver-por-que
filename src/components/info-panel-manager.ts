@@ -220,7 +220,9 @@ function previewValueCell(value: PreviewValue, isWkb = false, physical?: Preview
         const summary = bytes && describeWkb(bytes);
         if (summary) {
             // Carry the base64 WKB, not the GeoJSON; convert on click (see button).
-            return escapeHtml(summary) + copyGeoJsonButton(value);
+            // GeoJSON (⧉) = the converted geometry; physical (#) = the raw base64
+            // WKB the bloom probe hashes.
+            return escapeHtml(summary) + copyGeoJsonButton(value) + copyPhysicalButton(value);
         }
     }
     const physicalBtn =
@@ -534,6 +536,12 @@ function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null, wkb = false
         const physicalStr = physical === undefined ? undefined : String(physical);
         if (physicalStr !== undefined && physicalStr !== full) {
             return [label, full, { physical: physicalStr }];
+        }
+        // Binary columns (UUID, raw binary): the probe hashes base64 of the raw
+        // bytes, and v IS that base64. Offer it when the display differs (UUID
+        // shows hex; plain binary already shows the base64, so no redundant #).
+        if (leaf && isBinaryLeaf(leaf) && v !== full) {
+            return [label, full, { physical: v }];
         }
         const [shown, copy] = truncateCopy(full, 50);
         return copy === undefined ? [label, shown] : [label, shown, copy];
@@ -1625,7 +1633,8 @@ export class InfoPanelManager {
                             : typeof copy === 'string'
                               ? copyButton(copy)
                               : 'wkb' in copy
-                                ? copyGeoJsonButton(copy.wkb)
+                                ? // GeoJSON (⧉) + raw base64 WKB for the probe (#).
+                                  copyGeoJsonButton(copy.wkb) + copyPhysicalButton(copy.wkb)
                                 : copyPhysicalButton(copy.physical);
                     return (
                         `<div class="info-item"><span class="info-label">${escapeHtml(String(label))}:</span>` +
