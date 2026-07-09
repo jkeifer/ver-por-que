@@ -128,10 +128,11 @@ export function chunkStatus(ctx: QueryContext, rg: number, column: string): Segm
 
 /**
  * Page cell — the same ladder with the page's own column-index verdict spliced
- * in as rung 2 (a data page pruned by its column index is skipped even when its
- * chunk is otherwise read). A pruned ROW GROUP (rung 3) still dominates: the
- * reader skips the whole group before any page-level decision matters, so
- * rung 2 only fires inside a kept row group.
+ * in as rung 3, right after the row-group rung (a data page pruned by its
+ * column index is skipped even when its chunk is otherwise read). A pruned ROW
+ * GROUP (rung 2) still dominates: the reader skips the whole group before any
+ * page-level decision matters, so the page's own verdict — and its reason —
+ * only surfaces inside a kept row group.
  */
 export function pageStatus(
     ctx: QueryContext,
@@ -144,13 +145,13 @@ export function pageStatus(
     if (!projected && !predicate) {
         return notSelected();
     }
-    const pageDecision = ctx.evaluation.pages.get(pageId);
-    if (pageDecision?.pruned) {
-        return pruned(pageDecision);
-    }
     const rgDecision = ctx.evaluation.rowGroups.get(rg);
     if (rgDecision?.pruned) {
         return pruned(rgDecision);
+    }
+    const pageDecision = ctx.evaluation.pages.get(pageId);
+    if (pageDecision?.pruned) {
+        return pruned(pageDecision);
     }
     if (!projected) {
         return evalOnly();
