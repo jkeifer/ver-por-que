@@ -1007,48 +1007,69 @@ code {
     border-radius: var(--border-radius);
 }
 
-/* Bloom-filter outcome marker, top-right of a cell (and inside a legend swatch):
- * a "miss" (proven absent -> the cell is pruned red) is a solid light dot; a
- * "hit" (checked, couldn't rule out) is a faint hollow ring; "probing" pulses. */
+/* Bloom-filter outcome marker on a cell's = predicate column (and in the legend
+ * swatch). White with a thin dark outline so it reads on both the pruned red and
+ * the read green: a "miss" (proven absent) is a solid dot, a "hit" (may be
+ * present, so kept) a hollow ring. */
 .qm-bloom {
     position: absolute;
-    top: 2px;
-    right: 2px;
-    width: 6px;
-    height: 6px;
+    top: 3px;
+    right: 3px;
+    width: 9px;
+    height: 9px;
+    box-sizing: border-box;
     border-radius: 50%;
     pointer-events: none;
 }
 
-.query-legend .qm-swatch .qm-bloom {
-    top: 1px;
-    right: 1px;
-    width: 5px;
-    height: 5px;
-}
-
 .qm-bloom-miss {
     background: #fff;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55);
 }
 
 .qm-bloom-hit {
     background: transparent;
-    border: 1px solid rgba(0, 0, 0, 0.45);
+    border: 2px solid #fff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
 }
 
-.qm-bloom-probing {
-    background: rgba(0, 0, 0, 0.55);
+/* Legend swatches carry the marker centered, so the chip reads as "this color +
+ * this marker", exactly as a cell does. */
+.query-legend .qm-swatch {
+    position: relative;
+}
+
+.query-legend .qm-swatch .qm-bloom {
+    top: 50%;
+    right: 50%;
+    width: 7px;
+    height: 7px;
+    transform: translate(50%, -50%);
+}
+
+.query-legend-bloom {
+    margin-top: calc(-1 * var(--spacing-sm));
+}
+
+.query-legend-label {
+    color: var(--text-muted);
+}
+
+/* While its bloom probe is in flight a row group's fate is genuinely unknown, so
+ * its cells pulse a neutral "checking" instead of a premature read/pruned color
+ * that would flip when the result lands. */
+.qm-probing {
+    background: var(--border-medium);
     animation: qm-bloom-pulse 1s ease-in-out infinite;
 }
 
 @keyframes qm-bloom-pulse {
     0%,
     100% {
-        opacity: 0.25;
+        opacity: 0.4;
     }
     50% {
-        opacity: 1;
+        opacity: 0.85;
     }
 }
 

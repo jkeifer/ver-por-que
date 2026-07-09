@@ -56,14 +56,14 @@ const KIND_CLASS: Record<SegmentStatus['kind'], string> = {
     pruned: 'qm-pruned',
 };
 
-/** A cell's bloom-filter outcome for an `=` predicate on its column. */
-type BloomMark = '' | 'miss' | 'hit' | 'probing';
+/** A cell's resolved bloom-filter outcome for an `=` predicate on its column
+ *  (the in-flight state is handled per row group, not per cell). */
+type BloomMark = '' | 'miss' | 'hit';
 
 /** Tooltip clause per bloom mark (appended under the cell's status reason). */
 const BLOOM_REASON: Record<Exclude<BloomMark, ''>, string> = {
     miss: 'Bloom filter: definitely not present — this row group is pruned.',
     hit: 'Bloom filter: maybe present — checked, could not rule it out.',
-    probing: 'Bloom filter: probing…',
 };
 
 /** One-line footer-statistics summary for a column ("type · min · max · nulls"). */
@@ -189,8 +189,11 @@ export class QueryPanel {
                     <span><span class="qm-swatch qm-eval"></span>read only to evaluate a predicate — not in the output</span>
                     <span><span class="qm-swatch qm-pruned"></span>skipped — a predicate pruned the row group</span>
                     <span><span class="qm-swatch qm-skip"></span>not read — not selected for output</span>
-                    <span><span class="qm-swatch qm-pruned"><span class="qm-bloom qm-bloom-miss"></span></span>skipped by a bloom filter (= predicate)</span>
-                    <span><span class="qm-swatch qm-read"><span class="qm-bloom qm-bloom-hit"></span></span>bloom filter checked — couldn't rule it out</span>
+                </div>
+                <div class="query-legend query-legend-bloom">
+                    <span class="query-legend-label">bloom filter (on the = predicate's column):</span>
+                    <span><span class="qm-swatch qm-pruned"><span class="qm-bloom qm-bloom-miss"></span></span>proven absent — row group pruned</span>
+                    <span><span class="qm-swatch qm-read"><span class="qm-bloom qm-bloom-hit"></span></span>may be present — kept</span>
                 </div>
             </div>`;
         this.matrix = container.querySelector('.query-matrix')!;
@@ -511,9 +514,19 @@ export class QueryPanel {
             .join('')}</tr>`;
         const body = this.dump.metadata.row_groups
             .map((_, index) => {
+                // A row group whose bloom probe is in flight has an unknown fate:
+                // hold its (read/eval/pruned) cells in a neutral "checking" state
+                // so they settle straight to the result, never read-then-pruned.
+                const probing = this.rowProbing(index);
                 const cells = this.columns
                     .map(column => {
                         const s = this.resolution.matrixCell(index, column);
+                        // not-selected doesn't depend on pruning, so it stays gray
+                        // even while the row group is being probed.
+                        if (probing && s.kind !== 'not-selected') {
+                            const t = `${column}\nChecking the bloom filter…`;
+                            return `<td class="qm-cell qm-probing" title="${escapeHtml(t)}"></td>`;
+                        }
                         // Column name, then the status + its rationale (the reason
                         // already reads "Status — why"). Per-column stats live on
                         // the header, not here.
@@ -539,10 +552,10 @@ export class QueryPanel {
     }
 
     /**
-     * The bloom outcome to mark on cell (rg, column): the strongest across the
-     * `=` predicates on that column — a cached miss wins (the row group is
-     * pruned), else in-flight is "probing", else a cached hit. Empty when bloom
-     * can't be consulted or nothing was probed for this cell.
+     * The resolved bloom outcome to mark on cell (rg, column): a cached miss (the
+     * row group is pruned) wins over a cached hit. Empty when bloom can't be
+     * consulted or nothing has resolved for this cell. In-flight probes are shown
+     * as a whole-row "probing" state (rowProbing), not here.
      */
     private bloomMark(rg: number, column: string): BloomMark {
         if (!this.bloomProbe) {
@@ -557,18 +570,33 @@ export class QueryPanel {
             if (value === null) {
                 continue;
             }
-            const key = this.bloomKey(rg, column, value);
-            const cached = this.bloomCache.get(key);
+            const cached = this.bloomCache.get(this.bloomKey(rg, column, value));
             if (cached === false) {
                 return 'miss';
             }
-            if (this.bloomInFlight.has(key)) {
-                mark = 'probing';
-            } else if (cached === true && mark !== 'probing') {
+            if (cached === true) {
                 mark = 'hit';
             }
         }
         return mark;
+    }
+
+    /**
+     * Whether row group `rg` has a bloom probe in flight — its fate is not yet
+     * known, so its cells render a neutral "checking" pulse rather than a
+     * premature read/pruned color that would flip when the result lands.
+     */
+    private rowProbing(rg: number): boolean {
+        if (!this.bloomProbe) {
+            return false;
+        }
+        return this.resolution.state.predicates.some(p => {
+            if (p.op !== 'eq') {
+                return false;
+            }
+            const value = this.probeValue(p.column, p.value);
+            return value !== null && this.bloomInFlight.has(this.bloomKey(rg, p.column, value));
+        });
     }
 
     /**
