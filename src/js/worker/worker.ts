@@ -39,7 +39,7 @@ async function loadWheels(manifestUrl: string): Promise<WheelAsset[]> {
     const filenames = [manifest.hctef, manifest.wheel];
     // One combined line: the downloads run concurrently, so per-file details
     // would just overwrite each other at kickoff.
-    ctx.postMessage({ detail: `downloading ${filenames.join(', ')}` });
+    ctx.postMessage({ kind: 'detail', detail: `downloading ${filenames.join(', ')}` });
     return Promise.all(filenames.map(load));
 }
 
@@ -57,9 +57,9 @@ function getParser(manifestUrl: string): Promise<ParquetParser> {
                 loadPyodide: mod.loadPyodide,
                 indexURL: PYODIDE_CDN,
                 loadWheels: () => loadWheels(manifestUrl),
-                onStatus: status => ctx.postMessage({ status }),
-                onDetail: detail => ctx.postMessage({ detail }),
-                onProgress: fraction => ctx.postMessage({ progress: fraction }),
+                onStatus: status => ctx.postMessage({ kind: 'status', status }),
+                onDetail: detail => ctx.postMessage({ kind: 'detail', detail }),
+                onProgress: fraction => ctx.postMessage({ kind: 'progress', progress: fraction }),
             });
         })());
         // A failed boot (e.g. flaky network during page-load warmup) must not
@@ -76,12 +76,12 @@ function getParser(manifestUrl: string): Promise<ParquetParser> {
 
 ctx.addEventListener('message', event => {
     const req = event.data;
-    if (req.warmup) {
+    if (req.kind === 'warmup') {
         // Fire-and-forget pre-boot; errors surface on the first real parse.
         getParser(req.manifestUrl).catch(() => {});
         return;
     }
-    if (req.prefetchBlooms) {
+    if (req.kind === 'prefetchBlooms') {
         // Fire-and-forget: warm the loaded file's bloom byte ranges. No response;
         // failures are non-fatal (the first probe just pays the range fetch).
         getParser(req.manifestUrl)
@@ -89,61 +89,86 @@ ctx.addEventListener('message', event => {
             .catch(() => {});
         return;
     }
+    // Every remaining kind carries an `id` and expects one response. The switch
+    // is exhaustive: a new request kind that isn't handled fails typecheck at
+    // the `never` default.
     void (async () => {
         try {
             const parser = await getParser(req.manifestUrl);
-            if (req.probe) {
-                const { rowGroup, column, value } = req.probe;
-                const bloomProbe = await parser.probeBloom(rowGroup, column, value);
-                ctx.postMessage({ id: req.id, ok: true, bloomProbe });
-                return;
+            switch (req.kind) {
+                case 'probe': {
+                    const bloomProbe = await parser.probeBloom(req.rowGroup, req.column, req.value);
+                    ctx.postMessage({ kind: 'probe', id: req.id, ok: true, bloomProbe });
+                    return;
+                }
+                case 'bloomDensity': {
+                    const bloomDensity = await parser.bloomDensity(req.rowGroup, req.column);
+                    ctx.postMessage({ kind: 'bloomDensity', id: req.id, ok: true, bloomDensity });
+                    return;
+                }
+                case 'bloomBlocks': {
+                    const bloomBlocks = await parser.bloomBlocks(
+                        req.rowGroup,
+                        req.column,
+                        req.start,
+                        req.count
+                    );
+                    ctx.postMessage({ kind: 'bloomBlocks', id: req.id, ok: true, bloomBlocks });
+                    return;
+                }
+                case 'preview': {
+                    const preview = await parser.preview(
+                        req.rowGroup,
+                        req.column,
+                        req.pageIndex,
+                        req.offset,
+                        req.limit,
+                        req.skipNulls
+                    );
+                    ctx.postMessage({ kind: 'preview', id: req.id, ok: true, preview });
+                    return;
+                }
+                case 'dictionaryPreview': {
+                    const dictionaryPreview = await parser.previewDictionary(
+                        req.rowGroup,
+                        req.column,
+                        req.offset,
+                        req.limit
+                    );
+                    ctx.postMessage({
+                        kind: 'dictionaryPreview',
+                        id: req.id,
+                        ok: true,
+                        dictionaryPreview,
+                    });
+                    return;
+                }
+                case 'boot': {
+                    await parser.bootFromDump(req.dumpJson, req.url);
+                    ctx.postMessage({ kind: 'boot', id: req.id, ok: true });
+                    return;
+                }
+                case 'parse': {
+                    const source =
+                        req.url !== undefined
+                            ? { url: req.url }
+                            : new Uint8Array(req.bytes ?? new ArrayBuffer(0));
+                    const dump = await parser(source, req.name);
+                    ctx.postMessage({ kind: 'parse', id: req.id, ok: true, dump });
+                    return;
+                }
+                default: {
+                    const _exhaustive: never = req;
+                    void _exhaustive;
+                }
             }
-            if (req.bloomDensity) {
-                const { rowGroup, column } = req.bloomDensity;
-                const bloomDensity = await parser.bloomDensity(rowGroup, column);
-                ctx.postMessage({ id: req.id, ok: true, bloomDensity });
-                return;
-            }
-            if (req.bloomBlocks) {
-                const { rowGroup, column, start, count } = req.bloomBlocks;
-                const bloomBlocks = await parser.bloomBlocks(rowGroup, column, start, count);
-                ctx.postMessage({ id: req.id, ok: true, bloomBlocks });
-                return;
-            }
-            if (req.preview) {
-                const { rowGroup, column, pageIndex, offset, limit, skipNulls } = req.preview;
-                const preview = await parser.preview(
-                    rowGroup,
-                    column,
-                    pageIndex,
-                    offset,
-                    limit,
-                    skipNulls
-                );
-                ctx.postMessage({ id: req.id, ok: true, preview });
-                return;
-            }
-            if (req.dictionaryPreview) {
-                const { rowGroup, column, offset, limit } = req.dictionaryPreview;
-                const dictionaryPreview = await parser.previewDictionary(
-                    rowGroup,
-                    column,
-                    offset,
-                    limit
-                );
-                ctx.postMessage({ id: req.id, ok: true, dictionaryPreview });
-                return;
-            }
-            if (req.boot) {
-                await parser.bootFromDump(req.boot.dumpJson, req.boot.url);
-                ctx.postMessage({ id: req.id, ok: true, booted: true });
-                return;
-            }
-            const source = req.url !== undefined ? { url: req.url } : new Uint8Array(req.bytes);
-            const dump = await parser(source, req.name);
-            ctx.postMessage({ id: req.id, ok: true, dump });
         } catch (error) {
-            ctx.postMessage({ id: req.id, ok: false, error: (error as Error).message });
+            ctx.postMessage({
+                kind: 'failure',
+                id: req.id,
+                ok: false,
+                error: (error as Error).message,
+            });
         }
     })();
 });
