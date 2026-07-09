@@ -1414,18 +1414,14 @@ code {
     fill: var(--accent-color);
 }
 
-/* Inset outlines mirror the segment selection pattern: hover/selected/probed.
- * A cell can be both selected and probed; the probe color wins visually via
- * source order. */
-.bloom-strip-cell:hover {
-    outline: 2px solid var(--outline-on-light);
-    outline-offset: -2px;
+/* The strip is a minimap: clicking a cell jumps the viewport box to it. */
+.bloom-strip-cell {
     cursor: pointer;
 }
 
-.bloom-strip-cell.selected {
-    outline: 3px solid var(--outline-on-light);
-    outline-offset: -3px;
+.bloom-strip-cell:hover {
+    outline: 2px solid var(--outline-on-light);
+    outline-offset: -2px;
 }
 
 .bloom-strip-cell.probed {
@@ -1433,13 +1429,17 @@ code {
     outline-offset: -2px;
 }
 
-/* Window-range bracket: the strip cells whose block is in the current viewport
- * window, so the map shows where the row of grids below sits. A subtle tint;
- * the selected/probed outlines still read on top. */
-.bloom-strip-cell.in-window {
+/* Viewport minimap thumb: one box over the strip marking the window shown in the
+ * row of grids below. Reads like a scrollbar thumb / segment inset outline — a
+ * neutral-dark outline over a faint tint. Non-interactive (clicks fall through
+ * to the density cells beneath). */
+.bloom-strip-viewport {
+    fill: var(--outline-on-light);
+    fill-opacity: 0.08;
     stroke: var(--outline-on-light);
-    stroke-width: 1;
-    stroke-opacity: 0.6;
+    stroke-width: 2;
+    stroke-opacity: 0.7;
+    pointer-events: none;
 }
 
 /* The viewport: a single non-wrapping row of full-res block grids below the
@@ -1476,21 +1476,6 @@ code {
     flex: 0 0 auto;
 }
 
-/* Soft "selected" treatment: a light accent frame + faint tint, not a stray
- * bracket. The probed bits stay green/red on top. */
-.bloom-block-cell.selected {
-    outline: 1px solid var(--accent-color);
-    outline-offset: 1px;
-    background: rgba(var(--accent-rgb), 0.06);
-    padding: 2px;
-    border-radius: var(--border-radius);
-}
-
-/* The selected cell's label reads in accent so "selected" is unambiguous. */
-.bloom-block-cell.selected .bloom-block-label {
-    color: var(--accent-color);
-}
-
 .bloom-block-label {
     font-family: var(--font-mono);
     font-size: 0.68rem;
@@ -1500,7 +1485,7 @@ code {
 }
 
 /* The probed block anchors the lineage's "block X": accent + a marked "· probed"
- * suffix. Wins over the plain selected-label color (both classes can apply). */
+ * suffix. The only per-block highlight in the row. */
 .bloom-block-label.probed {
     color: var(--accent-color);
     font-weight: 600;
