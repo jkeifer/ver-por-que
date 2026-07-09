@@ -189,8 +189,16 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         expectValidDump(await parse(bloomFile, 'data_index_bloom_encoding_with_length.parquet'));
 
         // The parse populated the worker-side current-file slot; probes hit it.
-        await expect(parse.probeBloom(0, 'String', 'Hello')).resolves.toBe(true);
-        await expect(parse.probeBloom(0, 'String', 'zzzzzz-not-here')).resolves.toBe(false);
+        // The probe returns the full split-block derivation; .mightContain is
+        // the verdict, and a "maybe" must have all eight checked bits set.
+        const hit = await parse.probeBloom(0, 'String', 'Hello');
+        expect(hit.mightContain).toBe(true);
+        expect(hit.bits).toHaveLength(8);
+        expect(hit.bits.every(b => b.set)).toBe(true);
+        expect(hit.blockIndex).toBeLessThan(hit.numBlocks);
+        const miss = await parse.probeBloom(0, 'String', 'zzzzzz-not-here');
+        expect(miss.mightContain).toBe(false);
+        expect(miss.bits.some(b => !b.set)).toBe(true); // an unset bit proves absence
 
         // Unknown columns and unloadable filters reject rather than guess.
         await expect(parse.probeBloom(0, 'nope', 'x')).rejects.toThrow(/KeyError|nope/);
@@ -279,8 +287,10 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
 
             // Bloom + preview now answer from the rehydrated slot, reading only
             // the spans the dump already located.
-            await expect(parse.probeBloom(0, 'String', 'Hello')).resolves.toBe(true);
-            await expect(parse.probeBloom(0, 'String', 'zzzzzz-not-here')).resolves.toBe(false);
+            expect((await parse.probeBloom(0, 'String', 'Hello')).mightContain).toBe(true);
+            expect((await parse.probeBloom(0, 'String', 'zzzzzz-not-here')).mightContain).toBe(
+                false
+            );
             const page = await parse.preview(0, 'String', 0, 0, 100, false);
             if (page.error !== undefined) {
                 throw new Error(`unexpected codec failure: ${page.codec}`);

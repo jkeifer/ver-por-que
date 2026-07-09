@@ -15,7 +15,7 @@ import type {
     ProbeBloomSuccess,
     WorkerResponse,
 } from './protocol';
-import type { DictionaryPreviewResult, PreviewResult } from './pyodide-parquet';
+import type { BloomProbeResult, DictionaryPreviewResult, PreviewResult } from './pyodide-parquet';
 
 type Success =
     ParseSuccess | ProbeBloomSuccess | PreviewSuccess | DictionaryPreviewSuccess | BootSuccess;
@@ -102,10 +102,11 @@ export class ParquetWorkerClient {
 
     /**
      * Probes a bloom filter in the worker's current file (the one it parsed
-     * last). False is exact -- definitely absent; true is only ever a maybe.
+     * last), returning the full split-block derivation. `.mightContain` is the
+     * verdict: false is exact -- definitely absent; true is only ever a maybe.
      */
-    probeBloom(rowGroup: number, column: string, value: string): Promise<boolean> {
-        return this.request({ probe: { rowGroup, column, value } }).then(msg => msg.mightContain!);
+    probeBloom(rowGroup: number, column: string, value: string): Promise<BloomProbeResult> {
+        return this.request({ probe: { rowGroup, column, value } }).then(msg => msg.bloomProbe!);
     }
 
     /**
