@@ -265,7 +265,9 @@ code {
 
 /* App header */
 .app-header {
-    padding: var(--spacing-xxl) 0;
+    /* Horizontal padding matches .app-main's 1rem inset so the title + subtitle
+       don't run to the viewport edges (most visible at small widths). */
+    padding: var(--spacing-xxl) 1rem;
     text-align: center;
     position: relative;
 }
@@ -792,7 +794,8 @@ code {
     }
 
     .app-header {
-        padding: var(--spacing-xl) 0;
+        /* Keep the horizontal inset at small widths (only reduce the vertical). */
+        padding: var(--spacing-xl) 1rem;
     }
 
     .app-header h1 {
