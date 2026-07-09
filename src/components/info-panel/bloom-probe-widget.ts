@@ -18,7 +18,7 @@ import type {
     BloomProbeResult,
 } from '../../js/worker/pyodide-parquet';
 import type { AnyDump } from '../../types';
-import type { BloomBlocks, BloomDensity, BloomProbe } from '../info-panel-manager';
+import type { BloomBlocks, BloomDensity, BloomProbe } from './capabilities';
 import { blockCellInner, renderBloomLineage, renderBloomStrip } from './bloom-view';
 import { reportWorkerError } from './recovery';
 import type { RecoveryActions } from './recovery';
