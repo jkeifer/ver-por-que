@@ -287,6 +287,11 @@ code {
     margin-bottom: 0;
 }
 
+/* Without this the subtitle link falls back to the UA default blue. */
+.app-header a {
+    color: var(--accent-color);
+}
+
 /* Site footer */
 .site-footer {
     margin-top: var(--spacing-xxl);
