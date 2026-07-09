@@ -421,21 +421,24 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
     await expect(page.locator('#info-panel-container')).toContainText('Bloom Filter');
 
     // 'Hello' is in the column (footer stats min); the filter can only say maybe.
-    // A "maybe" renders the block with all eight checked bits set (no misses).
+    // A "maybe" renders the probed block with all eight checked bits set (no
+    // misses). The verdict is in .bloom-probe-result; the grid/lineage/marks
+    // render in the selected block's .bloom-block-wrap sibling.
     const result = page.locator('.bloom-probe-result');
+    const block = page.locator('.bloom-block-wrap');
     await page.locator('.bloom-probe-value').fill('Hello');
     await page.locator('.bloom-probe-btn').click();
     await expect(result).toContainText('maybe present');
-    await expect(result.locator('svg.bloom-block')).toBeVisible();
-    await expect(result.locator('.bloom-lineage')).toContainText('8/8 bits set');
-    await expect(result.locator('.bloom-bit-miss')).toHaveCount(0);
+    await expect(block.locator('svg.bloom-block')).toBeVisible();
+    await expect(block.locator('.bloom-lineage')).toContainText('8/8 bits set');
+    await expect(block.locator('.bloom-bit-miss')).toHaveCount(0);
 
     // Garbage gets the exact answer: definitely absent — at least one miss bit,
     // which is the visual proof the reader can skip the row group.
     await page.locator('.bloom-probe-value').fill('zzzzzz-not-here');
     await page.locator('.bloom-probe-btn').click();
     await expect(result).toContainText('definitely not present');
-    expect(await result.locator('.bloom-bit-miss').count()).toBeGreaterThan(0);
+    expect(await block.locator('.bloom-bit-miss').count()).toBeGreaterThan(0);
 
     // Value preview: decode the String column's data page in-browser and show
     // real values (the preview lives on the page, not the chunk).
@@ -478,25 +481,38 @@ test(
         const panel = page.locator('#info-panel-container');
         await expect(panel).toContainText('Probe a Value');
 
-        // Base state: the whole-filter density strip is visible BEFORE any probe.
+        // Base state: the whole-filter density strip AND the default (block 0)
+        // bit-grid are visible BEFORE any probe, and Clear is disabled.
         await expect(panel.locator('svg.bloom-strip')).toBeVisible();
+        await expect(panel.locator('svg.bloom-block')).toBeVisible();
         await expect(panel).toContainText('% full');
+        await expect(panel.locator('.bloom-strip-cell.selected')).toHaveCount(1);
+        await expect(page.locator('.bloom-probe-clear')).toBeDisabled();
 
-        // Probe a value: verdict + per-block bit-grid + a Clear button appear.
+        // Probe a value: verdict + hit/miss marks on the probed block's grid,
+        // the probed strip cell marked, and Clear enabled.
         const result = page.locator('.bloom-probe-result');
         await page.locator('.bloom-probe-value').fill('20.5');
         await page.locator('.bloom-probe-btn').click();
         await expect(result).toContainText('present');
-        await expect(result.locator('svg.bloom-block')).toBeVisible();
-        await expect(result.locator('.bloom-probe-clear')).toBeVisible();
-        // The strip is still there, now with a highlighted bucket.
-        await expect(panel.locator('svg.bloom-strip .bloom-strip-hit')).toHaveCount(1);
+        await expect(panel.locator('.bloom-lineage')).toContainText('bits set');
+        await expect(panel.locator('.bloom-strip-cell.probed')).toHaveCount(1);
+        await expect(page.locator('.bloom-probe-clear')).toBeEnabled();
+        const marked = await panel.locator('.bloom-bit-hit, .bloom-bit-miss').count();
+        expect(marked).toBe(8);
 
-        // Clear: the result area empties but the base strip remains.
-        await result.locator('.bloom-probe-clear').click();
-        await expect(result.locator('svg.bloom-block')).toHaveCount(0);
-        await expect(panel.locator('svg.bloom-strip')).toBeVisible();
-        await expect(panel.locator('svg.bloom-strip .bloom-strip-hit')).toHaveCount(0);
+        // Click a DIFFERENT strip cell (the first cell, block 0): the grid
+        // switches to that block, shown plain (no verdict, no hit/miss marks).
+        await panel.locator('.bloom-strip-cell[data-block="0"]').click();
+        await expect(result).not.toContainText('present');
+        await expect(panel.locator('.bloom-bit-hit, .bloom-bit-miss')).toHaveCount(0);
+        await expect(panel.locator('svg.bloom-block')).toBeVisible();
+
+        // Clear: the probe overlay (marks + verdict) is gone and Clear disabled.
+        await page.locator('.bloom-probe-clear').click();
+        await expect(page.locator('.bloom-probe-clear')).toBeDisabled();
+        await expect(panel.locator('.bloom-strip-cell.probed')).toHaveCount(0);
+        await expect(result).not.toContainText('present');
     }
 );
 

@@ -1394,9 +1394,34 @@ code {
     fill: var(--border-light);
 }
 
-.bloom-strip .bloom-strip-hit {
-    stroke: #e67e22;
-    stroke-width: 1.5;
+/* Each cell is accent-filled; its density rides on fill-opacity (inline),
+ * since var() doesn't resolve in an SVG fill presentation attribute. */
+.bloom-strip-cell {
+    fill: var(--accent-color);
+}
+
+/* Inset outlines mirror the segment selection pattern: hover/selected/probed.
+ * A cell can be both selected and probed; the probe color wins visually via
+ * source order. */
+.bloom-strip-cell:hover {
+    outline: 2px solid var(--outline-on-light);
+    outline-offset: -2px;
+    cursor: pointer;
+}
+
+.bloom-strip-cell.selected {
+    outline: 3px solid var(--outline-on-light);
+    outline-offset: -3px;
+}
+
+.bloom-strip-cell.probed {
+    outline: 2px solid #e67e22;
+    outline-offset: -2px;
+}
+
+/* The selected block's bit-grid, below the strip. */
+.bloom-block-wrap {
+    margin-bottom: var(--spacing-sm);
 }
 
 .bloom-strip-readout {
