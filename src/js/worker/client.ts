@@ -2,23 +2,7 @@
  * Main-thread handle to the parquet worker. Spins the worker up on first use
  * (so the JSON path pays zero pyodide cost) and reuses it thereafter.
  */
-import type {
-    BloomBlocksRequest,
-    BloomBlocksSuccess,
-    BloomDensityRequest,
-    BloomDensitySuccess,
-    BootRequest,
-    BootSuccess,
-    DictionaryPreviewRequest,
-    DictionaryPreviewSuccess,
-    ParseRequest,
-    ParseSuccess,
-    PreviewRequest,
-    PreviewSuccess,
-    ProbeBloomRequest,
-    ProbeBloomSuccess,
-    WorkerResponse,
-} from './protocol';
+import type { WorkerRequest, WorkerResponse } from './protocol';
 import type {
     BloomDensityResult,
     BloomProbeResult,
@@ -26,17 +10,19 @@ import type {
     PreviewResult,
 } from './pyodide-parquet';
 
-type Success =
-    | ParseSuccess
-    | ProbeBloomSuccess
-    | BloomDensitySuccess
-    | BloomBlocksSuccess
-    | PreviewSuccess
-    | DictionaryPreviewSuccess
-    | BootSuccess;
+/** An id-bearing request (i.e. one that expects a reply, not fire-and-forget). */
+type Ask = Extract<WorkerRequest, { id: number }>;
+/** The kinds of request that expect a reply. */
+type AskKind = Ask['kind'];
+/** A request payload with `id`/`manifestUrl` stripped (the client fills those). */
+type AskPayload<K extends AskKind> = Omit<Extract<Ask, { kind: K }>, 'id' | 'manifestUrl'>;
+/** A response that answers a request (has an `id`), as opposed to an event. */
+type Reply = Extract<WorkerResponse, { id: number }>;
+/** The success reply tagged with a given `kind`. */
+type SuccessOf<K extends Reply['kind']> = Extract<Reply, { kind: K; ok: true }>;
 
 interface Pending {
-    resolve: (msg: Success) => void;
+    resolve: (msg: Reply) => void;
     reject: (error: Error) => void;
 }
 
@@ -77,17 +63,16 @@ export class ParquetWorkerClient {
     }
 
     private handle(msg: WorkerResponse): void {
-        if ('status' in msg && msg.status !== undefined) {
-            this.onStatus(msg.status);
-            return;
-        }
-        if ('detail' in msg && msg.detail !== undefined) {
-            this.onDetail(msg.detail);
-            return;
-        }
-        if ('progress' in msg && msg.progress !== undefined) {
-            this.onProgress(msg.progress);
-            return;
+        switch (msg.kind) {
+            case 'status':
+                this.onStatus(msg.status);
+                return;
+            case 'detail':
+                this.onDetail(msg.detail);
+                return;
+            case 'progress':
+                this.onProgress(msg.progress);
+                return;
         }
         const entry = this.pending.get(msg.id);
         if (!entry) {
@@ -103,7 +88,7 @@ export class ParquetWorkerClient {
 
     /** Parses raw parquet bytes into a por-que dump JSON string. */
     parse(bytes: ArrayBuffer, name: string): Promise<string> {
-        return this.request({ name, bytes }, [bytes]).then(msg => msg.dump!);
+        return this.request({ kind: 'parse', name, bytes }, [bytes]).then(msg => msg.dump);
     }
 
     /**
@@ -112,7 +97,7 @@ export class ParquetWorkerClient {
      * download when the server (or CORS) doesn't support ranges.
      */
     parseURL(url: string): Promise<string> {
-        return this.request({ name: url, url }).then(msg => msg.dump!);
+        return this.request({ kind: 'parse', name: url, url }).then(msg => msg.dump);
     }
 
     /**
@@ -121,7 +106,7 @@ export class ParquetWorkerClient {
      * verdict: false is exact -- definitely absent; true is only ever a maybe.
      */
     probeBloom(rowGroup: number, column: string, value: string): Promise<BloomProbeResult> {
-        return this.request({ probe: { rowGroup, column, value } }).then(msg => msg.bloomProbe!);
+        return this.request({ kind: 'probe', rowGroup, column, value }).then(msg => msg.bloomProbe);
     }
 
     /**
@@ -129,7 +114,9 @@ export class ParquetWorkerClient {
      * reduces it to a density strip (block count, overall fill, per-bucket fills).
      */
     bloomDensity(rowGroup: number, column: string): Promise<BloomDensityResult> {
-        return this.request({ bloomDensity: { rowGroup, column } }).then(msg => msg.bloomDensity!);
+        return this.request({ kind: 'bloomDensity', rowGroup, column }).then(
+            msg => msg.bloomDensity
+        );
     }
 
     /**
@@ -138,8 +125,8 @@ export class ParquetWorkerClient {
      * block bit-grids renders on demand at any filter size in one call.
      */
     bloomBlocks(rowGroup: number, column: string, start: number, count: number): Promise<string> {
-        return this.request({ bloomBlocks: { rowGroup, column, start, count } }).then(
-            msg => msg.bloomBlocks!
+        return this.request({ kind: 'bloomBlocks', rowGroup, column, start, count }).then(
+            msg => msg.bloomBlocks
         );
     }
 
@@ -158,8 +145,14 @@ export class ParquetWorkerClient {
         skipNulls: boolean
     ): Promise<PreviewResult> {
         return this.request({
-            preview: { rowGroup, column, pageIndex, offset, limit, skipNulls },
-        }).then(msg => msg.preview!);
+            kind: 'preview',
+            rowGroup,
+            column,
+            pageIndex,
+            offset,
+            limit,
+            skipNulls,
+        }).then(msg => msg.preview);
     }
 
     /**
@@ -174,8 +167,12 @@ export class ParquetWorkerClient {
         limit: number
     ): Promise<DictionaryPreviewResult> {
         return this.request({
-            dictionaryPreview: { rowGroup, column, offset, limit },
-        }).then(msg => msg.dictionaryPreview!);
+            kind: 'dictionaryPreview',
+            rowGroup,
+            column,
+            offset,
+            limit,
+        }).then(msg => msg.dictionaryPreview);
     }
 
     /**
@@ -184,7 +181,7 @@ export class ParquetWorkerClient {
      * without re-parsing the file. One-time per dump; the caller memoizes.
      */
     bootFromDump(dumpJson: string, url: string): Promise<void> {
-        return this.request({ boot: { dumpJson, url } }).then(() => undefined);
+        return this.request({ kind: 'boot', dumpJson, url }).then(() => undefined);
     }
 
     /**
@@ -192,7 +189,7 @@ export class ParquetWorkerClient {
      * runtime is warm -- or already up -- before the first parse.
      */
     warmUp(): void {
-        this.ensureWorker().postMessage({ warmup: true, manifestUrl: manifestUrl() });
+        this.ensureWorker().postMessage({ kind: 'warmup', manifestUrl: manifestUrl() });
     }
 
     /**
@@ -201,34 +198,26 @@ export class ParquetWorkerClient {
      * fetch. Sent after a parse/boot resolves (the worker must have a file).
      */
     prefetchBlooms(): void {
-        this.ensureWorker().postMessage({ prefetchBlooms: true, manifestUrl: manifestUrl() });
+        this.ensureWorker().postMessage({ kind: 'prefetchBlooms', manifestUrl: manifestUrl() });
     }
 
-    private request(
-        payload:
-            | ({ name: string } & ({ bytes: ArrayBuffer } | { url: string }))
-            | { probe: ProbeBloomRequest['probe'] }
-            | { bloomDensity: BloomDensityRequest['bloomDensity'] }
-            | { bloomBlocks: BloomBlocksRequest['bloomBlocks'] }
-            | { preview: PreviewRequest['preview'] }
-            | { dictionaryPreview: DictionaryPreviewRequest['dictionaryPreview'] }
-            | { boot: BootRequest['boot'] },
+    /**
+     * Sends one id-bearing request and resolves with its success reply. The
+     * caller supplies everything but `id`/`manifestUrl` (both filled here); the
+     * response kind matches the request kind, so the returned type narrows to
+     * exactly that success shape -- no post-hoc assertions needed.
+     */
+    private request<K extends AskKind>(
+        payload: AskPayload<K> & { kind: K },
         transfer: Transferable[] = []
-    ): Promise<Success> {
+    ): Promise<SuccessOf<K>> {
         const worker = this.ensureWorker();
         const id = this.nextId++;
-        return new Promise<Success>((resolve, reject) => {
+        return new Promise<Reply>((resolve, reject) => {
             this.pending.set(id, { resolve, reject });
-            const req = { id, manifestUrl: manifestUrl(), ...payload } as
-                | ParseRequest
-                | ProbeBloomRequest
-                | BloomDensityRequest
-                | BloomBlocksRequest
-                | PreviewRequest
-                | DictionaryPreviewRequest
-                | BootRequest;
+            const req = { id, manifestUrl: manifestUrl(), ...payload } as unknown as WorkerRequest;
             worker.postMessage(req, transfer);
-        });
+        }) as Promise<SuccessOf<K>>;
     }
 }
 

@@ -1,4 +1,9 @@
-/** Message shapes exchanged between main thread and the parquet worker. */
+/**
+ * Message shapes exchanged between main thread and the parquet worker. Requests
+ * and responses are tagged unions: every variant carries a `kind` discriminant,
+ * so both ends narrow on the tag rather than probing for defined keys. Adding a
+ * message type costs only its own variant -- no per-variant padding to maintain.
+ */
 import type {
     BloomDensityResult,
     BloomProbeResult,
@@ -6,19 +11,20 @@ import type {
     PreviewResult,
 } from './pyodide-parquet';
 
-interface ParseRequestBase {
+/**
+ * Parse a parquet file. Exactly one source is set: `bytes` (locally-provided
+ * upload/drop, transferred not copied) or `url` (a remote file read in place via
+ * HTTP range requests, no full download). The worker branches on which is present.
+ */
+export interface ParseRequest {
+    kind: 'parse';
     id: number;
     name: string;
     /** Absolute URL of the wheel manifest, resolved against the document. */
     manifestUrl: string;
-    warmup?: undefined;
-    probe?: undefined;
-    preview?: undefined;
-    dictionaryPreview?: undefined;
-    bloomDensity?: undefined;
-    bloomBlocks?: undefined;
-    boot?: undefined;
-    prefetchBlooms?: undefined;
+    /** Raw parquet bytes; transferred (not copied) to the worker. */
+    bytes?: ArrayBuffer;
+    url?: string;
 }
 
 /**
@@ -27,31 +33,9 @@ interface ParseRequestBase {
  * response; a failed warm boot is retried by the first real parse.
  */
 export interface WarmupRequest {
-    warmup: true;
+    kind: 'warmup';
     manifestUrl: string;
-    probe?: undefined;
-    preview?: undefined;
-    dictionaryPreview?: undefined;
-    bloomDensity?: undefined;
-    bloomBlocks?: undefined;
-    boot?: undefined;
-    prefetchBlooms?: undefined;
 }
-
-/** Parse locally-provided bytes (upload/drop). */
-export interface ParseBytesRequest extends ParseRequestBase {
-    /** Raw parquet bytes; transferred (not copied) to the worker. */
-    bytes: ArrayBuffer;
-    url?: undefined;
-}
-
-/** Parse a remote file in place via HTTP range requests (no full download). */
-export interface ParseUrlRequest extends ParseRequestBase {
-    url: string;
-    bytes?: undefined;
-}
-
-export type ParseRequest = ParseBytesRequest | ParseUrlRequest;
 
 /**
  * Probe a column chunk's bloom filter in the worker's current file (the most
@@ -59,18 +43,12 @@ export type ParseRequest = ParseBytesRequest | ParseUrlRequest;
  * the column's physical type (string transport is BigInt-safe for INT64).
  */
 export interface ProbeBloomRequest {
+    kind: 'probe';
     id: number;
     manifestUrl: string;
-    probe: { rowGroup: number; column: string; value: string };
-    warmup?: undefined;
-    preview?: undefined;
-    dictionaryPreview?: undefined;
-    bloomDensity?: undefined;
-    bloomBlocks?: undefined;
-    boot?: undefined;
-    prefetchBlooms?: undefined;
-    bytes?: undefined;
-    url?: undefined;
+    rowGroup: number;
+    column: string;
+    value: string;
 }
 
 /**
@@ -79,18 +57,11 @@ export interface ProbeBloomRequest {
  * per-bucket fill fractions (BloomDensityResult).
  */
 export interface BloomDensityRequest {
+    kind: 'bloomDensity';
     id: number;
     manifestUrl: string;
-    bloomDensity: { rowGroup: number; column: string };
-    warmup?: undefined;
-    probe?: undefined;
-    preview?: undefined;
-    dictionaryPreview?: undefined;
-    bloomBlocks?: undefined;
-    boot?: undefined;
-    prefetchBlooms?: undefined;
-    bytes?: undefined;
-    url?: undefined;
+    rowGroup: number;
+    column: string;
 }
 
 /**
@@ -99,18 +70,13 @@ export interface BloomDensityRequest {
  * a window of block bit-grids on demand at any filter size in one call.
  */
 export interface BloomBlocksRequest {
+    kind: 'bloomBlocks';
     id: number;
     manifestUrl: string;
-    bloomBlocks: { rowGroup: number; column: string; start: number; count: number };
-    warmup?: undefined;
-    probe?: undefined;
-    preview?: undefined;
-    dictionaryPreview?: undefined;
-    bloomDensity?: undefined;
-    boot?: undefined;
-    prefetchBlooms?: undefined;
-    bytes?: undefined;
-    url?: undefined;
+    rowGroup: number;
+    column: string;
+    start: number;
+    count: number;
 }
 
 /**
@@ -120,25 +86,15 @@ export interface BloomBlocksRequest {
  * success payload (PreviewResult), never an error response.
  */
 export interface PreviewRequest {
+    kind: 'preview';
     id: number;
     manifestUrl: string;
-    preview: {
-        rowGroup: number;
-        column: string;
-        pageIndex: number;
-        offset: number;
-        limit: number;
-        skipNulls: boolean;
-    };
-    warmup?: undefined;
-    probe?: undefined;
-    dictionaryPreview?: undefined;
-    bloomDensity?: undefined;
-    bloomBlocks?: undefined;
-    boot?: undefined;
-    prefetchBlooms?: undefined;
-    bytes?: undefined;
-    url?: undefined;
+    rowGroup: number;
+    column: string;
+    pageIndex: number;
+    offset: number;
+    limit: number;
+    skipNulls: boolean;
 }
 
 /**
@@ -148,18 +104,13 @@ export interface PreviewRequest {
  * success payload (DictionaryPreviewResult), never an error response.
  */
 export interface DictionaryPreviewRequest {
+    kind: 'dictionaryPreview';
     id: number;
     manifestUrl: string;
-    dictionaryPreview: { rowGroup: number; column: string; offset: number; limit: number };
-    warmup?: undefined;
-    probe?: undefined;
-    preview?: undefined;
-    bloomDensity?: undefined;
-    bloomBlocks?: undefined;
-    boot?: undefined;
-    prefetchBlooms?: undefined;
-    bytes?: undefined;
-    url?: undefined;
+    rowGroup: number;
+    column: string;
+    offset: number;
+    limit: number;
 }
 
 /**
@@ -168,18 +119,11 @@ export interface DictionaryPreviewRequest {
  * dump without re-parsing the file (the dump already holds every offset).
  */
 export interface BootRequest {
+    kind: 'boot';
     id: number;
     manifestUrl: string;
-    boot: { dumpJson: string; url: string };
-    warmup?: undefined;
-    probe?: undefined;
-    preview?: undefined;
-    dictionaryPreview?: undefined;
-    bloomDensity?: undefined;
-    bloomBlocks?: undefined;
-    prefetchBlooms?: undefined;
-    bytes?: undefined;
-    url?: undefined;
+    dumpJson: string;
+    url: string;
 }
 
 /**
@@ -189,15 +133,8 @@ export interface BootRequest {
  * sent only after a parse/boot has resolved.
  */
 export interface PrefetchBloomsRequest {
-    prefetchBlooms: true;
+    kind: 'prefetchBlooms';
     manifestUrl: string;
-    warmup?: undefined;
-    probe?: undefined;
-    preview?: undefined;
-    dictionaryPreview?: undefined;
-    bloomDensity?: undefined;
-    bloomBlocks?: undefined;
-    boot?: undefined;
 }
 
 /** Everything the main thread can send to the worker. */
@@ -213,95 +150,60 @@ export type WorkerRequest =
     | PrefetchBloomsRequest;
 
 export interface ParseSuccess {
+    kind: 'parse';
     id: number;
     ok: true;
     dump: string;
-    bloomProbe?: undefined;
-    bloomDensity?: undefined;
-    bloomBlocks?: undefined;
-    preview?: undefined;
-    dictionaryPreview?: undefined;
-    booted?: undefined;
 }
 
 export interface ProbeBloomSuccess {
+    kind: 'probe';
     id: number;
     ok: true;
     /** The probe's full split-block derivation; `.mightContain` is the verdict
      *  (false is exact absence, true is only ever a maybe). */
     bloomProbe: BloomProbeResult;
-    dump?: undefined;
-    bloomDensity?: undefined;
-    bloomBlocks?: undefined;
-    preview?: undefined;
-    dictionaryPreview?: undefined;
-    booted?: undefined;
 }
 
 export interface BloomDensitySuccess {
+    kind: 'bloomDensity';
     id: number;
     ok: true;
     /** The whole filter reduced to a density strip (blocks, fill, buckets). */
     bloomDensity: BloomDensityResult;
-    dump?: undefined;
-    bloomProbe?: undefined;
-    bloomBlocks?: undefined;
-    preview?: undefined;
-    dictionaryPreview?: undefined;
-    booted?: undefined;
 }
 
 export interface BloomBlocksSuccess {
+    kind: 'bloomBlocks';
     id: number;
     ok: true;
     /** A contiguous run of 256-bit blocks' raw bytes, base64 (count*32 bytes). */
     bloomBlocks: string;
-    dump?: undefined;
-    bloomProbe?: undefined;
-    bloomDensity?: undefined;
-    preview?: undefined;
-    dictionaryPreview?: undefined;
-    booted?: undefined;
 }
 
 export interface PreviewSuccess {
+    kind: 'preview';
     id: number;
     ok: true;
     preview: PreviewResult;
-    dump?: undefined;
-    bloomProbe?: undefined;
-    bloomDensity?: undefined;
-    bloomBlocks?: undefined;
-    dictionaryPreview?: undefined;
-    booted?: undefined;
 }
 
 export interface DictionaryPreviewSuccess {
+    kind: 'dictionaryPreview';
     id: number;
     ok: true;
     dictionaryPreview: DictionaryPreviewResult;
-    dump?: undefined;
-    bloomProbe?: undefined;
-    bloomDensity?: undefined;
-    bloomBlocks?: undefined;
-    preview?: undefined;
-    booted?: undefined;
 }
 
 /** Acknowledges a BootRequest; carries no payload. */
 export interface BootSuccess {
+    kind: 'boot';
     id: number;
     ok: true;
-    booted: true;
-    dump?: undefined;
-    bloomProbe?: undefined;
-    bloomDensity?: undefined;
-    bloomBlocks?: undefined;
-    preview?: undefined;
-    dictionaryPreview?: undefined;
 }
 
 export interface ParseFailure {
+    kind: 'failure';
     id: number;
     ok: false;
     error: string;
@@ -309,9 +211,8 @@ export interface ParseFailure {
 
 /** Unsolicited boot/parse progress, surfaced in the loading-status element. */
 export interface StatusEvent {
+    kind: 'status';
     status: string;
-    detail?: undefined;
-    progress?: undefined;
 }
 
 /**
@@ -319,9 +220,8 @@ export interface StatusEvent {
  * during boot). Each one overwrites the previous in the loading-detail line.
  */
 export interface DetailEvent {
+    kind: 'detail';
     detail: string;
-    status?: undefined;
-    progress?: undefined;
 }
 
 /**
@@ -329,9 +229,8 @@ export interface DetailEvent {
  * loading spinner for a progress bar. Reset by the next status change.
  */
 export interface ProgressEvent {
+    kind: 'progress';
     progress: number;
-    status?: undefined;
-    detail?: undefined;
 }
 
 export type WorkerResponse =
