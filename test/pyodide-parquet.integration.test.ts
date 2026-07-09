@@ -216,10 +216,10 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         expect(density.fill).toBeLessThan(1);
         expect(density.buckets.length).toBeGreaterThan(0);
         expect(density.buckets.every(b => b >= 0 && b <= 1)).toBe(true);
-        // Small filter (8 blocks): the whole bitset ships as base64, decoding
-        // to exactly numBlocks * 32 bytes, so the UI can render any block.
-        expect(typeof density.bitset).toBe('string');
-        expect(Buffer.from(density.bitset!, 'base64').length).toBe(density.numBlocks * 32);
+        // Any block's 32 raw bytes come back on demand (base64), so the UI can
+        // render any block's bit-grid at any filter size without shipping bytes.
+        const block0 = await parse.bloomBlock(0, 'temperature', 0);
+        expect(Buffer.from(block0, 'base64').length).toBe(32);
     });
 
     it('previews a data page of decoded values from the current-file slot', async () => {

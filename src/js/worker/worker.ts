@@ -96,6 +96,12 @@ ctx.addEventListener('message', event => {
                 ctx.postMessage({ id: req.id, ok: true, bloomDensity });
                 return;
             }
+            if (req.bloomBlock) {
+                const { rowGroup, column, blockIndex } = req.bloomBlock;
+                const bloomBlock = await parser.bloomBlock(rowGroup, column, blockIndex);
+                ctx.postMessage({ id: req.id, ok: true, bloomBlock });
+                return;
+            }
             if (req.preview) {
                 const { rowGroup, column, pageIndex, offset, limit, skipNulls } = req.preview;
                 const preview = await parser.preview(

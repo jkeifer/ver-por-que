@@ -112,6 +112,13 @@ export type BloomProbe = (
 export type BloomDensity = (rowGroup: number, column: string) => Promise<BloomDensityResult>;
 
 /**
+ * Reads one 256-bit block's 32 raw bytes (base64) from a column chunk's bloom
+ * filter, so any block's bit-grid renders on demand at any filter size. Same
+ * lifecycle as BloomDensity.
+ */
+export type BloomBlock = (rowGroup: number, column: string, blockIndex: number) => Promise<string>;
+
+/**
  * Decodes a window of a data page in the worker's current file, starting at
  * value `offset`; with `skipNulls` the window is up to `limit` non-null values.
  * Only raw-parquet loads have one, same as BloomProbe.
@@ -1280,6 +1287,8 @@ export class InfoPanelManager {
     private bloomProbe: BloomProbe | null;
     /** Live whole-filter density reader; same lifecycle as bloomProbe. */
     private bloomDensity: BloomDensity | null;
+    /** Live single-block byte reader; same lifecycle as bloomProbe. */
+    private bloomBlock: BloomBlock | null;
     /** Live value decoder; null for JSON-dump / metadata-only loads. */
     private valuePreview: ValuePreview | null;
     /** Live dictionary decoder; same lifecycle as valuePreview. */
@@ -1295,6 +1304,7 @@ export class InfoPanelManager {
         container: HTMLElement,
         bloomProbe: BloomProbe | null = null,
         bloomDensity: BloomDensity | null = null,
+        bloomBlock: BloomBlock | null = null,
         valuePreview: ValuePreview | null = null,
         dictionaryPreview: DictionaryPreview | null = null,
         recovery: RecoveryActions = { loadFullStructure: null, downloadFullFile: null }
@@ -1303,6 +1313,7 @@ export class InfoPanelManager {
         this.container.innerHTML = '';
         this.bloomProbe = bloomProbe;
         this.bloomDensity = bloomDensity;
+        this.bloomBlock = bloomBlock;
         this.valuePreview = valuePreview;
         this.dictionaryPreview = dictionaryPreview;
         this.recovery = recovery;
