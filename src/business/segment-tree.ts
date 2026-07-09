@@ -48,6 +48,7 @@ export type Kind =
     | 'row_groups_meta'
     | 'row_group_meta'
     | 'chunk_meta'
+    | 'row_group_fields'
     | 'kv_meta'
     | 'kv_entry'
     | 'footer'
@@ -75,6 +76,7 @@ export const KINDS: Kind[] = [
     'row_groups_meta',
     'row_group_meta',
     'chunk_meta',
+    'row_group_fields',
     'kv_meta',
     'kv_entry',
     'footer',
@@ -131,6 +133,7 @@ export type SegmentNode =
     | (Base & { kind: 'row_groups_meta'; groups: RowGroup[] })
     | (Base & { kind: 'row_group_meta'; index: number; group: RowGroup })
     | (Base & { kind: 'chunk_meta'; meta: ColumnMetadata; path: string })
+    | (Base & { kind: 'row_group_fields' })
     | (Base & { kind: 'kv_meta'; entries: KeyValueEntry[] })
     | (Base & { kind: 'kv_entry'; entry: KeyValueEntry });
 
@@ -708,15 +711,36 @@ function buildRowGroupMeta(group: RowGroup, index: number): SegmentNode {
         children: [],
     }));
 
+    const rowGroupMetaEnd = group.start_offset + group.byte_length;
+    chunks.sort(byStart);
+
+    // The per-column chunk_meta children cover only the ColumnMetaData thrift
+    // structs; the RowGroup's own scalar fields (num_rows, total_byte_size,
+    // sorting_columns, ordinal, ...) are written after them. Surface that
+    // trailing remainder as one labeled node so nothing goes unaccounted for.
+    if (chunks.length > 0) {
+        const chunksEnd = Math.max(...chunks.map(c => c.end));
+        if (chunksEnd < rowGroupMetaEnd) {
+            chunks.push({
+                kind: 'row_group_fields',
+                id: `rgm_${index}_fields`,
+                name: 'row group fields',
+                start: chunksEnd,
+                end: rowGroupMetaEnd,
+                children: [],
+            });
+        }
+    }
+
     return {
         kind: 'row_group_meta',
         id: `rgm_${index}`,
         name: `RG${index} META`,
         start: group.start_offset,
-        end: group.start_offset + group.byte_length,
+        end: rowGroupMetaEnd,
         index,
         group,
-        children: chunks.sort(byStart),
+        children: chunks,
     };
 }
 
@@ -809,6 +833,8 @@ export function describe(node: SegmentNode): string {
             return `Row Group ${node.index} metadata`;
         case 'chunk_meta':
             return `Column metadata ${node.name}`;
+        case 'row_group_fields':
+            return 'Row-group fields';
         case 'kv_meta':
             return 'Key-value metadata';
         case 'kv_entry':

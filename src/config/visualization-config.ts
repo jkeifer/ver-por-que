@@ -91,6 +91,9 @@ export class VisualizationConfig {
         row_groups_meta: ['--row-groups'],
         row_group_meta: ['--row-group-light', '--row-group-medium', '--row-group-dark'],
         chunk_meta: ['--column-chunk-light', '--column-chunk-medium', '--column-chunk-dark'],
+        // Neutral gray: structural row-group overhead, distinct from the
+        // column metadata that precedes it.
+        row_group_fields: ['--generic-segment-color'],
         kv_meta: ['--red-medium'],
         kv_entry: ['--green-light', '--green-medium', '--green-dark'],
     };
