@@ -336,11 +336,12 @@ export function createBloomProbeWidget(
                 : `column '${node.path}' was not found in the schema`;
             return;
         }
-        note.textContent = 'Probing...';
+        // Show "Probing…" in the reserved-height status area (not the note),
+        // so the card never grows/shrinks while a probe is in flight.
+        status.innerHTML = `<p class="bloom-probe-hint">Probing…</p>`;
         deps.bloomProbe(node.rowGroup, node.path, value).then(
             res => {
                 probe = res;
-                note.textContent = '';
                 clearBtn.disabled = false;
                 renderStatus();
                 // Re-mark the strip, scroll the probed block into view, and
@@ -350,7 +351,12 @@ export function createBloomProbeWidget(
                 invalidate();
                 onScroll();
             },
-            (error: unknown) => reportWorkerError(note, error, 'Probe failed', deps.recovery)
+            (error: unknown) => {
+                // Revert the status from "Probing…" (to the hint or prior result)
+                // and surface the failure in the note.
+                renderStatus();
+                reportWorkerError(note, error, 'Probe failed', deps.recovery);
+            }
         );
     };
     probeBtn.addEventListener('click', run);
