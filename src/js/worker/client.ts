@@ -3,6 +3,8 @@
  * (so the JSON path pays zero pyodide cost) and reuses it thereafter.
  */
 import type {
+    BloomDensityRequest,
+    BloomDensitySuccess,
     BootRequest,
     BootSuccess,
     DictionaryPreviewRequest,
@@ -15,10 +17,20 @@ import type {
     ProbeBloomSuccess,
     WorkerResponse,
 } from './protocol';
-import type { BloomProbeResult, DictionaryPreviewResult, PreviewResult } from './pyodide-parquet';
+import type {
+    BloomDensityResult,
+    BloomProbeResult,
+    DictionaryPreviewResult,
+    PreviewResult,
+} from './pyodide-parquet';
 
 type Success =
-    ParseSuccess | ProbeBloomSuccess | PreviewSuccess | DictionaryPreviewSuccess | BootSuccess;
+    | ParseSuccess
+    | ProbeBloomSuccess
+    | BloomDensitySuccess
+    | PreviewSuccess
+    | DictionaryPreviewSuccess
+    | BootSuccess;
 
 interface Pending {
     resolve: (msg: Success) => void;
@@ -110,6 +122,14 @@ export class ParquetWorkerClient {
     }
 
     /**
+     * Reads a column chunk's whole bloom filter in the worker's current file and
+     * reduces it to a density strip (block count, overall fill, per-bucket fills).
+     */
+    bloomDensity(rowGroup: number, column: string): Promise<BloomDensityResult> {
+        return this.request({ bloomDensity: { rowGroup, column } }).then(msg => msg.bloomDensity!);
+    }
+
+    /**
      * Decodes a window of a data page in the worker's current file, starting at
      * value `offset`. With `skipNulls`, the window is up to `limit` non-null
      * values. The page is decoded once and cached, so paging is cheap.
@@ -165,6 +185,7 @@ export class ParquetWorkerClient {
         payload:
             | ({ name: string } & ({ bytes: ArrayBuffer } | { url: string }))
             | { probe: ProbeBloomRequest['probe'] }
+            | { bloomDensity: BloomDensityRequest['bloomDensity'] }
             | { preview: PreviewRequest['preview'] }
             | { dictionaryPreview: DictionaryPreviewRequest['dictionaryPreview'] }
             | { boot: BootRequest['boot'] },
@@ -177,6 +198,7 @@ export class ParquetWorkerClient {
             const req = { id, manifestUrl: manifestUrl(), ...payload } as
                 | ParseRequest
                 | ProbeBloomRequest
+                | BloomDensityRequest
                 | PreviewRequest
                 | DictionaryPreviewRequest
                 | BootRequest;

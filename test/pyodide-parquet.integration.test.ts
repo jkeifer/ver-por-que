@@ -204,6 +204,20 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         await expect(parse.probeBloom(0, 'nope', 'x')).rejects.toThrow(/KeyError|nope/);
     });
 
+    it('reduces a whole bloom filter to a density strip', async () => {
+        // Every column of this fixture carries a real, populated bloom filter,
+        // so its density is neither empty (0) nor saturated (1).
+        const bytes = new Uint8Array(readFileSync(fixturePath('weather_station_daily.parquet')));
+        expectValidDump(await parse(bytes, 'weather_station_daily.parquet'));
+
+        const density = await parse.bloomDensity(0, 'temperature');
+        expect(density.numBlocks).toBeGreaterThan(0);
+        expect(density.fill).toBeGreaterThan(0);
+        expect(density.fill).toBeLessThan(1);
+        expect(density.buckets.length).toBeGreaterThan(0);
+        expect(density.buckets.every(b => b >= 0 && b <= 1)).toBe(true);
+    });
+
     it('previews a data page of decoded values from the current-file slot', async () => {
         const bloomFile = new Uint8Array(
             readFileSync(fixturePath('data_index_bloom_encoding_with_length.parquet'))
