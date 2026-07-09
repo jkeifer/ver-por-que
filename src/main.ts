@@ -4,6 +4,7 @@
 import {
     InfoPanelManager,
     type BloomProbe,
+    type DictionaryPreview,
     type ValuePreview,
 } from './components/info-panel-manager';
 import { QueryPanel } from './components/query-panel';
@@ -55,6 +56,9 @@ class ParquetExplorer {
     // Value decoder against the worker's current file; same lifecycle as the
     // bloom probe.
     private valuePreview: ValuePreview | null = null;
+    // Dictionary decoder against the worker's current file; same lifecycle as
+    // the value preview.
+    private dictionaryPreview: DictionaryPreview | null = null;
     // For a full dump loaded from JSON (or restored) whose source is a
     // fetchable URL: the one-time boot that rehydrates the dump into the
     // worker and attaches a range reader, so bloom/preview read only the spans
@@ -277,7 +281,13 @@ class ParquetExplorer {
             // whole and sniffed as before.
             if (isParquetURL(url)) {
                 const dump = await this.parseParquetURL(url);
-                await this.parseJSON(dump, url, this.workerBloomProbe(), this.workerValuePreview());
+                await this.parseJSON(
+                    dump,
+                    url,
+                    this.workerBloomProbe(),
+                    this.workerValuePreview(),
+                    this.workerDictionaryPreview()
+                );
                 return;
             }
 
@@ -302,7 +312,13 @@ class ParquetExplorer {
             // The worker takes ownership of the buffer (postMessage detaches
             // it); nothing here needs it afterward.
             const dump = await this.parseParquet(buffer, source);
-            await this.parseJSON(dump, source, this.workerBloomProbe(), this.workerValuePreview());
+            await this.parseJSON(
+                dump,
+                source,
+                this.workerBloomProbe(),
+                this.workerValuePreview(),
+                this.workerDictionaryPreview()
+            );
         } else {
             this.updateLoadingStatus('Parsing JSON data...');
             await this.parseJSON(new TextDecoder().decode(buffer), source);
@@ -351,6 +367,12 @@ class ParquetExplorer {
             this.workerClient!.preview(rowGroup, column, pageIndex, offset, limit, skipNulls);
     }
 
+    /** Dictionary decoder routed at the same worker current-file slot. */
+    private workerDictionaryPreview(): DictionaryPreview {
+        return (rowGroup, column, offset, limit) =>
+            this.workerClient!.previewDictionary(rowGroup, column, offset, limit);
+    }
+
     private ensureWorkerClient(): ParquetWorkerClient {
         if (!this.workerClient) {
             this.workerClient = new ParquetWorkerClient(
@@ -369,7 +391,8 @@ class ParquetExplorer {
         jsonText: string,
         source: string,
         bloomProbe: BloomProbe | null = null,
-        valuePreview: ValuePreview | null = null
+        valuePreview: ValuePreview | null = null,
+        dictionaryPreview: DictionaryPreview | null = null
     ): Promise<void> {
         const parsed: unknown = JSON.parse(jsonText);
 
@@ -406,6 +429,7 @@ class ParquetExplorer {
         this.parquetData = data;
         this.bloomProbe = bloomProbe;
         this.valuePreview = valuePreview;
+        this.dictionaryPreview = dictionaryPreview;
         this.hydrateFromSource();
         await this.saveToStorage(data, source);
 
@@ -451,6 +475,10 @@ class ParquetExplorer {
                         limit,
                         skipNulls
                     )
+                );
+            this.dictionaryPreview = (rowGroup, column, offset, limit) =>
+                this.ensureWorkerBooted(url).then(() =>
+                    this.workerClient!.previewDictionary(rowGroup, column, offset, limit)
                 );
         }
     }
@@ -511,6 +539,7 @@ class ParquetExplorer {
                 infoPanelContainer,
                 this.bloomProbe,
                 this.valuePreview,
+                this.dictionaryPreview,
                 {
                     loadFullStructure: src && metadataOnly ? () => void this.loadURL(src) : null,
                     downloadFullFile: src ? () => void this.downloadFullFile(src) : null,
@@ -649,6 +678,7 @@ class ParquetExplorer {
         this.tree = null;
         this.bloomProbe = null;
         this.valuePreview = null;
+        this.dictionaryPreview = null;
         this.workerBooted = null;
         this.lens = 'bytes';
         this.selectedNodeId = null;
