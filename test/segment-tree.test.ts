@@ -230,6 +230,32 @@ describe('projectDump', () => {
         }
     });
 
+    it('fills the trailing gap in row-group metadata with a row_group_fields node', () => {
+        for (const f of [KV, INDEXED, NESTED]) {
+            const root = projectDump(load(f));
+            const rgms: SegmentNode[] = [];
+            walk(root, n => {
+                if (n.kind === 'row_group_meta') {
+                    rgms.push(n);
+                }
+            });
+            expect(rgms.length).toBeGreaterThan(0);
+            for (const rgm of rgms) {
+                const chunks = rgm.children.filter(c => c.kind === 'chunk_meta');
+                const fields = rgm.children.filter(c => c.kind === 'row_group_fields');
+                const chunksEnd = Math.max(...chunks.map(c => c.end));
+                if (chunksEnd < rgm.end) {
+                    // Positive gap: exactly one fields node closing it out.
+                    expect(fields.length).toBe(1);
+                    expect(fields[0]!.start).toBe(chunksEnd);
+                    expect(fields[0]!.end).toBe(rgm.end);
+                } else {
+                    expect(fields.length).toBe(0);
+                }
+            }
+        }
+    });
+
     it('findNode locates a node by id', () => {
         const root = projectDump(load(KV));
         expect(findNode(root, 'schema_root')?.kind).toBe('schema_root');

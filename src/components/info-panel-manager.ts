@@ -1291,6 +1291,21 @@ const PANELS: Registry = {
         return sections;
     },
 
+    row_group_fields: node => [
+        layout(node),
+        {
+            title: 'Row-Group Fields',
+            rows: [
+                [
+                    'Purpose',
+                    'Row-group-level metadata (num_rows, total_byte_size, ' +
+                        'sorting_columns, ordinal…) — the RowGroup thrift fields ' +
+                        'after the per-column metadata',
+                ],
+            ],
+        },
+    ],
+
     kv_meta: node => [
         layout(node),
         {
