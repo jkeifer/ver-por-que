@@ -1436,9 +1436,10 @@ code {
     color: var(--text-secondary);
 }
 
-/* Fixed-height probe status area (above the block strip): the explanatory hint
- * until a probe lands, then the lineage + verdict. min-height reserves the
- * verdict's typical wrap so revealing the result never shifts layout. */
+/* Reserved-height probe status area (above the block strip): the explanatory
+ * hint until a probe lands, then the lineage + verdict. The widget locks
+ * min-height to the rendered hint (the tallest state) once mounted, so state
+ * swaps never shift layout; this floor only covers the pre-measure frame. */
 .bloom-probe-status {
     min-height: 3.5rem;
     margin-bottom: var(--spacing-sm);
