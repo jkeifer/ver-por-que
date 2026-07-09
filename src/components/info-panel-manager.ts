@@ -1737,10 +1737,10 @@ export class InfoPanelManager {
             `<button type="button" class="btn btn-sm bloom-probe-clear" disabled>Clear</button>` +
             `</div>` +
             // Probe text up top so it correlates with the input and stays put
-            // while the block strip scrolls elsewhere. Both slots reserve height
-            // (empty when not probed) so probing/clearing never shifts layout.
-            `<div class="bloom-lineage-slot"></div>` +
-            `<div class="bloom-verdict-slot"></div>` +
+            // while the block strip scrolls elsewhere. One fixed-height status
+            // area holds an explanatory hint until probed, then the lineage +
+            // verdict — same reserved height either way, so nothing shifts.
+            `<div class="bloom-probe-status"></div>` +
             `<div class="bloom-scroll"><div class="bloom-block-track"></div></div>` +
             // The density strip sits BELOW the block strip, reading as its
             // scrollbar (the viewport box is the thumb); the readout rides with it.
@@ -1749,8 +1749,7 @@ export class InfoPanelManager {
         const input = section.querySelector<HTMLInputElement>('.bloom-probe-value')!;
         const probeBtn = section.querySelector<HTMLButtonElement>('.bloom-probe-btn')!;
         const clearBtn = section.querySelector<HTMLButtonElement>('.bloom-probe-clear')!;
-        const lineageSlot = section.querySelector<HTMLElement>('.bloom-lineage-slot')!;
-        const verdictSlot = section.querySelector<HTMLElement>('.bloom-verdict-slot')!;
+        const status = section.querySelector<HTMLElement>('.bloom-probe-status')!;
         const stripWrap = section.querySelector<HTMLElement>('.bloom-strip-wrap')!;
         const scroll = section.querySelector<HTMLElement>('.bloom-scroll')!;
         const track = section.querySelector<HTMLElement>('.bloom-block-track')!;
@@ -1842,20 +1841,31 @@ export class InfoPanelManager {
             );
         };
 
-        // The lineage + verdict text up top; empty (but height-reserved) when not
-        // probed, so revealing them never shifts layout.
-        const showProbeText = (): void => {
-            lineageSlot.innerHTML = probe ? renderBloomLineage(probe) : '';
-            verdictSlot.innerHTML = probe
-                ? `<div class="bloom-verdict bloom-verdict-${probe.mightContain ? 'maybe' : 'no'}">` +
-                  (probe.mightContain
-                      ? '<strong>maybe present</strong> — a bloom filter can only ever ' +
-                        'answer “definitely not” or “maybe”; this could be a false positive.'
-                      : '<strong>definitely not present</strong> — the filter has no false ' +
-                        'negatives, so a reader can safely skip this row group.') +
-                  `</div>`
-                : '';
+        // The fixed-height status area: an explanatory hint until a probe lands,
+        // then the value→hash→block lineage and the verdict. Same reserved height
+        // both ways, so revealing the result never shifts layout.
+        const renderStatus = (): void => {
+            if (!probe) {
+                status.innerHTML =
+                    `<p class="bloom-probe-hint">A bloom filter can rule a value ` +
+                    `<em>out</em> of this row group. Type a value and Probe: the filter ` +
+                    `answers <strong>definitely not present</strong> — the reader safely ` +
+                    `skips the whole row group — or <strong>maybe present</strong>, which ` +
+                    `it can't rule out (bloom filters never give a false negative, only ` +
+                    `false positives). The block it hashes to lights up below.</p>`;
+                return;
+            }
+            status.innerHTML =
+                renderBloomLineage(probe) +
+                `<div class="bloom-verdict bloom-verdict-${probe.mightContain ? 'maybe' : 'no'}">` +
+                (probe.mightContain
+                    ? '<strong>maybe present</strong> — a bloom filter can only ever ' +
+                      'answer “definitely not” or “maybe”; this could be a false positive.'
+                    : '<strong>definitely not present</strong> — the filter has no false ' +
+                      'negatives, so a reader can safely skip this row group.') +
+                `</div>`;
         };
+        renderStatus();
 
         // Position the minimap's viewport box to mirror the visible window: the
         // box spans [scrollLeft, scrollLeft+clientWidth] as a fraction of the full
@@ -2028,7 +2038,7 @@ export class InfoPanelManager {
                     probe = res;
                     note.textContent = '';
                     clearBtn.disabled = false;
-                    showProbeText();
+                    renderStatus();
                     // Re-mark the strip, scroll the probed block into view, and
                     // force the window to rebuild with its hit/miss overlay.
                     drawStrip(res.blockIndex);
@@ -2061,7 +2071,7 @@ export class InfoPanelManager {
             probe = null;
             clearBtn.disabled = true;
             note.textContent = '';
-            showProbeText();
+            renderStatus();
             drawStrip();
             invalidate();
             onScroll();
