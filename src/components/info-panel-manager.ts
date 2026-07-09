@@ -229,11 +229,11 @@ function renderBloomLineage(res: BloomProbeResult): string {
 function estimatedFprLabel(fill: number): string {
     const fpr = fill ** 8;
     if (fpr <= 0) {
-        return '~0% est.';
+        return '~0%';
     }
     const pct = fpr * 100;
     const shown = pct < 0.001 ? `${pct.toExponential(1)}` : `${pct.toPrecision(2)}`;
-    return `~${shown}% est.`;
+    return `~${shown}%`;
 }
 
 /** The first block a strip cell maps to: cell index directly when one cell is
@@ -283,9 +283,9 @@ function renderBloomStrip(
         .join('');
     const readout =
         `<div class="bloom-strip-readout">` +
-        `<span>${(fill * 100).toFixed(1)}% full</span>` +
-        `<span>${formatNumber(numBlocks)} block${numBlocks === 1 ? '' : 's'}</span>` +
-        `<span title="estimated false-positive rate (fill^8)">FPR ${estimatedFprLabel(fill)}</span>` +
+        `<span>${(fill * 100).toFixed(1)}% full;</span>` +
+        `<span>${formatNumber(numBlocks)} block${numBlocks === 1 ? '' : 's'};</span>` +
+        `<span title="estimated false-positive rate (fill^8)">estimated false-positive rate ${estimatedFprLabel(fill)}</span>` +
         `</div>`;
     return (
         `<svg class="bloom-strip" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" ` +
@@ -1064,6 +1064,38 @@ const PANELS: Registry = {
                 ['Header Size', formatBytes(node.page.header_size)],
                 ['Compressed Size', formatBytes(node.page.compressed_page_size)],
                 ['Uncompressed Size', formatBytes(node.page.uncompressed_page_size)],
+            ],
+        },
+    ],
+
+    index_region: node => [
+        layout(node),
+        {
+            title: 'Index Region',
+            rows: [
+                ['Groups', node.children.length],
+                [
+                    'Purpose',
+                    "The file's page indexes (column/offset) and bloom filters, " +
+                        'stored between the data and the footer',
+                ],
+            ],
+        },
+    ],
+
+    index_group: node => [
+        layout(node),
+        {
+            title: node.label,
+            rows: [
+                ['Blocks', node.children.length],
+                ['Byte Range', `${formatOffset(node.start)}–${formatOffset(node.end)}`],
+                [
+                    'Purpose',
+                    node.id === 'index_bloom_filter'
+                        ? 'Per-column bloom filter bitsets for equality skipping'
+                        : 'Per-column page-index blocks for predicate push-down and seeking',
+                ],
             ],
         },
     ],

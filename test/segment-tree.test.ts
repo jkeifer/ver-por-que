@@ -145,10 +145,20 @@ describe('projectDump', () => {
         expect(kvMeta.every(n => n.end > n.start)).toBe(true);
     });
 
-    it('emits real column and offset index segments', () => {
-        const kinds = kindsIn(projectDump(load(INDEXED)));
-        expect(kinds.has('column_index')).toBe(true);
-        expect(kinds.has('offset_index')).toBe(true);
+    it('emits real column and offset index segments under the index region', () => {
+        const root = projectDump(load(INDEXED));
+        const indexRegion = root.children.find(c => c.kind === 'index_region')!;
+        expect(indexRegion).toBeTruthy();
+        const groupIds = indexRegion.children.map(g => g.id);
+        expect(groupIds).toContain('index_column_index');
+        expect(groupIds).toContain('index_offset_index');
+        // The data region holds row groups only — no index/bloom leaves.
+        const dataRegion = root.children.find(c => c.kind === 'data_region')!;
+        expect(dataRegion.children.every(c => c.kind === 'row_group')).toBe(true);
+        const dataKinds = kindsIn(dataRegion);
+        expect(dataKinds.has('column_index')).toBe(false);
+        expect(dataKinds.has('offset_index')).toBe(false);
+        expect(dataKinds.has('bloom_filter')).toBe(false);
     });
 
     it('emits bloom filter segments with sane spans when offset and length are both present', () => {
@@ -160,6 +170,10 @@ describe('projectDump', () => {
             }
         });
         expect(bloomNodes.length).toBeGreaterThan(0);
+        // Bloom leaves live under the Bloom Filters index group.
+        const bloomGroup = findNode(projectDump(dump), 'index_bloom_filter')!;
+        expect(bloomGroup.kind).toBe('index_group');
+        expect(bloomGroup.children.every(c => c.kind === 'bloom_filter')).toBe(true);
         for (const n of bloomNodes) {
             expect(Number.isFinite(n.start)).toBe(true);
             expect(Number.isFinite(n.end)).toBe(true);
@@ -200,6 +214,8 @@ describe('projectDump', () => {
             'row_group_meta',
             'kv_meta',
             'metadata_region',
+            'index_region',
+            'index_group',
         ];
         for (const f of [KV, INDEXED, NESTED]) {
             walk(projectDump(load(f)), n => {
@@ -257,9 +273,12 @@ describe('projectMetadataExport', () => {
     it('project() dispatches a metadata export to the metadata projection', () => {
         const root = project(loadMetadataExport());
         expect(root.kind).toBe('file');
+        // This export carries page indexes + a bloom filter, so an index_region
+        // sits between DATA and METADATA.
         expect(root.children.map(c => c.kind)).toEqual([
             'magic_header',
             'data_region',
+            'index_region',
             'metadata_region',
             'footer',
             'magic_footer',
@@ -290,11 +309,32 @@ describe('projectMetadataExport', () => {
         }
     });
 
-    it('keeps column/offset index and bloom filter nodes (footer-derived spans)', () => {
-        const kinds = kindsIn(projectMetadataExport(loadMetadataExport()));
-        expect(kinds.has('column_index')).toBe(true);
-        expect(kinds.has('offset_index')).toBe(true);
-        expect(kinds.has('bloom_filter')).toBe(true);
+    it('collects column/offset index and bloom filter nodes under the index region', () => {
+        const root = projectMetadataExport(loadMetadataExport());
+        const indexRegion = root.children.find(c => c.kind === 'index_region')!;
+        expect(indexRegion).toBeTruthy();
+        // Groups distinguished by id; each holds only its own leaf kind.
+        const groupKind: Record<string, Kind> = {
+            index_column_index: 'column_index',
+            index_offset_index: 'offset_index',
+            index_bloom_filter: 'bloom_filter',
+        };
+        for (const group of indexRegion.children) {
+            expect(group.kind).toBe('index_group');
+            const expected = groupKind[group.id];
+            expect(expected, `unexpected group ${group.id}`).toBeTruthy();
+            expect(group.children.length).toBeGreaterThan(0);
+            expect(group.children.every(c => c.kind === expected)).toBe(true);
+            // Group spans its members.
+            expect(group.start).toBe(Math.min(...group.children.map(c => c.start)));
+            expect(group.end).toBe(Math.max(...group.children.map(c => c.end)));
+        }
+        // None of those kinds leak into the data region.
+        const dataRegion = root.children.find(c => c.kind === 'data_region')!;
+        const dataKinds = kindsIn(dataRegion);
+        expect(dataKinds.has('column_index')).toBe(false);
+        expect(dataKinds.has('offset_index')).toBe(false);
+        expect(dataKinds.has('bloom_filter')).toBe(false);
     });
 
     it('keeps the metadata-region drill-down intact', () => {

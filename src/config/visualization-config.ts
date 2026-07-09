@@ -78,9 +78,13 @@ export class VisualizationConfig {
         dictionary_page: ['--dictionary-page-color'],
         data_page: ['--data-page-light', '--data-page-medium', '--data-page-dark'],
         index_page: ['--index-page-light', '--index-page-medium', '--index-page-dark'],
-        column_index: ['--column-index-medium'],
-        offset_index: ['--column-index-dark'],
-        bloom_filter: ['--bloom-filter-light', '--bloom-filter-medium', '--bloom-filter-dark'],
+        // The yellow index_region container disambiguates these green leaves
+        // from the green data pages living under DATA.
+        index_region: ['--index-region-light', '--index-region-medium', '--index-region-dark'],
+        index_group: ['--data-page-light', '--data-page-medium', '--data-page-dark'],
+        column_index: ['--data-page-light', '--data-page-medium', '--data-page-dark'],
+        offset_index: ['--data-page-light', '--data-page-medium', '--data-page-dark'],
+        bloom_filter: ['--data-page-light', '--data-page-medium', '--data-page-dark'],
         schema_root: ['--schema-group-dark'],
         schema_group: ['--schema-group-light', '--schema-group-medium', '--schema-group-dark'],
         schema_leaf: ['--schema-element-light', '--schema-element-medium', '--schema-element-dark'],

@@ -298,7 +298,9 @@ test('bloom filter probe is available on a JSON dump with a fetchable source', a
     await loadFixture(page, 'data_index_bloom_encoding_with_length_expected.json');
 
     const viz = page.locator('#canvas-container svg');
-    await viz.locator('rect.segment[data-segment-id="data_region"]').click();
+    // Bloom filters now live under the Index region, in the Bloom Filters group.
+    await viz.locator('rect.segment[data-segment-id="index_region"]').click();
+    await viz.locator('rect.segment[data-segment-id="index_bloom_filter"]').click();
     await viz.locator('rect.segment[data-segment-id="bloomfilter_rg0_String"]').click();
 
     const panel = page.locator('#info-panel-container');
@@ -416,7 +418,8 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
         .setInputFiles(fixture('data_index_bloom_encoding_with_length.parquet'));
     await expect(source).toContainText('data_index_bloom_encoding_with_length.parquet');
 
-    await viz.locator('rect.segment[data-segment-id="data_region"]').click();
+    await viz.locator('rect.segment[data-segment-id="index_region"]').click();
+    await viz.locator('rect.segment[data-segment-id="index_bloom_filter"]').click();
     await viz.locator('rect.segment[data-segment-id="bloomfilter_rg0_String"]').click();
     await expect(page.locator('#info-panel-container')).toContainText('Bloom Filter');
 
@@ -441,7 +444,10 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
     expect(await block.locator('.bloom-bit-miss').count()).toBeGreaterThan(0);
 
     // Value preview: decode the String column's data page in-browser and show
-    // real values (the preview lives on the page, not the chunk).
+    // real values (the preview lives on the page, not the chunk). Navigate back
+    // out of the Index region to the data region first (bloom filters now live
+    // under Index, a different subtree than the row groups).
+    await viz.locator('rect.segment[data-segment-id="data_region"]').click();
     await viz.locator('rect.segment[data-segment-id="rg_0"]').click();
     await viz.locator('rect.segment[data-segment-id="rg_0_col_String"]').click();
     await viz.locator('rect.segment[data-segment-id="rg_0_col_String_data_0"]').click();
@@ -474,8 +480,9 @@ test(
         await expect(source).toContainText('weather_station_daily.parquet', { timeout: 210_000 });
 
         const viz = page.locator('#canvas-container svg');
-        await viz.locator('rect.segment[data-segment-id="data_region"]').click();
-        await viz.locator('rect.segment[data-segment-id="rg_0"]').click();
+        // Bloom filters live under the Index region, in the Bloom Filters group.
+        await viz.locator('rect.segment[data-segment-id="index_region"]').click();
+        await viz.locator('rect.segment[data-segment-id="index_bloom_filter"]').click();
         await viz.locator('rect.segment[data-segment-id="bloomfilter_rg0_temperature"]').click();
 
         const panel = page.locator('#info-panel-container');

@@ -36,6 +36,8 @@ export type Kind =
     | 'dictionary_page'
     | 'data_page'
     | 'index_page'
+    | 'index_region'
+    | 'index_group'
     | 'column_index'
     | 'offset_index'
     | 'bloom_filter'
@@ -61,6 +63,8 @@ export const KINDS: Kind[] = [
     'dictionary_page',
     'data_page',
     'index_page',
+    'index_region',
+    'index_group',
     'column_index',
     'offset_index',
     'bloom_filter',
@@ -114,6 +118,8 @@ export type SegmentNode =
           pageIndex: number;
       })
     | (Base & { kind: 'index_page'; page: IndexPage; path: string; rowGroup: number })
+    | (Base & { kind: 'index_region' })
+    | (Base & { kind: 'index_group'; label: string })
     // index is null in a metadata-only export: the byte span comes from the
     // footer, but the parsed index contents aren't in the dump.
     | (Base & { kind: 'column_index'; index: ColumnIndex | null; path: string })
@@ -144,7 +150,8 @@ export function project(dump: AnyDump): SegmentNode {
 
 /** Project a validated full dump into the physical segment tree. */
 export function projectDump(dump: Dump): SegmentNode {
-    return assemble(dump, buildDataRegion(dump, dump.magic_header?.length ?? 4));
+    const { dataRegion, indexNodes } = buildDataRegion(dump, dump.magic_header?.length ?? 4);
+    return assemble(dump, dataRegion, buildIndexRegion(indexNodes));
 }
 
 /**
@@ -154,15 +161,22 @@ export function projectDump(dump: Dump): SegmentNode {
  * export. Magic/footer/metadata-region segments are identical to the full path.
  */
 export function projectMetadataExport(dump: MetadataDump): SegmentNode {
-    return assemble(dump, buildMetadataDataRegion(dump.metadata, 4));
+    const { dataRegion, indexNodes } = buildMetadataDataRegion(dump.metadata, 4);
+    return assemble(dump, dataRegion, buildIndexRegion(indexNodes));
 }
 
 /**
- * Assemble the five top-level file segments around a pre-built data region.
+ * Assemble the top-level file segments around a pre-built data region.
  * magic_header/magic_footer are optional in the schema (and absent on a
- * metadata export) but always "PAR1" (4 bytes) in a real parquet file.
+ * metadata export) but always "PAR1" (4 bytes) in a real parquet file. The
+ * index region is present only when the file has page-index/bloom blocks; by
+ * offset it lands between DATA and METADATA.
  */
-function assemble(dump: AnyDump, dataRegion: SegmentNode): SegmentNode {
+function assemble(
+    dump: AnyDump,
+    dataRegion: SegmentNode,
+    indexRegion: SegmentNode | null
+): SegmentNode {
     const meta = dump.metadata;
     const headerMagic = ('magic_header' in dump ? dump.magic_header : null) ?? 'PAR1';
     const footerMagic = ('magic_footer' in dump ? dump.magic_footer : null) ?? 'PAR1';
@@ -181,6 +195,7 @@ function assemble(dump: AnyDump, dataRegion: SegmentNode): SegmentNode {
             children: [],
         },
         dataRegion,
+        ...(indexRegion ? [indexRegion] : []),
         buildMetadataRegion(meta),
         {
             kind: 'footer',
@@ -212,8 +227,14 @@ function assemble(dump: AnyDump, dataRegion: SegmentNode): SegmentNode {
     };
 }
 
+/** A data region (row groups only) plus the flat list of index/bloom leaves. */
+interface DataRegionResult {
+    dataRegion: SegmentNode;
+    indexNodes: SegmentNode[];
+}
+
 /** The data portion: everything between the header magic and the footer. */
-function buildDataRegion(dump: Dump, start: number): SegmentNode {
+function buildDataRegion(dump: Dump, start: number): DataRegionResult {
     const end = dump.metadata.start_offset;
     const byGroup = new Map<number, PhysicalColumnChunk[]>();
     for (const chunk of dump.column_chunks) {
@@ -222,23 +243,24 @@ function buildDataRegion(dump: Dump, start: number): SegmentNode {
         byGroup.set(chunk.row_group, list);
     }
 
-    const children: SegmentNode[] = [];
+    const rowGroups: SegmentNode[] = [];
     for (const [index, chunks] of byGroup) {
-        children.push(buildRowGroup(dump, index, chunks));
+        rowGroups.push(buildRowGroup(dump, index, chunks));
     }
 
     // Page-index blocks live between the data and the footer, not inside any
-    // row group's byte span, so they hang directly off the data region. Bloom
-    // filter bitsets sit in that same between-chunks-and-footer territory
-    // (verified against real fixtures), so they follow the same pattern.
+    // row group's byte span; bloom filter bitsets sit in that same territory
+    // (verified against real fixtures). They're not column data, so they go to
+    // their own index region rather than into DATA.
+    const indexNodes: SegmentNode[] = [];
     for (const chunk of dump.column_chunks) {
         if (chunk.column_index) {
-            children.push(
+            indexNodes.push(
                 buildColumnIndex(chunk.column_index, chunk.path_in_schema, chunk.row_group)
             );
         }
         if (chunk.offset_index) {
-            children.push(
+            indexNodes.push(
                 buildOffsetIndex(chunk.offset_index, chunk.path_in_schema, chunk.row_group)
             );
         }
@@ -248,7 +270,7 @@ function buildDataRegion(dump: Dump, start: number): SegmentNode {
         // Real byte spans only: older files may record an offset without a
         // length (no bitset size persisted), so skip rather than estimate.
         if (meta && isSet(meta.bloom_filter_offset) && isSet(meta.bloom_filter_length)) {
-            children.push(
+            indexNodes.push(
                 buildBloomFilter(
                     meta.bloom_filter_offset,
                     meta.bloom_filter_length,
@@ -260,12 +282,62 @@ function buildDataRegion(dump: Dump, start: number): SegmentNode {
     }
 
     return {
-        kind: 'data_region',
-        id: 'data_region',
-        name: 'DATA',
-        start,
-        end,
-        children: children.sort(byStart),
+        dataRegion: {
+            kind: 'data_region',
+            id: 'data_region',
+            name: 'DATA',
+            start,
+            end,
+            children: rowGroups.sort(byStart),
+        },
+        indexNodes,
+    };
+}
+
+/**
+ * Group the flat index/bloom leaves into an "Index" top-level region: up to
+ * three groups (column index, offset index, bloom filters), each spanning its
+ * members. Returns null when there are none (no region emitted).
+ *
+ * Assumes each kind occupies a contiguous byte block (holds for single-kind
+ * files and typical writers) — group spans are just min(start)→max(end), no
+ * overlap handling.
+ */
+function buildIndexRegion(indexNodes: SegmentNode[]): SegmentNode | null {
+    if (indexNodes.length === 0) {
+        return null;
+    }
+
+    const groupDefs: { kind: Kind; id: string; label: string }[] = [
+        { kind: 'column_index', id: 'index_column_index', label: 'Column Index' },
+        { kind: 'offset_index', id: 'index_offset_index', label: 'Offset Index' },
+        { kind: 'bloom_filter', id: 'index_bloom_filter', label: 'Bloom Filters' },
+    ];
+
+    const groups: SegmentNode[] = [];
+    for (const def of groupDefs) {
+        const members = indexNodes.filter(n => n.kind === def.kind).sort(byStart);
+        if (members.length === 0) {
+            continue;
+        }
+        groups.push({
+            kind: 'index_group',
+            id: def.id,
+            name: def.label,
+            label: def.label,
+            start: Math.min(...members.map(m => m.start)),
+            end: Math.max(...members.map(m => m.end)),
+            children: members,
+        });
+    }
+
+    return {
+        kind: 'index_region',
+        id: 'index_region',
+        name: 'INDEX',
+        start: Math.min(...groups.map(g => g.start)),
+        end: Math.max(...groups.map(g => g.end)),
+        children: groups.sort(byStart),
     };
 }
 
@@ -414,9 +486,9 @@ function buildBloomFilter(
  * indexes and bloom filters from the footer's ColumnChunk spans. No page-level
  * nodes -- that data isn't in a metadata export.
  */
-function buildMetadataDataRegion(meta: FileMetadata, start: number): SegmentNode {
+function buildMetadataDataRegion(meta: FileMetadata, start: number): DataRegionResult {
     const end = meta.start_offset;
-    const children: SegmentNode[] = [];
+    const rowGroups: SegmentNode[] = [];
 
     meta.row_groups.forEach((group, rgIndex) => {
         const chunks = Object.entries(group.column_chunks).map(([path, cc]) =>
@@ -425,7 +497,7 @@ function buildMetadataDataRegion(meta: FileMetadata, start: number): SegmentNode
         if (chunks.length === 0) {
             return;
         }
-        children.push({
+        rowGroups.push({
             kind: 'row_group',
             id: `rg_${rgIndex}`,
             name: `RG${rgIndex}`,
@@ -438,12 +510,13 @@ function buildMetadataDataRegion(meta: FileMetadata, start: number): SegmentNode
     });
 
     // Page-index and bloom-filter blocks sit between the chunks and the footer,
-    // hanging directly off the data region (same as the full path). Their byte
+    // collected into their own index region (same as the full path). Their byte
     // spans are all footer metadata, so they survive a metadata-only export.
+    const indexNodes: SegmentNode[] = [];
     meta.row_groups.forEach((group, rgIndex) => {
         for (const [path, cc] of Object.entries(group.column_chunks)) {
             if (isSet(cc.column_index_offset) && isSet(cc.column_index_length)) {
-                children.push(
+                indexNodes.push(
                     buildMetadataIndex(
                         'column_index',
                         cc.column_index_offset,
@@ -454,7 +527,7 @@ function buildMetadataDataRegion(meta: FileMetadata, start: number): SegmentNode
                 );
             }
             if (isSet(cc.offset_index_offset) && isSet(cc.offset_index_length)) {
-                children.push(
+                indexNodes.push(
                     buildMetadataIndex(
                         'offset_index',
                         cc.offset_index_offset,
@@ -467,7 +540,7 @@ function buildMetadataDataRegion(meta: FileMetadata, start: number): SegmentNode
             const m = cc.metadata;
             // Real byte spans only: skip when the length wasn't persisted.
             if (isSet(m.bloom_filter_offset) && isSet(m.bloom_filter_length)) {
-                children.push(
+                indexNodes.push(
                     buildBloomFilter(m.bloom_filter_offset, m.bloom_filter_length, path, rgIndex)
                 );
             }
@@ -475,12 +548,15 @@ function buildMetadataDataRegion(meta: FileMetadata, start: number): SegmentNode
     });
 
     return {
-        kind: 'data_region',
-        id: 'data_region',
-        name: 'DATA',
-        start,
-        end,
-        children: children.sort(byStart),
+        dataRegion: {
+            kind: 'data_region',
+            id: 'data_region',
+            name: 'DATA',
+            start,
+            end,
+            children: rowGroups.sort(byStart),
+        },
+        indexNodes,
     };
 }
 
@@ -711,6 +787,10 @@ export function describe(node: SegmentNode): string {
             return `Data page ${node.name}`;
         case 'index_page':
             return `Index page ${node.name}`;
+        case 'index_region':
+            return 'Index region';
+        case 'index_group':
+            return node.label;
         case 'column_index':
             return `Column index (${node.path})`;
         case 'offset_index':
