@@ -32,6 +32,7 @@ import {
 import { describeWkb, wkbToGeoJson } from '../business/wkb';
 import type {
     BloomDensityResult,
+    BloomProbeBit,
     BloomProbeResult,
     DictionaryEntry,
     DictionaryPreviewResult,
@@ -159,17 +160,18 @@ function renderPreviewFailure(codec: string): string {
 }
 
 /**
- * The probed 256-bit block as an 8×32 bit grid (rows = words, columns = bits).
- * The eight bits the probe checks are marked hit (set) or miss (unset); every
+ * A 256-bit block as an 8×32 bit grid (rows = words, columns = bits) from its
+ * raw 32 bytes. When `probed` is given (the block the probe landed in, being
+ * viewed), the eight checked bits are marked hit (set) or miss (unset); every
  * other cell shows the block's actual contents dimly for texture. All hits ⟹
- * "might contain"; a single miss is exact proof of absence.
+ * "might contain"; a single miss is exact proof of absence. Viewing a different
+ * block (no `probed`) shows its plain bits.
  */
-function renderBloomBlock(res: BloomProbeResult): string {
-    const bytes = base64Bytes(res.block);
-    if (!bytes || bytes.length < 32) {
+function renderBloomBlock(bytes: Uint8Array, probed?: BloomProbeBit[]): string {
+    if (bytes.length < 32) {
         return '';
     }
-    const probedBit = new Map(res.bits.map(b => [b.word, b.bit]));
+    const probedBit = new Map((probed ?? []).map(b => [b.word, b.bit]));
     const CELL = 11;
     const STEP = CELL + 1;
     const width = 32 * STEP - 1;
@@ -198,15 +200,19 @@ function renderBloomBlock(res: BloomProbeResult): string {
                 `width="${CELL}" height="${CELL}" rx="1"/>`;
         }
     }
+    return (
+        `<svg class="bloom-block" viewBox="0 0 ${width} ${height}" width="${width}" ` +
+        `height="${height}" role="img" aria-label="bloom-filter block">${cells}</svg>`
+    );
+}
+
+/** The value → hash → block lineage line shown above the probed block's grid. */
+function renderBloomLineage(res: BloomProbeResult): string {
     const hits = res.bits.filter(b => b.set).length;
-    const lineage =
+    return (
         `<div class="bloom-lineage">hash <code>0x${res.hash}</code> → block ` +
         `${formatNumber(res.blockIndex)} of ${formatNumber(res.numBlocks)} · ${hits}/8 bits set` +
-        `</div>`;
-    return (
-        lineage +
-        `<svg class="bloom-block" viewBox="0 0 ${width} ${height}" width="${width}" ` +
-        `height="${height}" role="img" aria-label="probed bloom-filter block">${cells}</svg>`
+        `</div>`
     );
 }
 
@@ -223,13 +229,25 @@ function estimatedFprLabel(fill: number): string {
     return `~${shown}% est.`;
 }
 
+/** The first block a strip cell maps to: cell index directly when one cell is
+ *  one block (≤512), else the first block of the cell's contiguous bucket. */
+function cellBlock(density: BloomDensityResult, cell: number): number {
+    const n = density.buckets.length;
+    return density.numBlocks <= n ? cell : Math.floor((cell * density.numBlocks) / n);
+}
+
 /**
- * The whole filter as a horizontal density heatmap: one rect per bucket, filled
- * by its set-bit fraction over a light track (empty reads empty). An optional
- * `highlightBucket` (the bucket a probe landed in) gets an outline. A one-line
+ * The whole filter as a horizontal density heatmap: one clickable rect per
+ * bucket, filled by its set-bit fraction over a light track (empty reads empty).
+ * Each cell carries `data-block` (see cellBlock); the cells whose block is the
+ * `selected` / `probed` block get an inset outline (via CSS classes). A one-line
  * readout pairs the overall fill %, the block count, and the estimated FPR.
  */
-function renderBloomStrip(density: BloomDensityResult, highlightBucket?: number): string {
+function renderBloomStrip(
+    density: BloomDensityResult,
+    selectedBlock: number,
+    probedBlock?: number
+): string {
     const { buckets, fill, numBlocks } = density;
     const n = buckets.length;
     if (n === 0) {
@@ -240,14 +258,19 @@ function renderBloomStrip(density: BloomDensityResult, highlightBucket?: number)
     const width = n * CELL;
     const rects = buckets
         .map((b, i) => {
-            const cls =
-                i === highlightBucket ? 'bloom-strip-cell bloom-strip-hit' : 'bloom-strip-cell';
-            // Alpha carries density over the light track; clamp so a faint but
-            // non-empty bucket still reads as set.
+            const block = cellBlock(density, i);
+            const marks =
+                (block === selectedBlock ? ' selected' : '') +
+                (probedBlock !== undefined && block === probedBlock ? ' probed' : '');
+            // Density carries as fill-opacity on the accent-filled cell (CSS
+            // var() doesn't resolve in an SVG presentation attribute, so the
+            // color lives in the class and only the opacity is inline); clamp so
+            // a faint but non-empty bucket still reads as set.
             const alpha = b === 0 ? 0 : Math.max(0.08, b);
             return (
-                `<rect class="${cls}" x="${i * CELL}" y="0" width="${CELL}" height="${height}" ` +
-                `fill="rgba(var(--accent-rgb), ${alpha.toFixed(3)})"/>`
+                `<rect class="bloom-strip-cell${marks}" data-block="${block}" ` +
+                `x="${i * CELL}" y="0" width="${CELL}" height="${height}" ` +
+                `fill-opacity="${alpha.toFixed(3)}"/>`
             );
         })
         .join('');
@@ -1584,11 +1607,14 @@ export class InfoPanelManager {
     }
 
     /**
-     * Interactive bloom-filter section: the whole filter renders as a density
-     * strip up front (base state); typing a value and probing highlights the
-     * bucket it lands in and shows the per-block bit-grid + verdict; Clear resets
-     * to the base strip. The density is fetched once and kept so the strip can
-     * re-render with/without a highlight without re-reading the filter.
+     * Interactive bloom-filter section (full-width): the whole filter renders as
+     * a clickable density strip (one cell per 256-bit block for small filters,
+     * else per contiguous bucket) plus one selected block's 8×32 bit-grid
+     * (default block 0). Clicking a strip cell views that block. Probing a value
+     * selects the block it lands in, marks the strip cell, and shows the eight
+     * checked bits hit/miss with the verdict + lineage. Clear removes the probe
+     * overlay but keeps the currently selected block visible. The density (with
+     * the whole bitset for small filters) is fetched once so nothing re-reads.
      */
     private buildBloomProbeSection(
         node: Extract<SegmentNode, { kind: 'bloom_filter' }>,
@@ -1599,37 +1625,85 @@ export class InfoPanelManager {
         // probe takes base64 of the raw bytes and the worker decodes it.
         const binary = leaf ? isBinaryLeaf(leaf) : false;
         const section = document.createElement('div');
-        section.className = 'info-section regular-card bloom-probe-section';
+        section.className = 'info-section large-card bloom-probe-section';
         section.innerHTML =
             `<h5 class="info-section-title">Probe a Value</h5>` +
             `<div class="bloom-probe-controls">` +
             `<input type="text" class="bloom-probe-value" placeholder="${
                 leaf ? `${leaf.type} value${binary ? ' (base64)' : ''}` : 'value'
             }">` +
-            `<button type="button" class="bloom-probe-btn">Probe</button>` +
+            `<button type="button" class="btn btn-sm bloom-probe-btn">Probe</button>` +
+            `<button type="button" class="btn btn-sm bloom-probe-clear" disabled>Clear</button>` +
             `</div>` +
             `<div class="bloom-strip-wrap"></div>` +
+            `<div class="bloom-block-wrap"></div>` +
             `<div class="bloom-probe-result"></div>`;
         const input = section.querySelector<HTMLInputElement>('.bloom-probe-value')!;
+        const probeBtn = section.querySelector<HTMLButtonElement>('.bloom-probe-btn')!;
+        const clearBtn = section.querySelector<HTMLButtonElement>('.bloom-probe-clear')!;
         const stripWrap = section.querySelector<HTMLElement>('.bloom-strip-wrap')!;
+        const blockWrap = section.querySelector<HTMLElement>('.bloom-block-wrap')!;
         const result = section.querySelector<HTMLElement>('.bloom-probe-result')!;
 
-        // The fetched density, kept so the strip re-renders (base ↔ highlight)
-        // without re-reading the filter. Null until the initial fetch lands.
+        // Closure state, all reset by re-render: the fetched density (kept so the
+        // strip/grid re-draw without re-reading the filter), the block currently
+        // being viewed (default 0), and the last probe (null until probed).
         let density: BloomDensityResult | null = null;
-        const drawStrip = (highlightBucket?: number): void => {
-            if (density) {
-                stripWrap.innerHTML = renderBloomStrip(density, highlightBucket);
+        let selectedBlock = 0;
+        let probe: BloomProbeResult | null = null;
+
+        // The raw 32 bytes of `block`, sliced from the shipped whole bitset, or
+        // null when the bitset isn't present (huge filter) or the block is the
+        // probed one but not derivable — callers fall back to the probe's block.
+        const blockBytes = (block: number): Uint8Array | null => {
+            if (!density?.bitset) {
+                return null;
+            }
+            const all = base64Bytes(density.bitset);
+            return all ? all.subarray(block * 32, block * 32 + 32) : null;
+        };
+
+        const render = (): void => {
+            if (!density) {
+                return;
+            }
+            // Strip: mark the selected cell always, the probed cell while probed.
+            stripWrap.innerHTML = renderBloomStrip(density, selectedBlock, probe?.blockIndex);
+            // Bit-grid for the selected block. Show hit/miss marks only when the
+            // selected block IS the probed block (viewing another shows it plain).
+            const viewingProbed = probe !== null && selectedBlock === probe.blockIndex;
+            const bytes =
+                blockBytes(selectedBlock) ??
+                // Huge-filter fallback: no bitset shipped, so only the probed
+                // block's bytes are available (from the probe result itself).
+                (viewingProbed ? base64Bytes(probe!.block) : null);
+            blockWrap.innerHTML =
+                bytes && bytes.length >= 32
+                    ? (viewingProbed ? renderBloomLineage(probe!) : '') +
+                      renderBloomBlock(bytes, viewingProbed ? probe!.bits : undefined)
+                    : '<div class="bloom-lineage">Click a strip cell or probe a value.</div>';
+            // Verdict only while viewing the probed block.
+            if (viewingProbed) {
+                const verdict = probe!.mightContain
+                    ? '<strong>maybe present</strong> — a bloom filter can only ever ' +
+                      'answer “definitely not” or “maybe”; this could be a false positive.'
+                    : '<strong>definitely not present</strong> — the filter has no false ' +
+                      'negatives, so a reader can safely skip this row group.';
+                result.innerHTML =
+                    `<div class="bloom-verdict bloom-verdict-${probe!.mightContain ? 'maybe' : 'no'}">` +
+                    `${verdict}</div>`;
+            } else {
+                result.innerHTML = '';
             }
         };
 
-        // Base graphic: fetch the whole filter's density once and render the strip.
+        // Base graphic: fetch the whole filter's density once and draw block 0.
         if (this.bloomDensity) {
             stripWrap.textContent = 'Loading filter…';
             this.bloomDensity(node.rowGroup, node.path).then(
                 d => {
                     density = d;
-                    drawStrip();
+                    render();
                 },
                 (error: unknown) => {
                     if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
@@ -1647,14 +1721,17 @@ export class InfoPanelManager {
             );
         }
 
-        // The bucket the probed block falls into, so the strip can mark it.
-        const bucketOf = (blockIndex: number): number => {
-            const n = density?.buckets.length ?? 0;
-            if (!density || n === 0) {
-                return 0;
+        // Delegated strip-cell selection: click a cell to view its block. With no
+        // shipped bitset (huge filter) only the probed block is renderable, so
+        // selecting a plain cell can't show a grid — ignore clicks then.
+        stripWrap.addEventListener('click', e => {
+            const cell = (e.target as HTMLElement).closest('.bloom-strip-cell');
+            if (!(cell instanceof SVGElement) || !density?.bitset) {
+                return;
             }
-            return Math.min(n - 1, Math.floor(blockIndex / (density.numBlocks / n)));
-        };
+            selectedBlock = Number(cell.getAttribute('data-block'));
+            render();
+        });
 
         const run = (): void => {
             // Binary columns take base64 of the raw bytes; validate it decodes,
@@ -1679,23 +1756,10 @@ export class InfoPanelManager {
             result.textContent = 'Probing...';
             this.bloomProbe!(node.rowGroup, node.path, value).then(
                 res => {
-                    // Static strings + numeric/hex derivation only; nothing
-                    // user-typed goes into innerHTML.
-                    const verdict = res.mightContain
-                        ? '<strong>maybe present</strong> — a bloom filter can only ever ' +
-                          'answer “definitely not” or “maybe”; this could be a false positive.'
-                        : '<strong>definitely not present</strong> — the filter has no false ' +
-                          'negatives, so a reader can safely skip this row group.';
-                    result.innerHTML =
-                        `<div class="bloom-verdict bloom-verdict-${res.mightContain ? 'maybe' : 'no'}">` +
-                        `${verdict}</div>${renderBloomBlock(res)}` +
-                        `<button type="button" class="btn btn-sm bloom-probe-clear">Clear</button>`;
-                    // Mark where this value landed in the whole-filter strip.
-                    drawStrip(bucketOf(res.blockIndex));
-                    result.querySelector('.bloom-probe-clear')!.addEventListener('click', () => {
-                        result.innerHTML = '';
-                        drawStrip(); // back to the base strip, no highlight
-                    });
+                    probe = res;
+                    selectedBlock = res.blockIndex;
+                    clearBtn.disabled = false;
+                    render();
                 },
                 (error: unknown) => {
                     if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
@@ -1714,7 +1778,13 @@ export class InfoPanelManager {
                 }
             );
         };
-        section.querySelector('.bloom-probe-btn')!.addEventListener('click', run);
+        probeBtn.addEventListener('click', run);
+        clearBtn.addEventListener('click', () => {
+            // Drop the probe overlay but keep the currently selected block shown.
+            probe = null;
+            clearBtn.disabled = true;
+            render();
+        });
         input.addEventListener('keypress', e => {
             if ((e as KeyboardEvent).key === 'Enter') {
                 run();
