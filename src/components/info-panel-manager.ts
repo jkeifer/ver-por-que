@@ -28,11 +28,7 @@ import {
     type Row,
     type Section,
 } from './info-panel/view';
-import {
-    isIncrementalReadError,
-    appendRecovery,
-    RANGE_UNSUPPORTED_MESSAGE,
-} from './info-panel/recovery';
+import { isIncrementalReadError, reportWorkerError } from './info-panel/recovery';
 import type { RecoveryActions } from './info-panel/recovery';
 import { createBloomProbeWidget, type BloomProbeWidget } from './info-panel/bloom-probe-widget';
 import {
@@ -397,22 +393,13 @@ export class InfoPanelManager {
         result: HTMLElement,
         button: HTMLButtonElement
     ): void {
-        if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
+        if (reportWorkerError(result, error, 'Preview failed', this.recovery)) {
+            // Recoverable: the fallback action replaces the button.
             button.remove();
-            result.innerHTML = '';
-            appendRecovery(
-                result,
-                RANGE_UNSUPPORTED_MESSAGE,
-                'Download full file',
-                this.recovery.downloadFullFile
-            );
-            return;
+        } else {
+            // Retryable failure: keep the button live.
+            button.disabled = false;
         }
-        // Pyodide errors embed the python traceback; the last line is the actual
-        // exception. Keep the button so it's retryable.
-        const message = (error as Error).message.trim();
-        button.disabled = false;
-        result.textContent = `Preview failed: ${message.split('\n').pop()!}`;
     }
 
     /** Interactive dictionary preview: decode this chunk's distinct values on demand. */

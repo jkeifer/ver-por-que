@@ -20,7 +20,7 @@ import type {
 import type { AnyDump } from '../../types';
 import type { BloomBlocks, BloomDensity, BloomProbe } from '../info-panel-manager';
 import { blockCellInner, renderBloomLineage, renderBloomStrip } from './bloom-view';
-import { appendRecovery, isIncrementalReadError, RANGE_UNSUPPORTED_MESSAGE } from './recovery';
+import { reportWorkerError } from './recovery';
 import type { RecoveryActions } from './recovery';
 
 /** Worker capabilities + recovery the probe card needs. `bloomProbe` is always
@@ -151,17 +151,7 @@ export function createBloomProbeWidget(
             },
             (error: unknown) => {
                 inflight.delete(start);
-                if (isIncrementalReadError(error) && deps.recovery.downloadFullFile) {
-                    appendRecovery(
-                        note,
-                        RANGE_UNSUPPORTED_MESSAGE,
-                        'Download full file',
-                        deps.recovery.downloadFullFile
-                    );
-                    return;
-                }
-                const message = (error as Error).message.trim();
-                note.textContent = `Blocks unavailable: ${message.split('\n').pop()!}`;
+                reportWorkerError(note, error, 'Blocks unavailable', deps.recovery);
             }
         );
     };
@@ -293,19 +283,8 @@ export function createBloomProbeWidget(
                 observer = new ResizeObserver(onScroll);
                 observer.observe(scroll);
             },
-            (error: unknown) => {
-                if (isIncrementalReadError(error) && deps.recovery.downloadFullFile) {
-                    appendRecovery(
-                        stripWrap,
-                        RANGE_UNSUPPORTED_MESSAGE,
-                        'Download full file',
-                        deps.recovery.downloadFullFile
-                    );
-                    return;
-                }
-                const message = (error as Error).message.trim();
-                stripWrap.textContent = `Filter unavailable: ${message.split('\n').pop()!}`;
-            }
+            (error: unknown) =>
+                reportWorkerError(stripWrap, error, 'Filter unavailable', deps.recovery)
         );
     }
 
@@ -371,21 +350,7 @@ export function createBloomProbeWidget(
                 invalidate();
                 onScroll();
             },
-            (error: unknown) => {
-                if (isIncrementalReadError(error) && deps.recovery.downloadFullFile) {
-                    appendRecovery(
-                        note,
-                        RANGE_UNSUPPORTED_MESSAGE,
-                        'Download full file',
-                        deps.recovery.downloadFullFile
-                    );
-                    return;
-                }
-                // Pyodide errors embed the python traceback; the last line
-                // is the actual exception.
-                const message = (error as Error).message.trim();
-                note.textContent = `Probe failed: ${message.split('\n').pop()!}`;
-            }
+            (error: unknown) => reportWorkerError(note, error, 'Probe failed', deps.recovery)
         );
     };
     probeBtn.addEventListener('click', run);
