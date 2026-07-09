@@ -219,6 +219,46 @@ describe('createParquetParser (mocked pyodide)', () => {
         expect(statuses).toContain('Range requests unavailable; downloading whole file...');
     });
 
+    it('falls back when the parse hangs and fails only as an unhandled rejection', async () => {
+        // Pyodide-on-WebKit failure mode: fut.set_exception crashes converting
+        // the fetch rejection, so _dump_url's promise never settles and the
+        // crash surfaces solely as an unhandledrejection event on the worker
+        // global. Node has no such event, so stub the listener hooks.
+        const py = fakePyodide();
+        py._dumpUrl.mockReturnValue(new Promise<never>(() => {}));
+        const body = new Uint8Array([0x50, 0x41, 0x52, 0x31]);
+        const fetchMock = vi.fn().mockResolvedValue({
+            ok: true,
+            headers: new Headers(),
+            body: null,
+            arrayBuffer: () => Promise.resolve(body.buffer),
+        });
+        vi.stubGlobal('fetch', fetchMock);
+        vi.spyOn(console, 'warn').mockImplementation(() => {});
+        type RejectionHandler = (event: { reason: unknown; preventDefault(): void }) => void;
+        let handler: RejectionHandler | undefined;
+        const addListener = vi.fn((_type: string, h: RejectionHandler) => {
+            handler = h;
+        });
+        const removeListener = vi.fn();
+        vi.stubGlobal('addEventListener', addListener);
+        vi.stubGlobal('removeEventListener', removeListener);
+
+        const parse = await boot(py);
+        const pending = parse({ url: 'https://example.com/f.parquet' }, 'f.parquet');
+        await vi.waitFor(() => expect(addListener).toHaveBeenCalled());
+        const preventDefault = vi.fn();
+        handler!({
+            reason: new Error('PythonError: TypeError: invalid exception'),
+            preventDefault,
+        });
+
+        expect(await pending).toBe('{"dumped":true}');
+        expect(fetchMock).toHaveBeenCalledWith('https://example.com/f.parquet');
+        expect(preventDefault).toHaveBeenCalled();
+        expect(removeListener).toHaveBeenCalledWith('unhandledrejection', handler);
+    });
+
     it('propagates non-network errors from the URL path without fallback', async () => {
         const py = fakePyodide();
         py._dumpUrl.mockRejectedValue(new Error('ParquetCorruptedError: bad magic'));

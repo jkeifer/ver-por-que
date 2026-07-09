@@ -579,6 +579,61 @@ function isHctefNetworkError(error: unknown): boolean {
 }
 
 /**
+ * Raised when a URL parse is failed out-of-band by an unhandled promise
+ * rejection instead of by its own promise (see raceUnhandledRejection).
+ */
+export class OutOfBandParseError extends Error {
+    constructor(reason: unknown) {
+        super(`parse failed out-of-band: ${String(reason)}`);
+    }
+}
+
+/** The slice of PromiseRejectionEvent this module touches. */
+interface UnhandledRejectionEvent {
+    reason: unknown;
+    preventDefault(): void;
+}
+
+/**
+ * Pyodide on WebKit can crash while converting a rejected fetch into a Python
+ * exception (asyncio's fut.set_exception raises TypeError on the botched
+ * conversion), leaving the Python-side future pending forever: the parse
+ * hangs, and the only observable signal is an unhandled promise rejection in
+ * the worker. Racing the parse against that event turns the hang back into a
+ * catchable failure so the whole-file fallback still runs. No-op under node
+ * (vitest), whose globalThis dispatches no such event.
+ * ponytail: only the URL parse is raced; bloom/preview share the machinery
+ * and could hang the same way -- wrap them too if that ever bites.
+ */
+function raceUnhandledRejection<T>(promise: Promise<T>): Promise<T> {
+    const target = globalThis as unknown as {
+        addEventListener?: (
+            type: 'unhandledrejection',
+            handler: (event: UnhandledRejectionEvent) => void
+        ) => void;
+        removeEventListener?: (
+            type: 'unhandledrejection',
+            handler: (event: UnhandledRejectionEvent) => void
+        ) => void;
+    };
+    const { addEventListener, removeEventListener } = target;
+    if (!addEventListener || !removeEventListener) {
+        return promise;
+    }
+    let handler!: (event: UnhandledRejectionEvent) => void;
+    const crashed = new Promise<never>((_, reject) => {
+        handler = event => {
+            event.preventDefault(); // consumed as the parse's failure, not console noise
+            reject(new OutOfBandParseError(event.reason));
+        };
+        addEventListener('unhandledrejection', handler);
+    });
+    return Promise.race([promise, crashed]).finally(() =>
+        removeEventListener('unhandledrejection', handler)
+    );
+}
+
+/**
  * Boots pyodide once and returns a parser. Boot is expensive (~12MB runtime on
  * first browser load); reuse the returned parser across files.
  */
@@ -730,9 +785,9 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         status('Parsing parquet (HTTP range requests)...');
         detail(url);
         try {
-            return await dumpUrl(url, parseProgress());
+            return await raceUnhandledRejection(dumpUrl(url, parseProgress()));
         } catch (error) {
-            if (!isHctefNetworkError(error)) {
+            if (!isHctefNetworkError(error) && !(error instanceof OutOfBandParseError)) {
                 throw error;
             }
             // The user explicitly wants this fallback: range requests need
