@@ -39,6 +39,16 @@ export interface BloomProbeWidget {
     destroy(): void;
 }
 
+// The two possible probe verdicts. Module consts because the status area's
+// ghost layer pre-renders the longer one (maybe) to reserve the result's
+// height before any probe runs — the text must be byte-identical in both.
+const VERDICT_MAYBE =
+    '<strong>maybe present</strong> — a bloom filter can only ever ' +
+    'answer “definitely not” or “maybe”; this could be a false positive.';
+const VERDICT_NO =
+    '<strong>definitely not present</strong> — the filter has no false ' +
+    'negatives, so a reader can safely skip this row group.';
+
 export function createBloomProbeWidget(
     node: Extract<SegmentNode, { kind: 'bloom_filter' }>,
     dump: AnyDump,
@@ -60,10 +70,30 @@ export function createBloomProbeWidget(
         `<button type="button" class="btn btn-sm bloom-probe-clear" disabled>Clear</button>` +
         `</div>` +
         // Probe text up top so it correlates with the input and stays put
-        // while the block strip scrolls elsewhere. One fixed-height status
-        // area holds an explanatory hint until probed, then the lineage +
-        // verdict — same reserved height either way, so nothing shifts.
-        `<div class="bloom-probe-status"></div>` +
+        // while the block strip scrolls elsewhere. The status area grid-stacks
+        // three permanent layers in one cell: the idle hint, an always-hidden
+        // GHOST of the tallest possible result (a lineage line + the longer
+        // verdict — the hint is the taller layer on narrow cards, the result
+        // on wide ones, so neither alone can size the reservation), and the
+        // live layer ("Probing…" / lineage+verdict / errors). Hidden layers
+        // are visibility-hidden — still sized by the grid — so the area is
+        // always max(hint, worst-case result) AT THE CURRENT WIDTH: no state
+        // swap shifts layout, and a window resize re-reserves via normal
+        // reflow (a measured px height would go stale when the lines re-wrap).
+        `<div class="bloom-probe-status">` +
+        `<p class="bloom-probe-hint">A bloom filter can rule a value ` +
+        `<em>out</em> of this row group. Type a value and Probe: the filter ` +
+        `answers <strong>definitely not present</strong> — the reader safely ` +
+        `skips the whole row group — or <strong>maybe present</strong>, which ` +
+        `it can't rule out (bloom filters never give a false negative, only ` +
+        `false positives). The block it hashes to lights up below.</p>` +
+        `<div class="bloom-status-ghost" aria-hidden="true">` +
+        `<div class="bloom-lineage">hash <code>0x0000000000000000</code> → block ` +
+        `88,888,888 of 88,888,888 · 8/8 bits set</div>` +
+        `<div class="bloom-verdict">${VERDICT_MAYBE}</div>` +
+        `</div>` +
+        `<div class="bloom-status-live"></div>` +
+        `</div>` +
         `<div class="bloom-scroll"><div class="bloom-block-track"></div></div>` +
         // The density strip sits BELOW the block strip, reading as its
         // scrollbar (the viewport box is the thumb); the readout rides with it.
@@ -73,6 +103,7 @@ export function createBloomProbeWidget(
     const probeBtn = section.querySelector<HTMLButtonElement>('.bloom-probe-btn')!;
     const clearBtn = section.querySelector<HTMLButtonElement>('.bloom-probe-clear')!;
     const status = section.querySelector<HTMLElement>('.bloom-probe-status')!;
+    const live = status.querySelector<HTMLElement>('.bloom-status-live')!;
     const stripWrap = section.querySelector<HTMLElement>('.bloom-strip-wrap')!;
     const scroll = section.querySelector<HTMLElement>('.bloom-scroll')!;
     const track = section.querySelector<HTMLElement>('.bloom-block-track')!;
@@ -156,42 +187,28 @@ export function createBloomProbeWidget(
         );
     };
 
-    // The fixed-height status area: an explanatory hint until a probe lands,
-    // then the value→hash→block lineage and the verdict. Same reserved height
-    // both ways, so revealing the result never shifts layout.
+    // Swap which status layer shows (see the markup comment above): the live
+    // layer replaces the hint, in the same grid cell, without resizing it.
+    const showLive = (visible: boolean): void => {
+        status.classList.toggle('is-live', visible);
+    };
+
+    // The status area: the idle hint until a probe lands, then the
+    // value→hash→block lineage and the verdict in the live layer.
     const renderStatus = (): void => {
         if (!probe) {
-            status.innerHTML =
-                `<p class="bloom-probe-hint">A bloom filter can rule a value ` +
-                `<em>out</em> of this row group. Type a value and Probe: the filter ` +
-                `answers <strong>definitely not present</strong> — the reader safely ` +
-                `skips the whole row group — or <strong>maybe present</strong>, which ` +
-                `it can't rule out (bloom filters never give a false negative, only ` +
-                `false positives). The block it hashes to lights up below.</p>`;
+            live.innerHTML = '';
+            showLive(false);
             return;
         }
-        status.innerHTML =
+        live.innerHTML =
             renderBloomLineage(probe) +
             `<div class="bloom-verdict bloom-verdict-${probe.mightContain ? 'maybe' : 'no'}">` +
-            (probe.mightContain
-                ? '<strong>maybe present</strong> — a bloom filter can only ever ' +
-                  'answer “definitely not” or “maybe”; this could be a false positive.'
-                : '<strong>definitely not present</strong> — the filter has no false ' +
-                  'negatives, so a reader can safely skip this row group.') +
+            (probe.mightContain ? VERDICT_MAYBE : VERDICT_NO) +
             `</div>`;
+        showLive(true);
     };
     renderStatus();
-    // Lock the status area to the idle hint's rendered height — the tallest
-    // state — so swapping to "Probing…" / lineage+verdict / an error never
-    // shrinks the card (the CSS min-height alone under-reserves the hint's
-    // wrap). rAF: the manager appends the section in this same tick, so it
-    // measures 0 until the next frame. min-height, so taller content (a
-    // narrower re-wrap) can still grow it.
-    requestAnimationFrame(() => {
-        if (status.offsetHeight > 0) {
-            status.style.minHeight = `${status.offsetHeight}px`;
-        }
-    });
 
     // Position the minimap's viewport box to mirror the visible window: the
     // box spans [scrollLeft, scrollLeft+clientWidth] as a fraction of the full
@@ -343,16 +360,18 @@ export function createBloomProbeWidget(
             // Show the input error in the reserved status area (not the bottom
             // note), so it doesn't grow/shift the card. textContent escapes the
             // user's value.
-            status.textContent = leaf
+            live.textContent = leaf
                 ? `'${input.value}' is not a valid ${leaf.type} value${
                       binary ? ' (expected base64)' : ''
                   }`
                 : `column '${node.path}' was not found in the schema`;
+            showLive(true);
             return;
         }
         // Show "Probing…" in the reserved-height status area (not the note),
         // so the card never grows/shrinks while a probe is in flight.
-        status.innerHTML = `<p class="bloom-probe-hint">Probing…</p>`;
+        live.innerHTML = `<p class="bloom-probe-hint">Probing…</p>`;
+        showLive(true);
         deps.bloomProbe(node.rowGroup, node.path, value).then(
             res => {
                 probe = res;
@@ -368,7 +387,7 @@ export function createBloomProbeWidget(
             (error: unknown) => {
                 // Surface the failure in the reserved status area (replacing
                 // "Probing…"), not the bottom note, so nothing shifts.
-                reportWorkerError(status, error, 'Probe failed', deps.recovery);
+                reportWorkerError(live, error, 'Probe failed', deps.recovery);
             }
         );
     };

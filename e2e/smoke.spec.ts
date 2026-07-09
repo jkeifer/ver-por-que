@@ -452,16 +452,18 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
 
     // 'Hello' is in the column (footer stats min); the filter can only say maybe.
     // A "maybe" renders the probed block with all eight checked bits set (no
-    // misses). The verdict + lineage sit up top (.bloom-verdict, .bloom-lineage,
-    // replacing the idle hint); the probed block's grid/marks render in the
-    // .bloom-scroll strip.
-    const result = page.locator('.bloom-verdict');
+    // misses). The verdict + lineage sit up top in the status's live layer
+    // (covering the idle hint; the sibling ghost layer carries the same
+    // classes, permanently hidden, to reserve the height); the probed block's
+    // grid/marks render in the .bloom-scroll strip.
+    const live = page.locator('.bloom-status-live');
+    const result = live.locator('.bloom-verdict');
     const strip = page.locator('.bloom-scroll');
     await page.locator('.bloom-probe-value').fill('Hello');
     await page.locator('.bloom-probe-btn').click();
     await expect(result).toContainText('maybe present');
     await expect(strip.locator('svg.bloom-block').first()).toBeVisible();
-    await expect(page.locator('.bloom-lineage')).toContainText('8/8 bits set');
+    await expect(live.locator('.bloom-lineage')).toContainText('8/8 bits set');
     await expect(strip.locator('.bloom-bit-miss')).toHaveCount(0);
 
     // Garbage gets the exact answer: definitely absent — at least one miss bit,
@@ -544,19 +546,23 @@ test(
         await expect.poll(async () => scroll.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
         await expect.poll(async () => Number(await box.getAttribute('x'))).toBeGreaterThan(0);
 
-        // Idle state shows the explanatory hint, not a verdict.
-        await expect(panel.locator('.bloom-probe-hint')).toBeVisible();
-        await expect(panel.locator('.bloom-verdict')).toHaveCount(0);
+        // Idle state shows the explanatory hint, not a verdict. (Scope result
+        // locators to the live layer: the reserved-height ghost layer carries
+        // the same verdict/lineage classes, permanently hidden.)
+        const liveLayer = panel.locator('.bloom-status-live');
+        await expect(panel.locator('p.bloom-probe-hint')).toBeVisible();
+        await expect(liveLayer.locator('.bloom-verdict')).toHaveCount(0);
 
-        // Probe a value: the hint is replaced by the verdict + lineage, hit/miss
-        // marks land on the probed block's grid, the probed overview cell is
-        // marked, its row label flagged, and Clear enabled.
-        const result = panel.locator('.bloom-verdict');
+        // Probe a value: the verdict + lineage layer covers the hint (which
+        // stays mounted, visibility-hidden, keeping the area's reservation),
+        // hit/miss marks land on the probed block's grid, the probed overview
+        // cell is marked, its row label flagged, and Clear enabled.
+        const result = liveLayer.locator('.bloom-verdict');
         await page.locator('.bloom-probe-value').fill('20.5');
         await page.locator('.bloom-probe-btn').click();
         await expect(result).toContainText('present');
-        await expect(panel.locator('.bloom-probe-hint')).toHaveCount(0);
-        await expect(panel.locator('.bloom-lineage')).toContainText('bits set');
+        await expect(panel.locator('p.bloom-probe-hint')).toBeHidden();
+        await expect(liveLayer.locator('.bloom-lineage')).toContainText('bits set');
         await expect(panel.locator('.bloom-strip-cell.probed')).toHaveCount(1);
         await expect(panel.locator('.bloom-block-label.probed')).toContainText('probed');
         await expect(page.locator('.bloom-probe-clear')).toBeEnabled();
@@ -568,7 +574,7 @@ test(
         await expect(page.locator('.bloom-probe-clear')).toBeDisabled();
         await expect(panel.locator('.bloom-strip-cell.probed')).toHaveCount(0);
         await expect(result).toHaveCount(0);
-        await expect(panel.locator('.bloom-probe-hint')).toBeVisible();
+        await expect(panel.locator('p.bloom-probe-hint')).toBeVisible();
     }
 );
 

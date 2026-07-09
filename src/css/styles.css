@@ -1436,15 +1436,35 @@ code {
     color: var(--text-secondary);
 }
 
-/* Reserved-height probe status area (above the block strip): the explanatory
- * hint until a probe lands, then the lineage + verdict. The widget locks
- * min-height to the rendered hint (the tallest state) once mounted, so state
- * swaps never shift layout; this floor only covers the pre-measure frame. */
+/* Reserved-height probe status area (above the block strip): the idle hint,
+ * an always-hidden ghost of the worst-case probe result, and the live layer
+ * ("Probing…" / lineage + verdict / errors) are permanent siblings
+ * grid-stacked in one cell. Hidden layers are visibility-hidden, which still
+ * contributes to grid sizing, so the area is always max(hint, worst-case
+ * result) at the current width — the hint is taller on narrow cards, the
+ * result on wide ones. No state swap shifts layout, and a resize re-reserves
+ * via normal reflow (no stale measured height). */
 .bloom-probe-status {
-    min-height: 3.5rem;
+    display: grid;
     margin-bottom: var(--spacing-sm);
     font-size: 0.85rem;
     color: var(--text-secondary);
+}
+
+.bloom-probe-status > * {
+    grid-area: 1 / 1;
+}
+
+/* Child combinators: the live layer nests its own .bloom-probe-hint for
+ * "Probing…", which must not be caught by the idle-hint toggle. */
+.bloom-probe-status > .bloom-status-ghost,
+.bloom-probe-status > .bloom-status-live,
+.bloom-probe-status.is-live > .bloom-probe-hint {
+    visibility: hidden;
+}
+
+.bloom-probe-status.is-live > .bloom-status-live {
+    visibility: visible;
 }
 
 .bloom-probe-status strong {
