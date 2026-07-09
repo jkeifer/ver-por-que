@@ -179,12 +179,12 @@ function renderPreviewFailure(codec: string): string {
  * "might contain"; a single miss is exact proof of absence. Viewing a different
  * block (no `probed`) shows its plain bits.
  */
-function renderBloomBlock(bytes: Uint8Array, probed?: BloomProbeBit[]): string {
+function renderBloomBlock(bytes: Uint8Array, cell: number, probed?: BloomProbeBit[]): string {
     if (bytes.length < 32) {
         return '';
     }
     const probedBit = new Map((probed ?? []).map(b => [b.word, b.bit]));
-    const CELL = 11;
+    const CELL = cell;
     const STEP = CELL + 1;
     const width = 32 * STEP - 1;
     const height = 8 * STEP - 1;
@@ -220,22 +220,29 @@ function renderBloomBlock(bytes: Uint8Array, probed?: BloomProbeBit[]): string {
 
 /**
  * One block in the responsive window: a small "block N" index label over its
- * 8×32 bit-grid. `selected` outlines the grid (the map's selection cursor);
- * `probed` (given only for the probed block in view) marks the eight checked
- * bits hit/miss. Missing bytes render a placeholder cell of the same footprint,
- * so the row keeps its layout while a fetch is in flight.
+ * 8×32 bit-grid, rendered at `cell` px per bit (grow-to-fill; see render()).
+ * `selected` marks the grid (the map's selection cursor); `probed` (given only
+ * for the probed block in view) marks the eight checked bits hit/miss AND flags
+ * the label as the probed block, so the lineage's "block X" has a visible
+ * referent in the row. Missing bytes render a placeholder cell of the same
+ * footprint, so the row keeps its layout while a fetch is in flight.
  */
 function renderBlockCell(
     index: number,
     bytes: Uint8Array | null,
+    cell: number,
     selected: boolean,
     probed?: BloomProbeBit[]
 ): string {
-    const label = `<div class="bloom-block-label">block ${formatNumber(index)}</div>`;
+    const isProbed = probed !== undefined;
+    const label =
+        `<div class="bloom-block-label${isProbed ? ' probed' : ''}">block ${formatNumber(index)}` +
+        `${isProbed ? ' · probed' : ''}</div>`;
+    const side = 32 * (cell + 1) - 1;
     const grid =
         bytes && bytes.length >= 32
-            ? renderBloomBlock(bytes, probed)
-            : `<div class="bloom-block-placeholder"></div>`;
+            ? renderBloomBlock(bytes, cell, probed)
+            : `<div class="bloom-block-placeholder" style="width:${side}px;height:${8 * (cell + 1) - 1}px"></div>`;
     return `<div class="bloom-block-cell${selected ? ' selected' : ''}">${label}${grid}</div>`;
 }
 
@@ -1746,12 +1753,13 @@ export class InfoPanelManager {
         const blockWrap = section.querySelector<HTMLElement>('.bloom-block-wrap')!;
         const result = section.querySelector<HTMLElement>('.bloom-probe-result')!;
 
-        // One block grid's intrinsic width (fixed cell size, never shrunk to
-        // fit more — see renderBloomBlock's CELL) plus the minimum gap between
-        // grids: how much horizontal room each grid claims when computing N.
+        // The base cell size fixes how many blocks fit (N is computed at CELL so
+        // we never reduce the block count); MAX_CELL caps how much a block grows
+        // to fill slack. BLOCK_W is the base grid width; GAP is the row gap.
         const CELL = 11;
+        const MAX_CELL = 16;
         const BLOCK_W = 32 * (CELL + 1) - 1;
-        const MIN_GAP = 12;
+        const GAP = 12;
 
         // Closure state: the fetched density (kept so the strip re-draws without
         // re-reading the filter), the first block of the viewport window, the
@@ -1772,7 +1780,7 @@ export class InfoPanelManager {
         const computeN = (): number => {
             const blocks = density?.numBlocks ?? 1;
             const avail = blockWrap.clientWidth;
-            const fit = avail > 0 ? Math.floor(avail / (BLOCK_W + MIN_GAP)) : 1;
+            const fit = avail > 0 ? Math.floor(avail / (BLOCK_W + GAP)) : 1;
             return Math.max(1, Math.min(fit, blocks));
         };
 
@@ -1794,10 +1802,13 @@ export class InfoPanelManager {
             return blockCache.get(block) ?? null;
         };
 
-        // Draw the N block grids for the current window plus, when the probed
-        // block is in view, its lineage above and verdict below. `end` is one
-        // past the last visible block (may be < windowStart+N near the last block).
-        const drawWindow = (start: number, end: number): void => {
+        // Draw the N block grids (at `cell` px/bit) for the current window plus,
+        // when the probed block is in view, its lineage above and verdict below.
+        // The lineage and verdict containers ALWAYS render (empty when not
+        // probed) so probing/clearing never changes the card's height — they
+        // hold reserved space via min-height. `end` is one past the last visible
+        // block (may be < windowStart+N near the last block).
+        const drawWindow = (start: number, end: number, cell: number): void => {
             const probedInView =
                 probe !== null && probe.blockIndex >= start && probe.blockIndex < end;
             const cells: string[] = [];
@@ -1807,29 +1818,26 @@ export class InfoPanelManager {
                     renderBlockCell(
                         block,
                         bytesFor(block),
+                        cell,
                         block === selectedBlock,
                         isProbed ? probe!.bits : undefined
                     )
                 );
             }
             const lineage = probedInView ? renderBloomLineage(probe!) : '';
-            // space-between distributes the leftover width as gaps when there's
-            // more than one grid; a single grid sits at the start.
-            const justify = cells.length > 1 ? ' bloom-block-row-justified' : '';
             blockWrap.innerHTML =
-                lineage + `<div class="bloom-block-row${justify}">${cells.join('')}</div>`;
-            if (probedInView) {
-                const verdict = probe!.mightContain
-                    ? '<strong>maybe present</strong> — a bloom filter can only ever ' +
-                      'answer “definitely not” or “maybe”; this could be a false positive.'
-                    : '<strong>definitely not present</strong> — the filter has no false ' +
-                      'negatives, so a reader can safely skip this row group.';
-                result.innerHTML =
-                    `<div class="bloom-verdict bloom-verdict-${probe!.mightContain ? 'maybe' : 'no'}">` +
-                    `${verdict}</div>`;
-            } else {
-                result.innerHTML = '';
-            }
+                `<div class="bloom-lineage-slot">${lineage}</div>` +
+                `<div class="bloom-block-row">${cells.join('')}</div>`;
+            const verdict = probedInView
+                ? `<div class="bloom-verdict bloom-verdict-${probe!.mightContain ? 'maybe' : 'no'}">` +
+                  (probe!.mightContain
+                      ? '<strong>maybe present</strong> — a bloom filter can only ever ' +
+                        'answer “definitely not” or “maybe”; this could be a false positive.'
+                      : '<strong>definitely not present</strong> — the filter has no false ' +
+                        'negatives, so a reader can safely skip this row group.') +
+                  `</div>`
+                : '';
+            result.innerHTML = `<div class="bloom-verdict-slot">${verdict}</div>`;
         };
 
         const render = (): void => {
@@ -1841,6 +1849,14 @@ export class InfoPanelManager {
             // window never dangles past the last block.
             windowStart = Math.max(0, Math.min(windowStart, Math.max(0, density.numBlocks - n)));
             const end = Math.min(windowStart + n, density.numBlocks);
+            // Grow-to-fill: N is fixed at the base cell, so when few blocks leave
+            // slack, scale each block UP to fill the row at a consistent gap
+            // (never below CELL, capped at MAX_CELL) instead of exploding gaps.
+            // blockW is the width each block gets; a block grid is 32*(cell+1)-1
+            // px wide, so cell = floor((blockW+1)/33).
+            const avail = blockWrap.clientWidth;
+            const blockW = avail > 0 ? (avail - (n - 1) * GAP) / n : BLOCK_W;
+            const cell = Math.max(CELL, Math.min(MAX_CELL, Math.floor((blockW + 1) / 33)));
             // Strip: bracket the window, mark the selected cell, and (while probed)
             // the probed cell.
             stripWrap.innerHTML = renderBloomStrip(
@@ -1860,7 +1876,7 @@ export class InfoPanelManager {
                 }
             }
             if (!missing || !this.bloomBlocks) {
-                drawWindow(windowStart, end);
+                drawWindow(windowStart, end, cell);
                 return;
             }
             // Fetch the whole window's blocks in ONE range call. Bump the token so
@@ -1869,8 +1885,9 @@ export class InfoPanelManager {
             const token = ++renderToken;
             const start = windowStart;
             const count = end - start;
-            drawWindow(start, end); // placeholders keep the row's layout
-            result.innerHTML = '<div class="bloom-lineage">Loading blocks…</div>';
+            drawWindow(start, end, cell); // placeholders keep the row's layout
+            result.innerHTML =
+                '<div class="bloom-verdict-slot"><div class="bloom-lineage">Loading blocks…</div></div>';
             this.bloomBlocks(node.rowGroup, node.path, start, count).then(
                 b64 => {
                     if (token !== renderToken) {
