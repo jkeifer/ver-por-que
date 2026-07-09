@@ -1434,15 +1434,15 @@ code {
 }
 
 /* Viewport box: the scrollbar thumb over the density strip, marking the visible
- * window of the block strip. Toned-down neutral gray (a faint fill under a soft
- * outline) so it reads as chrome, not data. Pointer-transparent so a drag falls
- * through to the strip's scrub handler. */
+ * window of the block strip. Outline-only (NO fill) so it never tints the
+ * density cells' fill-opacity, which carries semantic meaning; a dark neutral
+ * stroke reads as a scrollbar thumb without going black. Pointer-transparent so
+ * a drag falls through to the strip's scrub handler. */
 .bloom-strip-viewport {
-    fill: var(--text-muted);
-    fill-opacity: 0.1;
-    stroke: var(--text-muted);
-    stroke-width: 2;
-    stroke-opacity: 0.55;
+    fill: none;
+    stroke: var(--text-secondary);
+    stroke-width: 3;
+    stroke-opacity: 0.95;
     pointer-events: none;
 }
 
@@ -1450,7 +1450,8 @@ code {
  * one inset panel. Virtualized (only the visible window is mounted) and driven
  * by the strip-as-scrollbar, so the native scrollbar is hidden. */
 .bloom-scroll {
-    margin-bottom: var(--spacing-sm);
+    /* Tight gap: the density strip below reads as this panel's scrollbar. */
+    margin-bottom: var(--spacing-xs);
     padding: var(--spacing-sm);
     background: var(--bg-tertiary);
     border-radius: var(--border-radius);
