@@ -181,6 +181,17 @@ export function createBloomProbeWidget(
             `</div>`;
     };
     renderStatus();
+    // Lock the status area to the idle hint's rendered height — the tallest
+    // state — so swapping to "Probing…" / lineage+verdict / an error never
+    // shrinks the card (the CSS min-height alone under-reserves the hint's
+    // wrap). rAF: the manager appends the section in this same tick, so it
+    // measures 0 until the next frame. min-height, so taller content (a
+    // narrower re-wrap) can still grow it.
+    requestAnimationFrame(() => {
+        if (status.offsetHeight > 0) {
+            status.style.minHeight = `${status.offsetHeight}px`;
+        }
+    });
 
     // Position the minimap's viewport box to mirror the visible window: the
     // box spans [scrollLeft, scrollLeft+clientWidth] as a fraction of the full
