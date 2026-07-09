@@ -195,6 +195,15 @@ export class ParquetWorkerClient {
         this.ensureWorker().postMessage({ warmup: true, manifestUrl: manifestUrl() });
     }
 
+    /**
+     * Fire-and-forget: warm the current file's bloom filter byte ranges into the
+     * reader's block cache, so the first probe/density render pays no range
+     * fetch. Sent after a parse/boot resolves (the worker must have a file).
+     */
+    prefetchBlooms(): void {
+        this.ensureWorker().postMessage({ prefetchBlooms: true, manifestUrl: manifestUrl() });
+    }
+
     private request(
         payload:
             | ({ name: string } & ({ bytes: ArrayBuffer } | { url: string }))

@@ -18,7 +18,7 @@ import { validateFile, validateMetadata, type ValidationError } from './generate
 import { fetchBytes } from './js/fetch-progress';
 import { getHashParam, setHashParam } from './js/permalink';
 import { parseQueryState, type QueryState } from './business/pruning';
-import { project, type SegmentNode } from './business/segment-tree';
+import { isSet, project, type SegmentNode } from './business/segment-tree';
 import type { Resolution } from './business/query-model';
 import { ParquetWorkerClient } from './js/worker/client';
 import type { AnyDump } from './types';
@@ -463,11 +463,47 @@ class ParquetExplorer {
         this.showExplorer();
         this.populateUI();
         this.hideLoadingScreen();
+        // Background-warm the bloom byte ranges so the first query probe / bloom
+        // node open pays no range fetch. `bloomProbe` was passed non-null only by
+        // a raw-parquet load (the worker already holds the file).
+        this.warmBloomFilters(bloomProbe !== null);
     }
 
     /** The dump's recorded source, when it's a fetchable http(s) URL. */
     private fetchableSource(): string | null {
         return httpUrlOrNull(this.parquetData?.source);
+    }
+
+    /** Whether the dump's footer records any bloom filter (full or metadata dump). */
+    private hasBloomFilters(): boolean {
+        const groups = this.parquetData?.metadata.row_groups ?? [];
+        return groups.some(g =>
+            Object.values(g.column_chunks).some(c => isSet(c.metadata.bloom_filter_offset))
+        );
+    }
+
+    /**
+     * Fire-and-forget on load: warm every bloom filter's byte range into the
+     * worker reader's block cache, so the first query probe / bloom-node open
+     * pays no range fetch (the remote-dump case). A raw-parquet load already
+     * holds the file in the worker; a JSON dump with a fetchable source boots
+     * the reader first. No bloom capability or no filters -> nothing to warm.
+     */
+    private warmBloomFilters(workerHasFile: boolean): void {
+        if (!this.bloomProbe || !this.hasBloomFilters()) {
+            return;
+        }
+        if (workerHasFile) {
+            this.workerClient?.prefetchBlooms();
+            return;
+        }
+        const url = this.fetchableSource();
+        if (url) {
+            this.ensureWorkerBooted(url).then(
+                () => this.workerClient?.prefetchBlooms(),
+                () => {}
+            );
+        }
     }
 
     /**

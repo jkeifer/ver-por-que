@@ -187,6 +187,13 @@ export interface ParquetParser {
      * dump without re-parsing the file (every offset is already in the dump).
      */
     bootFromDump(dumpJson: string, url: string): Promise<void>;
+    /**
+     * Reads every bloom filter in the current file once, purely to warm the
+     * reader's block cache (for a remote dump, the one-time range fetch), so the
+     * first probe / density render pays no network wait. Returns how many filters
+     * were warmed. Safe to call fire-and-forget on load.
+     */
+    prefetchBlooms(): Promise<number>;
 }
 
 const PARSE_PY = `
@@ -391,6 +398,30 @@ async def _bloom_blocks(row_group, column, start, count):
     end = max(start, min(start + count, num_blocks))
     blocks = bytes(bloom.bitset[start * 32:end * 32])
     return json.dumps({'blocks': base64.b64encode(blocks).decode('ascii')})
+
+async def _prefetch_blooms():
+    # Warm the reader's block cache for every bloom filter in the file, so the
+    # first probe / density render pays no range fetch (the remote-dump case,
+    # where the bitsets live over the network, not in the JSON). Reading each
+    # filter once via from_reader pulls its byte range through the AsyncHttpFile
+    # block cache; the object is discarded. A local BytesIO reads from memory --
+    # harmless. A filter that won't parse is skipped, never fatal. Returns how
+    # many filters were warmed.
+    if _current is None:
+        return json.dumps({'prefetched': 0})
+    pf, reader = _current
+    r = ensure_async_reader(reader)
+    count = 0
+    for group in pf.metadata.row_groups:
+        for chunk in group.column_chunks.values():
+            if chunk.bloom_filter_offset is None:
+                continue
+            try:
+                await BloomFilter.from_reader(r, chunk)
+                count += 1
+            except Exception:
+                pass
+    return json.dumps({'prefetched': count})
 
 _MAX_SAFE_INTEGER = 2**53 - 1  # Number.MAX_SAFE_INTEGER
 
@@ -635,6 +666,7 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         dumpJson: string,
         url: string
     ) => Promise<void>;
+    const prefetchBlooms = pyodide.globals.get('_prefetch_blooms') as () => Promise<string>;
 
     // por-que's parse phases, in emission order, with human labels. The parse
     // is one process, so the status (modal title) stays put; each phase is
@@ -750,5 +782,7 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
                 await previewDictionary(rowGroup, column, offset, limit)
             ) as DictionaryPreviewResult,
         bootFromDump: (dumpJson: string, url: string) => bootFromDump(dumpJson, url),
+        prefetchBlooms: async () =>
+            (JSON.parse(await prefetchBlooms()) as { prefetched: number }).prefetched,
     });
 }

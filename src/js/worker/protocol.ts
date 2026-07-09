@@ -18,6 +18,7 @@ interface ParseRequestBase {
     bloomDensity?: undefined;
     bloomBlocks?: undefined;
     boot?: undefined;
+    prefetchBlooms?: undefined;
 }
 
 /**
@@ -34,6 +35,7 @@ export interface WarmupRequest {
     bloomDensity?: undefined;
     bloomBlocks?: undefined;
     boot?: undefined;
+    prefetchBlooms?: undefined;
 }
 
 /** Parse locally-provided bytes (upload/drop). */
@@ -66,6 +68,7 @@ export interface ProbeBloomRequest {
     bloomDensity?: undefined;
     bloomBlocks?: undefined;
     boot?: undefined;
+    prefetchBlooms?: undefined;
     bytes?: undefined;
     url?: undefined;
 }
@@ -85,6 +88,7 @@ export interface BloomDensityRequest {
     dictionaryPreview?: undefined;
     bloomBlocks?: undefined;
     boot?: undefined;
+    prefetchBlooms?: undefined;
     bytes?: undefined;
     url?: undefined;
 }
@@ -104,6 +108,7 @@ export interface BloomBlocksRequest {
     dictionaryPreview?: undefined;
     bloomDensity?: undefined;
     boot?: undefined;
+    prefetchBlooms?: undefined;
     bytes?: undefined;
     url?: undefined;
 }
@@ -131,6 +136,7 @@ export interface PreviewRequest {
     bloomDensity?: undefined;
     bloomBlocks?: undefined;
     boot?: undefined;
+    prefetchBlooms?: undefined;
     bytes?: undefined;
     url?: undefined;
 }
@@ -151,6 +157,7 @@ export interface DictionaryPreviewRequest {
     bloomDensity?: undefined;
     bloomBlocks?: undefined;
     boot?: undefined;
+    prefetchBlooms?: undefined;
     bytes?: undefined;
     url?: undefined;
 }
@@ -170,8 +177,27 @@ export interface BootRequest {
     dictionaryPreview?: undefined;
     bloomDensity?: undefined;
     bloomBlocks?: undefined;
+    prefetchBlooms?: undefined;
     bytes?: undefined;
     url?: undefined;
+}
+
+/**
+ * Warm the reader's block cache for every bloom filter in the worker's current
+ * file (sent right after a load). Fire-and-forget: no response — the first probe
+ * simply finds the byte ranges already cached. Requires a loaded file, so it's
+ * sent only after a parse/boot has resolved.
+ */
+export interface PrefetchBloomsRequest {
+    prefetchBlooms: true;
+    manifestUrl: string;
+    warmup?: undefined;
+    probe?: undefined;
+    preview?: undefined;
+    dictionaryPreview?: undefined;
+    bloomDensity?: undefined;
+    bloomBlocks?: undefined;
+    boot?: undefined;
 }
 
 /** Everything the main thread can send to the worker. */
@@ -183,7 +209,8 @@ export type WorkerRequest =
     | PreviewRequest
     | DictionaryPreviewRequest
     | BootRequest
-    | WarmupRequest;
+    | WarmupRequest
+    | PrefetchBloomsRequest;
 
 export interface ParseSuccess {
     id: number;
