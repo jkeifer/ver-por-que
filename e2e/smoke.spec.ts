@@ -489,10 +489,11 @@ test(
         const panel = page.locator('#info-panel-container');
         await expect(panel).toContainText('Probe a Value');
 
-        // Base state: the whole-filter density overview strip AND the scrollable
-        // block strip are visible BEFORE any probe, and Clear is disabled. Every
-        // block is a slot (.bloom-block-cell); the ones in view lazily fill with
-        // grids, so more than one bloom-block svg renders.
+        // Base state: the density strip AND the virtualized block strip are
+        // visible BEFORE any probe, and Clear is disabled. Only the visible window
+        // of blocks is mounted (.bloom-block-cell), and their grids lazily fill,
+        // so more than one bloom-block svg renders. The strip carries ONE viewport
+        // box (the scrollbar thumb), narrower than the strip (not all fit).
         await expect(panel.locator('svg.bloom-strip')).toBeVisible();
         await expect(panel.locator('.bloom-scroll svg.bloom-block').first()).toBeVisible();
         await expect(panel).toContainText('% full');
@@ -501,12 +502,20 @@ test(
             .poll(async () => panel.locator('.bloom-scroll svg.bloom-block').count())
             .toBeGreaterThan(1);
         await expect(page.locator('.bloom-probe-clear')).toBeDisabled();
+        const strip = panel.locator('svg.bloom-strip');
+        const box = panel.locator('.bloom-strip-viewport');
+        await expect(box).toHaveCount(1);
+        expect(Number(await box.getAttribute('width'))).toBeLessThan(
+            Number(await strip.getAttribute('width'))
+        );
 
-        // The block strip overflows its panel (more blocks than fit), so it's
-        // horizontally scrollable: clicking the last overview cell scrolls it.
+        // The block strip overflows its panel, and the density strip is its
+        // scrollbar: pressing the strip near its right end scrubs the strip
+        // (scrollLeft moves off 0) and the viewport box follows.
         const scroll = panel.locator('.bloom-scroll');
-        await panel.locator('.bloom-strip-cell').last().click();
+        await strip.click({ position: { x: (await strip.boundingBox())!.width - 4, y: 12 } });
         await expect.poll(async () => scroll.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
+        await expect.poll(async () => Number(await box.getAttribute('x'))).toBeGreaterThan(0);
 
         // Probe a value: verdict + hit/miss marks on the probed block's grid,
         // the probed overview cell marked, its row label flagged, and Clear enabled.
