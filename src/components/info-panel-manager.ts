@@ -31,6 +31,7 @@ import {
 } from '../business/stat-values';
 import { describeWkb, wkbToGeoJson } from '../business/wkb';
 import type {
+    BloomDensityResult,
     BloomProbeResult,
     DictionaryEntry,
     DictionaryPreviewResult,
@@ -102,6 +103,12 @@ export type BloomProbe = (
     column: string,
     value: string
 ) => Promise<BloomProbeResult>;
+
+/**
+ * Reads a column chunk's whole bloom filter and reduces it to a density strip.
+ * Only raw-parquet loads have one, same lifecycle as BloomProbe.
+ */
+export type BloomDensity = (rowGroup: number, column: string) => Promise<BloomDensityResult>;
 
 /**
  * Decodes a window of a data page in the worker's current file, starting at
@@ -200,6 +207,61 @@ function renderBloomBlock(res: BloomProbeResult): string {
         lineage +
         `<svg class="bloom-block" viewBox="0 0 ${width} ${height}" width="${width}" ` +
         `height="${height}" role="img" aria-label="probed bloom-filter block">${cells}</svg>`
+    );
+}
+
+/** Estimated false-positive rate as a human `~X% est.` label. A split-block
+ *  bloom filter checks 8 bits, so p(all set at random) ≈ fill**8; tiny values
+ *  read as exponential rather than a wall of zeros, and 0 fill reads `~0%`. */
+function estimatedFprLabel(fill: number): string {
+    const fpr = fill ** 8;
+    if (fpr <= 0) {
+        return '~0% est.';
+    }
+    const pct = fpr * 100;
+    const shown = pct < 0.001 ? `${pct.toExponential(1)}` : `${pct.toPrecision(2)}`;
+    return `~${shown}% est.`;
+}
+
+/**
+ * The whole filter as a horizontal density heatmap: one rect per bucket, filled
+ * by its set-bit fraction over a light track (empty reads empty). An optional
+ * `highlightBucket` (the bucket a probe landed in) gets an outline. A one-line
+ * readout pairs the overall fill %, the block count, and the estimated FPR.
+ */
+function renderBloomStrip(density: BloomDensityResult, highlightBucket?: number): string {
+    const { buckets, fill, numBlocks } = density;
+    const n = buckets.length;
+    if (n === 0) {
+        return `<div class="bloom-strip-readout">empty filter — 0 blocks</div>`;
+    }
+    const CELL = Math.max(1, Math.floor(512 / n));
+    const height = 24;
+    const width = n * CELL;
+    const rects = buckets
+        .map((b, i) => {
+            const cls =
+                i === highlightBucket ? 'bloom-strip-cell bloom-strip-hit' : 'bloom-strip-cell';
+            // Alpha carries density over the light track; clamp so a faint but
+            // non-empty bucket still reads as set.
+            const alpha = b === 0 ? 0 : Math.max(0.08, b);
+            return (
+                `<rect class="${cls}" x="${i * CELL}" y="0" width="${CELL}" height="${height}" ` +
+                `fill="rgba(var(--accent-rgb), ${alpha.toFixed(3)})"/>`
+            );
+        })
+        .join('');
+    const readout =
+        `<div class="bloom-strip-readout">` +
+        `<span>${(fill * 100).toFixed(1)}% full</span>` +
+        `<span>${formatNumber(numBlocks)} block${numBlocks === 1 ? '' : 's'}</span>` +
+        `<span title="estimated false-positive rate (fill^8)">FPR ${estimatedFprLabel(fill)}</span>` +
+        `</div>`;
+    return (
+        `<svg class="bloom-strip" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" ` +
+        `preserveAspectRatio="none" role="img" aria-label="bloom-filter density">` +
+        `<rect class="bloom-strip-track" x="0" y="0" width="${width}" height="${height}"/>${rects}</svg>` +
+        readout
     );
 }
 
@@ -1193,6 +1255,8 @@ export class InfoPanelManager {
     private infoPanel: HTMLElement;
     /** Live bloom-filter probe; null for JSON-dump / metadata-only loads. */
     private bloomProbe: BloomProbe | null;
+    /** Live whole-filter density reader; same lifecycle as bloomProbe. */
+    private bloomDensity: BloomDensity | null;
     /** Live value decoder; null for JSON-dump / metadata-only loads. */
     private valuePreview: ValuePreview | null;
     /** Live dictionary decoder; same lifecycle as valuePreview. */
@@ -1207,6 +1271,7 @@ export class InfoPanelManager {
     constructor(
         container: HTMLElement,
         bloomProbe: BloomProbe | null = null,
+        bloomDensity: BloomDensity | null = null,
         valuePreview: ValuePreview | null = null,
         dictionaryPreview: DictionaryPreview | null = null,
         recovery: RecoveryActions = { loadFullStructure: null, downloadFullFile: null }
@@ -1214,6 +1279,7 @@ export class InfoPanelManager {
         this.container = container;
         this.container.innerHTML = '';
         this.bloomProbe = bloomProbe;
+        this.bloomDensity = bloomDensity;
         this.valuePreview = valuePreview;
         this.dictionaryPreview = dictionaryPreview;
         this.recovery = recovery;
@@ -1517,7 +1583,13 @@ export class InfoPanelManager {
         return section;
     }
 
-    /** Interactive bloom-filter probe: type a value, ask the worker's filter. */
+    /**
+     * Interactive bloom-filter section: the whole filter renders as a density
+     * strip up front (base state); typing a value and probing highlights the
+     * bucket it lands in and shows the per-block bit-grid + verdict; Clear resets
+     * to the base strip. The density is fetched once and kept so the strip can
+     * re-render with/without a highlight without re-reading the filter.
+     */
     private buildBloomProbeSection(
         node: Extract<SegmentNode, { kind: 'bloom_filter' }>,
         dump: AnyDump
@@ -1536,9 +1608,54 @@ export class InfoPanelManager {
             }">` +
             `<button type="button" class="bloom-probe-btn">Probe</button>` +
             `</div>` +
+            `<div class="bloom-strip-wrap"></div>` +
             `<div class="bloom-probe-result"></div>`;
         const input = section.querySelector<HTMLInputElement>('.bloom-probe-value')!;
+        const stripWrap = section.querySelector<HTMLElement>('.bloom-strip-wrap')!;
         const result = section.querySelector<HTMLElement>('.bloom-probe-result')!;
+
+        // The fetched density, kept so the strip re-renders (base ↔ highlight)
+        // without re-reading the filter. Null until the initial fetch lands.
+        let density: BloomDensityResult | null = null;
+        const drawStrip = (highlightBucket?: number): void => {
+            if (density) {
+                stripWrap.innerHTML = renderBloomStrip(density, highlightBucket);
+            }
+        };
+
+        // Base graphic: fetch the whole filter's density once and render the strip.
+        if (this.bloomDensity) {
+            stripWrap.textContent = 'Loading filter…';
+            this.bloomDensity(node.rowGroup, node.path).then(
+                d => {
+                    density = d;
+                    drawStrip();
+                },
+                (error: unknown) => {
+                    if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
+                        this.appendRecovery(
+                            stripWrap,
+                            RANGE_UNSUPPORTED_MESSAGE,
+                            'Download full file',
+                            this.recovery.downloadFullFile
+                        );
+                        return;
+                    }
+                    const message = (error as Error).message.trim();
+                    stripWrap.textContent = `Filter unavailable: ${message.split('\n').pop()!}`;
+                }
+            );
+        }
+
+        // The bucket the probed block falls into, so the strip can mark it.
+        const bucketOf = (blockIndex: number): number => {
+            const n = density?.buckets.length ?? 0;
+            if (!density || n === 0) {
+                return 0;
+            }
+            return Math.min(n - 1, Math.floor(blockIndex / (density.numBlocks / n)));
+        };
+
         const run = (): void => {
             // Binary columns take base64 of the raw bytes; validate it decodes,
             // then send the trimmed base64 (the worker decodes it back to bytes).
@@ -1571,7 +1688,14 @@ export class InfoPanelManager {
                           'negatives, so a reader can safely skip this row group.';
                     result.innerHTML =
                         `<div class="bloom-verdict bloom-verdict-${res.mightContain ? 'maybe' : 'no'}">` +
-                        `${verdict}</div>${renderBloomBlock(res)}`;
+                        `${verdict}</div>${renderBloomBlock(res)}` +
+                        `<button type="button" class="btn btn-sm bloom-probe-clear">Clear</button>`;
+                    // Mark where this value landed in the whole-filter strip.
+                    drawStrip(bucketOf(res.blockIndex));
+                    result.querySelector('.bloom-probe-clear')!.addEventListener('click', () => {
+                        result.innerHTML = '';
+                        drawStrip(); // back to the base strip, no highlight
+                    });
                 },
                 (error: unknown) => {
                     if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {

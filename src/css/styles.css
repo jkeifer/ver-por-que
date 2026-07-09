@@ -1375,6 +1375,40 @@ code {
     stroke-width: 1.5;
 }
 
+/* Whole-filter density strip (base graphic + probe highlight) */
+.bloom-strip-wrap {
+    margin-bottom: var(--spacing-sm);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.bloom-strip {
+    display: block;
+    width: 100%;
+    height: 24px;
+    border: 1px solid var(--border-medium);
+    border-radius: var(--border-radius);
+}
+
+.bloom-strip .bloom-strip-track {
+    fill: var(--border-light);
+}
+
+.bloom-strip .bloom-strip-hit {
+    stroke: #e67e22;
+    stroke-width: 1.5;
+}
+
+.bloom-strip-readout {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-sm);
+    margin-top: var(--spacing-xs);
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+}
+
 /* Value preview (Value Preview section) */
 .value-preview-codec-note,
 .value-preview-btn {

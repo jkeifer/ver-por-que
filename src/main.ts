@@ -3,6 +3,7 @@
  */
 import {
     InfoPanelManager,
+    type BloomDensity,
     type BloomProbe,
     type DictionaryPreview,
     type ValuePreview,
@@ -53,6 +54,9 @@ class ParquetExplorer {
     // loads have one (the worker keeps the parsed file alive); JSON dumps and
     // restores degrade with a note.
     private bloomProbe: BloomProbe | null = null;
+    // Whole-filter density reader against the worker's current file; same
+    // lifecycle as the bloom probe.
+    private bloomDensity: BloomDensity | null = null;
     // Value decoder against the worker's current file; same lifecycle as the
     // bloom probe.
     private valuePreview: ValuePreview | null = null;
@@ -285,6 +289,7 @@ class ParquetExplorer {
                     dump,
                     url,
                     this.workerBloomProbe(),
+                    this.workerBloomDensity(),
                     this.workerValuePreview(),
                     this.workerDictionaryPreview()
                 );
@@ -316,6 +321,7 @@ class ParquetExplorer {
                 dump,
                 source,
                 this.workerBloomProbe(),
+                this.workerBloomDensity(),
                 this.workerValuePreview(),
                 this.workerDictionaryPreview()
             );
@@ -361,6 +367,11 @@ class ParquetExplorer {
         return (rowGroup, column, value) => this.workerClient!.probeBloom(rowGroup, column, value);
     }
 
+    /** Whole-filter density reader routed at the same worker current-file slot. */
+    private workerBloomDensity(): BloomDensity {
+        return (rowGroup, column) => this.workerClient!.bloomDensity(rowGroup, column);
+    }
+
     /** Value decoder routed at the same worker current-file slot. */
     private workerValuePreview(): ValuePreview {
         return (rowGroup, column, pageIndex, offset, limit, skipNulls) =>
@@ -391,6 +402,7 @@ class ParquetExplorer {
         jsonText: string,
         source: string,
         bloomProbe: BloomProbe | null = null,
+        bloomDensity: BloomDensity | null = null,
         valuePreview: ValuePreview | null = null,
         dictionaryPreview: DictionaryPreview | null = null
     ): Promise<void> {
@@ -428,6 +440,7 @@ class ParquetExplorer {
 
         this.parquetData = data;
         this.bloomProbe = bloomProbe;
+        this.bloomDensity = bloomDensity;
         this.valuePreview = valuePreview;
         this.dictionaryPreview = dictionaryPreview;
         this.hydrateFromSource();
@@ -464,6 +477,10 @@ class ParquetExplorer {
             this.bloomProbe = (rowGroup, column, value) =>
                 this.ensureWorkerBooted(url).then(() =>
                     this.workerClient!.probeBloom(rowGroup, column, value)
+                );
+            this.bloomDensity = (rowGroup, column) =>
+                this.ensureWorkerBooted(url).then(() =>
+                    this.workerClient!.bloomDensity(rowGroup, column)
                 );
             this.valuePreview = (rowGroup, column, pageIndex, offset, limit, skipNulls) =>
                 this.ensureWorkerBooted(url).then(() =>
@@ -538,6 +555,7 @@ class ParquetExplorer {
             this.infoPanelManager = new InfoPanelManager(
                 infoPanelContainer,
                 this.bloomProbe,
+                this.bloomDensity,
                 this.valuePreview,
                 this.dictionaryPreview,
                 {
@@ -677,6 +695,7 @@ class ParquetExplorer {
         this.parquetData = null;
         this.tree = null;
         this.bloomProbe = null;
+        this.bloomDensity = null;
         this.valuePreview = null;
         this.dictionaryPreview = null;
         this.workerBooted = null;
