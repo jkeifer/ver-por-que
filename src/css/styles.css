@@ -1323,20 +1323,26 @@ code {
     color: var(--text-primary);
 }
 
-.bloom-probe-result {
+/* One-line message channel below the strip: input/probe/block-fetch errors and
+ * recovery buttons. Empty (and collapsed) in the normal case. */
+.bloom-probe-note:not(:empty) {
+    margin-top: var(--spacing-xs);
     font-size: 0.85rem;
     color: var(--text-secondary);
 }
 
-.bloom-probe-result strong {
-    color: var(--text-primary);
-}
-
-/* Reserved slot for the verdict line below the row: always present (empty when
- * not probed) so probing/clearing never changes the card height. Sized to the
- * verdict's typical two-line wrap at 0.85rem so the reveal doesn't push layout. */
+/* Reserved slot for the verdict line (now above the strip): always present
+ * (empty when not probed) so probing/clearing never changes the card height.
+ * Sized to the verdict's typical two-line wrap at 0.85rem so the reveal doesn't
+ * push layout. */
 .bloom-verdict-slot {
     min-height: 2.4rem;
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+}
+
+.bloom-verdict-slot strong {
+    color: var(--text-primary);
 }
 
 .bloom-verdict {
@@ -1414,7 +1420,7 @@ code {
     fill: var(--accent-color);
 }
 
-/* The strip is a minimap: clicking a cell jumps the viewport box to it. */
+/* The strip is a locator: clicking a cell scrolls the block strip to it. */
 .bloom-strip-cell {
     cursor: pointer;
 }
@@ -1429,45 +1435,33 @@ code {
     outline-offset: -2px;
 }
 
-/* Viewport minimap thumb: one box over the strip marking the window shown in the
- * row of grids below. Reads like a scrollbar thumb / segment inset outline — a
- * neutral-dark outline over a faint tint. Non-interactive (clicks fall through
- * to the density cells beneath). */
-.bloom-strip-viewport {
-    fill: var(--outline-on-light);
-    fill-opacity: 0.08;
-    stroke: var(--outline-on-light);
-    stroke-width: 2;
-    stroke-opacity: 0.7;
-    pointer-events: none;
-}
-
-/* The viewport: a single non-wrapping row of full-res block grids below the
- * strip, framed as one inset panel so it reads as a viewport hanging off the
- * strip map. Blocks grow to fill (see render's grow-to-fill), so the row nearly
- * fills the panel and any small remainder centers. */
-.bloom-block-wrap {
+/* The block strip: every 256-bit block laid end to end as a full-res grid, in
+ * one inset panel with a native horizontal scrollbar (the whole filter you
+ * scroll through). */
+.bloom-scroll {
     margin-bottom: var(--spacing-sm);
     padding: var(--spacing-sm);
     background: var(--bg-tertiary);
     border-radius: var(--border-radius);
+    overflow-x: auto;
 }
 
-/* Reserved slot for the value→hash→block lineage: always present (empty when
- * not probed) so probing/clearing never changes the card height. Sized to the
- * lineage's one-line height (.bloom-lineage font 0.72rem). */
+/* Reserved slot for the value→hash→block lineage (now above the strip): always
+ * present (empty when not probed) so probing/clearing never changes the card
+ * height. Sized to the lineage's one-line height (.bloom-lineage font 0.72rem). */
 .bloom-lineage-slot {
     min-height: 1.1rem;
     margin-bottom: var(--spacing-xs);
 }
 
+/* One non-wrapping row of every block grid, left-aligned at its intrinsic width
+ * so the parent's scrollbar spans the whole filter. */
 .bloom-block-row {
     display: flex;
     flex-wrap: nowrap;
     align-items: flex-start;
-    justify-content: center;
     gap: 12px;
-    overflow: hidden;
+    width: max-content;
 }
 
 /* Each grid keeps its intrinsic (grow-to-fill) size — flex never stretches or
