@@ -221,17 +221,16 @@ function renderBloomBlock(bytes: Uint8Array, cell: number, probed?: BloomProbeBi
 /**
  * One block in the responsive window: a small "block N" index label over its
  * 8×32 bit-grid, rendered at `cell` px per bit (grow-to-fill; see render()).
- * `selected` marks the grid (the map's selection cursor); `probed` (given only
- * for the probed block in view) marks the eight checked bits hit/miss AND flags
- * the label as the probed block, so the lineage's "block X" has a visible
- * referent in the row. Missing bytes render a placeholder cell of the same
- * footprint, so the row keeps its layout while a fetch is in flight.
+ * `probed` (given only for the probed block in view) marks the eight checked
+ * bits hit/miss AND flags the label as the probed block, so the lineage's
+ * "block X" has a visible referent in the row. Missing bytes render a
+ * placeholder cell of the same footprint, so the row keeps its layout while a
+ * fetch is in flight.
  */
 function renderBlockCell(
     index: number,
     bytes: Uint8Array | null,
     cell: number,
-    selected: boolean,
     probed?: BloomProbeBit[]
 ): string {
     const isProbed = probed !== undefined;
@@ -243,7 +242,7 @@ function renderBlockCell(
         bytes && bytes.length >= 32
             ? renderBloomBlock(bytes, cell, probed)
             : `<div class="bloom-block-placeholder" style="width:${side}px;height:${8 * (cell + 1) - 1}px"></div>`;
-    return `<div class="bloom-block-cell${selected ? ' selected' : ''}">${label}${grid}</div>`;
+    return `<div class="bloom-block-cell">${label}${grid}</div>`;
 }
 
 /** The value → hash → block lineage line shown above the probed block's grid. */
@@ -279,15 +278,14 @@ function cellBlock(density: BloomDensityResult, cell: number): number {
 /**
  * The whole filter as a horizontal density heatmap: one clickable rect per
  * bucket, filled by its set-bit fraction over a light track (empty reads empty).
- * Each cell carries `data-block` (see cellBlock); the cells whose block is the
- * `selected` / `probed` block get an inset outline (via CSS classes). Every cell
- * whose block falls in the currently-viewed window `[windowStart, windowEnd)`
- * gets a `in-window` class, so the strip shows where the viewport sits on the
- * map. A one-line readout pairs the overall fill %, block count, and est FPR.
+ * Each cell carries `data-block` (see cellBlock); the probed block's cell gets
+ * an inset outline (via CSS class). A single viewport-box `<rect>` overlays the
+ * current window `[windowStart, windowEnd)` — a minimap thumb showing where the
+ * row of grids below sits (it spans the whole strip when the filter fits). A
+ * one-line readout pairs the overall fill %, block count, and est FPR.
  */
 function renderBloomStrip(
     density: BloomDensityResult,
-    selectedBlock: number,
     windowStart: number,
     windowEnd: number,
     probedBlock?: number
@@ -303,10 +301,7 @@ function renderBloomStrip(
     const rects = buckets
         .map((b, i) => {
             const block = cellBlock(density, i);
-            const marks =
-                (block >= windowStart && block < windowEnd ? ' in-window' : '') +
-                (block === selectedBlock ? ' selected' : '') +
-                (probedBlock !== undefined && block === probedBlock ? ' probed' : '');
+            const marks = probedBlock !== undefined && block === probedBlock ? ' probed' : '';
             // Density carries as fill-opacity on the accent-filled cell (CSS
             // var() doesn't resolve in an SVG presentation attribute, so the
             // color lives in the class and only the opacity is inline); clamp so
@@ -319,6 +314,17 @@ function renderBloomStrip(
             );
         })
         .join('');
+    // Viewport minimap thumb: one box outlining the window over the full-width
+    // strip. Blocks map to x by the strip's own width (width / numBlocks), so
+    // the box lines up with the density cells regardless of bucketing. Drawn
+    // last so its outline sits over the cells; the probed cell still reads
+    // through the faint fill tint.
+    const stripCellW = width / numBlocks;
+    const boxX = windowStart * stripCellW;
+    const boxW = (windowEnd - windowStart) * stripCellW;
+    const viewport =
+        `<rect class="bloom-strip-viewport" x="${boxX.toFixed(2)}" y="0" ` +
+        `width="${boxW.toFixed(2)}" height="${height}" rx="2"/>`;
     const readout =
         `<div class="bloom-strip-readout">` +
         `<span>${(fill * 100).toFixed(1)}% full;</span>` +
@@ -328,7 +334,7 @@ function renderBloomStrip(
     return (
         `<svg class="bloom-strip" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" ` +
         `preserveAspectRatio="none" role="img" aria-label="bloom-filter density">` +
-        `<rect class="bloom-strip-track" x="0" y="0" width="${width}" height="${height}"/>${rects}</svg>` +
+        `<rect class="bloom-strip-track" x="0" y="0" width="${width}" height="${height}"/>${rects}${viewport}</svg>` +
         readout
     );
 }
@@ -1763,13 +1769,12 @@ export class InfoPanelManager {
 
         // Closure state: the fetched density (kept so the strip re-draws without
         // re-reading the filter), the first block of the viewport window, the
-        // selected block (outlined), the last probe (null until probed), a cache
-        // of fetched block bytes keyed by block index (avoid refetching), and a
-        // monotonic token so a slow range fetch that resolves after the window
-        // moved again is ignored (only the latest wins).
+        // last probe (null until probed), a cache of fetched block bytes keyed by
+        // block index (avoid refetching), and a monotonic token so a slow range
+        // fetch that resolves after the window moved again is ignored (only the
+        // latest wins).
         let density: BloomDensityResult | null = null;
         let windowStart = 0;
-        let selectedBlock = 0;
         let probe: BloomProbeResult | null = null;
         const blockCache = new Map<number, Uint8Array>();
         let renderToken = 0;
@@ -1819,7 +1824,6 @@ export class InfoPanelManager {
                         block,
                         bytesFor(block),
                         cell,
-                        block === selectedBlock,
                         isProbed ? probe!.bits : undefined
                     )
                 );
@@ -1857,15 +1861,9 @@ export class InfoPanelManager {
             const avail = blockWrap.clientWidth;
             const blockW = avail > 0 ? (avail - (n - 1) * GAP) / n : BLOCK_W;
             const cell = Math.max(CELL, Math.min(MAX_CELL, Math.floor((blockW + 1) / 33)));
-            // Strip: bracket the window, mark the selected cell, and (while probed)
-            // the probed cell.
-            stripWrap.innerHTML = renderBloomStrip(
-                density,
-                selectedBlock,
-                windowStart,
-                end,
-                probe?.blockIndex
-            );
+            // Strip: box the current window as a minimap viewport, and (while
+            // probed) mark the probed cell.
+            stripWrap.innerHTML = renderBloomStrip(density, windowStart, end, probe?.blockIndex);
             // Which visible blocks still need bytes: the probed block reads from
             // the probe result, so it's never a miss.
             let missing = false;
@@ -1958,17 +1956,19 @@ export class InfoPanelManager {
         });
         this.bloomResizeObserver.observe(blockWrap);
 
-        // Delegated strip-cell selection: click a cell to move the viewport to
-        // (and select) its block. Works at any filter size — the window's bytes
-        // are fetched on demand by render. Buckets map to a representative block
-        // via cellBlock; multi-level bucket drill-down is deferred (out of scope).
+        // Delegated strip-cell click: jump the viewport minimap to the clicked
+        // block (no selection). Works at any filter size — the window's bytes are
+        // fetched on demand by render. When the whole filter fits, moveWindowTo
+        // clamps back to 0, so a click is a no-op. Buckets map to a representative
+        // block via cellBlock; multi-level bucket drill-down is deferred.
+        // ponytail: click-to-jump is the nav; box-drag skipped (SVG-fiddly, adds
+        // little over click-to-jump on this minimap).
         stripWrap.addEventListener('click', e => {
             const cell = (e.target as HTMLElement).closest('.bloom-strip-cell');
             if (!(cell instanceof SVGElement) || !density) {
                 return;
             }
-            selectedBlock = Number(cell.getAttribute('data-block'));
-            moveWindowTo(selectedBlock, computeN());
+            moveWindowTo(Number(cell.getAttribute('data-block')), computeN());
             render();
         });
 
@@ -1996,7 +1996,6 @@ export class InfoPanelManager {
             this.bloomProbe!(node.rowGroup, node.path, value).then(
                 res => {
                     probe = res;
-                    selectedBlock = res.blockIndex;
                     // Move the viewport so the probed block is in the window.
                     moveWindowTo(res.blockIndex, computeN());
                     clearBtn.disabled = false;
@@ -2025,7 +2024,7 @@ export class InfoPanelManager {
         };
         probeBtn.addEventListener('click', run);
         clearBtn.addEventListener('click', () => {
-            // Drop the probe overlay but keep the current window + selection. The
+            // Drop the probe overlay but keep the current window. The
             // probed block's bytes came from the probe result, so it may need a
             // fresh fetch now that the overlay is gone; render handles that. Bump
             // the token so any in-flight fetch from before is discarded.

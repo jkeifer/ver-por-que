@@ -490,38 +490,46 @@ test(
 
         // Base state: the whole-filter density strip AND the responsive window of
         // block grids are visible BEFORE any probe, Clear is disabled, and the
-        // window brackets some strip cells. The window shows MORE THAN ONE grid at
-        // the default card width (this fixture has 8 blocks, all fitting).
+        // strip carries ONE viewport-box minimap thumb (no per-block selection).
+        // The window shows MORE THAN ONE grid but not the whole filter at the
+        // default card width, so the box is a partial window that can scroll.
         await expect(panel.locator('svg.bloom-strip')).toBeVisible();
         await expect(panel.locator('.bloom-block-wrap svg.bloom-block').first()).toBeVisible();
         await expect(panel).toContainText('% full');
-        await expect(panel.locator('.bloom-strip-cell.selected')).toHaveCount(1);
+        await expect(panel.locator('.bloom-strip-viewport')).toHaveCount(1);
         expect(await panel.locator('.bloom-block-wrap svg.bloom-block').count()).toBeGreaterThan(1);
-        expect(await panel.locator('.bloom-strip-cell.in-window').count()).toBeGreaterThan(0);
         await expect(page.locator('.bloom-probe-clear')).toBeDisabled();
 
+        // The viewport box is a real window on the strip: it starts at x=0 and is
+        // narrower than the full strip (not every block fits at this width).
+        const strip = panel.locator('svg.bloom-strip');
+        const box = panel.locator('.bloom-strip-viewport');
+        const stripW = Number(await strip.getAttribute('width'));
+        expect(Number(await box.getAttribute('x'))).toBe(0);
+        expect(Number(await box.getAttribute('width'))).toBeLessThan(stripW);
+
+        // Click a strip cell to the RIGHT of the current window: the minimap box
+        // jumps toward it (x moves off 0) — the strip is now the nav, no selection.
+        const lastCell = panel.locator('.bloom-strip-cell').last();
+        await lastCell.click();
+        await expect.poll(async () => Number(await box.getAttribute('x'))).toBeGreaterThan(0);
+        await expect(panel.locator('.bloom-block-wrap svg.bloom-block').first()).toBeVisible();
+
         // Probe a value: verdict + hit/miss marks on the probed block's grid,
-        // the probed strip cell marked, and Clear enabled.
+        // the probed strip cell marked, its row label flagged, and Clear enabled.
         const result = page.locator('.bloom-probe-result');
         await page.locator('.bloom-probe-value').fill('20.5');
         await page.locator('.bloom-probe-btn').click();
         await expect(result).toContainText('present');
         await expect(panel.locator('.bloom-lineage')).toContainText('bits set');
         await expect(panel.locator('.bloom-strip-cell.probed')).toHaveCount(1);
+        await expect(panel.locator('.bloom-block-label.probed')).toContainText('probed');
         await expect(page.locator('.bloom-probe-clear')).toBeEnabled();
         const marked = await panel.locator('.bloom-bit-hit, .bloom-bit-miss').count();
         expect(marked).toBe(8);
 
-        // Click a NON-probed, non-selected strip cell: the viewport moves to (and
-        // selects) that block. The selected grid cell shifts to the clicked
-        // block, and the window's blocks are fetched on demand (bloomBlocks).
-        const nonSelected = panel.locator('.bloom-strip-cell:not(.selected):not(.probed)').first();
-        const target = await nonSelected.getAttribute('data-block');
-        await nonSelected.click();
-        await expect(panel.locator('.bloom-block-cell.selected .bloom-block-label')).toContainText(
-            `block ${target}`
-        );
-        await expect(panel.locator('.bloom-block-wrap svg.bloom-block').first()).toBeVisible();
+        // No per-block "selected" concept remains: only the probed block is marked.
+        await expect(panel.locator('.bloom-block-cell.selected')).toHaveCount(0);
 
         // Clear: the probe overlay (marks + verdict) is gone and Clear disabled.
         await page.locator('.bloom-probe-clear').click();
