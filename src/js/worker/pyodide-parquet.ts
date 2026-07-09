@@ -68,6 +68,29 @@ export type PreviewResult =
     | { values: PreviewEntry[]; total: number; nulls: number; next: number; error?: undefined }
     | { error: 'codec_unavailable'; codec: string };
 
+/** One of the eight bits a probe checks: which word (0-7), which bit within it
+ *  (0-31), and whether the filter has it set. All eight set ⟹ "might contain". */
+export interface BloomProbeBit {
+    word: number;
+    bit: number;
+    set: boolean;
+}
+
+/**
+ * A bloom-filter probe with its full split-block derivation: the value's 64-bit
+ * hash (hex), the single 256-bit block it selects (of `numBlocks`), that block's
+ * 32 bytes (base64), and the eight bits checked. `mightContain` is true iff
+ * every bit is set; a single unset bit is exact proof of absence.
+ */
+export interface BloomProbeResult {
+    mightContain: boolean;
+    hash: string;
+    blockIndex: number;
+    numBlocks: number;
+    block: string;
+    bits: BloomProbeBit[];
+}
+
 /** One dictionary entry: a distinct value and its position in the dictionary. */
 export interface DictionaryEntry {
     value: PreviewValue;
@@ -93,7 +116,7 @@ export interface ParquetParser {
      * is coerced python-side per the column's physical type. Rejects when no
      * file is loaded, the chunk has no bloom filter, or the type can't probe.
      */
-    probeBloom(rowGroup: number, column: string, value: string): Promise<boolean>;
+    probeBloom(rowGroup: number, column: string, value: string): Promise<BloomProbeResult>;
     /**
      * Decodes a window of data page `pageIndex` in column chunk (`rowGroup`,
      * `column`) of the most recently parsed file, starting at value index
@@ -223,13 +246,42 @@ def _coerce_probe_value(value, physical_type):
             return value
 
 async def _probe_bloom(row_group, column, value):
+    # Return the full split-block derivation, not just the yes/no: the value's
+    # hash, the single block it selects, that block's 32 bytes, and the eight
+    # bits checked. mightContain is true iff all eight are set; any unset bit is
+    # exact proof of absence. Mirrors BloomFilter._block_check step for step.
+    from por_que.util.xxhash import xxh64
+    from por_que.statistics import SBBF_SALT
     if _current is None:
         raise RuntimeError('no parquet file is loaded in this worker')
     pf, reader = _current
     chunk = pf.metadata.row_groups[row_group].column_chunks[column]
     # The bytes path keeps a plain (sync) BytesIO in the slot; adapt it.
     bloom = await BloomFilter.from_reader(ensure_async_reader(reader), chunk)
-    return bool(bloom.might_contain(_coerce_probe_value(value, chunk.type)))
+    # _plain_encode raises for unqueryable physical types (INT96/BOOLEAN), same
+    # as might_contain would -- surfaces as a probe failure, not a bad result.
+    hash_ = xxh64(bloom._plain_encode(_coerce_probe_value(value, chunk.type)))
+    num_blocks = bloom.num_blocks
+    block_index = ((hash_ >> 32) * num_blocks) >> 32
+    base = block_index * 32  # 256-bit block = 8 words * 4 bytes
+    block = bytes(bloom.bitset[base:base + 32])
+    low = hash_ & 0xffffffff
+    bits = []
+    might = True
+    for i in range(8):
+        word = int.from_bytes(block[i * 4:i * 4 + 4], 'little')
+        bit = ((low * SBBF_SALT[i]) & 0xffffffff) >> 27  # 0..31
+        is_set = bool((word >> bit) & 1)
+        might = might and is_set
+        bits.append({'word': i, 'bit': bit, 'set': is_set})
+    return json.dumps({
+        'mightContain': might,
+        'hash': format(hash_, '016x'),
+        'blockIndex': block_index,
+        'numBlocks': num_blocks,
+        'block': base64.b64encode(block).decode('ascii'),
+        'bits': bits,
+    })
 
 _MAX_SAFE_INTEGER = 2**53 - 1  # Number.MAX_SAFE_INTEGER
 
@@ -416,7 +468,7 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         rowGroup: number,
         column: string,
         value: string
-    ) => Promise<boolean>;
+    ) => Promise<string>;
     const preview = pyodide.globals.get('_preview') as (
         rowGroup: number,
         column: string,
@@ -519,8 +571,8 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
     };
 
     return Object.assign(parse, {
-        probeBloom: (rowGroup: number, column: string, value: string) =>
-            probeBloom(rowGroup, column, value),
+        probeBloom: async (rowGroup: number, column: string, value: string) =>
+            JSON.parse(await probeBloom(rowGroup, column, value)) as BloomProbeResult,
         // Values cross the boundary as a JSON string: strings/numbers survive
         // pyodide proxying, but this keeps the conversion rules in one place
         // (python's _json_safe) and the payload copy-free.

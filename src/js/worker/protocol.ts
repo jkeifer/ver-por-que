@@ -1,5 +1,5 @@
 /** Message shapes exchanged between main thread and the parquet worker. */
-import type { DictionaryPreviewResult, PreviewResult } from './pyodide-parquet';
+import type { BloomProbeResult, DictionaryPreviewResult, PreviewResult } from './pyodide-parquet';
 
 interface ParseRequestBase {
     id: number;
@@ -132,7 +132,7 @@ export interface ParseSuccess {
     id: number;
     ok: true;
     dump: string;
-    mightContain?: undefined;
+    bloomProbe?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
     booted?: undefined;
@@ -141,8 +141,9 @@ export interface ParseSuccess {
 export interface ProbeBloomSuccess {
     id: number;
     ok: true;
-    /** False is exact (definitely absent); true is only ever a maybe. */
-    mightContain: boolean;
+    /** The probe's full split-block derivation; `.mightContain` is the verdict
+     *  (false is exact absence, true is only ever a maybe). */
+    bloomProbe: BloomProbeResult;
     dump?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
@@ -154,7 +155,7 @@ export interface PreviewSuccess {
     ok: true;
     preview: PreviewResult;
     dump?: undefined;
-    mightContain?: undefined;
+    bloomProbe?: undefined;
     dictionaryPreview?: undefined;
     booted?: undefined;
 }
@@ -164,7 +165,7 @@ export interface DictionaryPreviewSuccess {
     ok: true;
     dictionaryPreview: DictionaryPreviewResult;
     dump?: undefined;
-    mightContain?: undefined;
+    bloomProbe?: undefined;
     preview?: undefined;
     booted?: undefined;
 }
@@ -175,7 +176,7 @@ export interface BootSuccess {
     ok: true;
     booted: true;
     dump?: undefined;
-    mightContain?: undefined;
+    bloomProbe?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
 }

@@ -86,8 +86,8 @@ ctx.addEventListener('message', event => {
             const parser = await getParser(req.manifestUrl);
             if (req.probe) {
                 const { rowGroup, column, value } = req.probe;
-                const mightContain = await parser.probeBloom(rowGroup, column, value);
-                ctx.postMessage({ id: req.id, ok: true, mightContain });
+                const bloomProbe = await parser.probeBloom(rowGroup, column, value);
+                ctx.postMessage({ id: req.id, ok: true, bloomProbe });
                 return;
             }
             if (req.preview) {

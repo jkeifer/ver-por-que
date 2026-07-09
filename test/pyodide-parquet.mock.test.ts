@@ -12,7 +12,13 @@ function fakePyodide() {
     });
     const dump = vi.fn().mockResolvedValue('{"dumped":true}');
     const dumpUrl = vi.fn().mockResolvedValue('{"dumped":"url"}');
-    const probeBloom = vi.fn().mockResolvedValue(false);
+    // The python side returns the probe derivation as a JSON string.
+    const probeBloom = vi
+        .fn()
+        .mockResolvedValue(
+            '{"mightContain":false,"hash":"0000000000000000","blockIndex":0,"numBlocks":1,' +
+                '"block":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","bits":[]}'
+        );
     // The python side returns preview results as a JSON string.
     const preview = vi
         .fn()
@@ -131,12 +137,18 @@ describe('createParquetParser (mocked pyodide)', () => {
 
     it('routes bloom probes to the python probe with string values', async () => {
         const py = fakePyodide();
-        py._probeBloom.mockResolvedValueOnce(true);
+        py._probeBloom.mockResolvedValueOnce(
+            '{"mightContain":true,"hash":"00000000deadbeef","blockIndex":3,"numBlocks":8,' +
+                '"block":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=","bits":[]}'
+        );
         const parse = await boot(py);
 
         // The value stays a string across the boundary (BigInt-safe for INT64);
-        // the python side coerces it per the column's physical type.
-        await expect(parse.probeBloom(2, 'id', '9007199254740993')).resolves.toBe(true);
+        // the python side coerces it per the column's physical type. The JSON
+        // string becomes a typed BloomProbeResult.
+        const res = await parse.probeBloom(2, 'id', '9007199254740993');
+        expect(res.mightContain).toBe(true);
+        expect(res.blockIndex).toBe(3);
         expect(py._probeBloom).toHaveBeenCalledWith(2, 'id', '9007199254740993');
     });
 
