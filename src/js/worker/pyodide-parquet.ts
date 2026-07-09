@@ -100,12 +100,16 @@ export interface BloomProbeResult {
  * blocks, the overall `fill` (fraction of all bits set, in [0,1]), and `buckets`
  * — per-block fill when there are ≤512 blocks, else the blocks partitioned into
  * 512 contiguous buckets (each a fraction in [0,1]). Empty (numBlocks 0) filters
- * come back with fill 0 and no buckets.
+ * come back with fill 0 and no buckets. `bitset` is the whole filter's bytes
+ * (base64, `numBlocks * 32` bytes) but only for small filters (≤512 blocks,
+ * ≤16KB), so the UI can render any block's bit-grid without re-reading; absent
+ * for larger filters.
  */
 export interface BloomDensityResult {
     numBlocks: number;
     fill: number;
     buckets: number[];
+    bitset?: string;
 }
 
 /** One dictionary entry: a distinct value and its position in the dictionary. */
@@ -346,8 +350,15 @@ async def _bloom_density(row_group, column):
         for i in range(num_blocks)
     ]
     total_set = sum(block_bits)
+    result = {
+        'numBlocks': num_blocks,
+        'fill': total_set / (num_blocks * 256),
+    }
     if num_blocks <= 512:
-        buckets = [b / 256 for b in block_bits]
+        result['buckets'] = [b / 256 for b in block_bits]
+        # Ship the whole filter (<=16KB) so the UI can render any block's bit
+        # grid without re-reading; omitted for bigger filters (too heavy).
+        result['bitset'] = base64.b64encode(bytes(bitset)).decode('ascii')
     else:
         num_buckets = 512
         buckets = []
@@ -356,11 +367,8 @@ async def _bloom_density(row_group, column):
             end = ((k + 1) * num_blocks) // num_buckets
             span = end - start
             buckets.append(sum(block_bits[start:end]) / (span * 256) if span else 0.0)
-    return json.dumps({
-        'numBlocks': num_blocks,
-        'fill': total_set / (num_blocks * 256),
-        'buckets': buckets,
-    })
+        result['buckets'] = buckets
+    return json.dumps(result)
 
 _MAX_SAFE_INTEGER = 2**53 - 1  # Number.MAX_SAFE_INTEGER
 

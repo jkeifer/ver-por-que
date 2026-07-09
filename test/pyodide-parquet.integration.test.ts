@@ -216,6 +216,10 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         expect(density.fill).toBeLessThan(1);
         expect(density.buckets.length).toBeGreaterThan(0);
         expect(density.buckets.every(b => b >= 0 && b <= 1)).toBe(true);
+        // Small filter (8 blocks): the whole bitset ships as base64, decoding
+        // to exactly numBlocks * 32 bytes, so the UI can render any block.
+        expect(typeof density.bitset).toBe('string');
+        expect(Buffer.from(density.bitset!, 'base64').length).toBe(density.numBlocks * 32);
     });
 
     it('previews a data page of decoded values from the current-file slot', async () => {
