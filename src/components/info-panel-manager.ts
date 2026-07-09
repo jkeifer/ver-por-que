@@ -1703,9 +1703,10 @@ export class InfoPanelManager {
 
     /**
      * Interactive bloom-filter section (full-width). Probe text (value → hash →
-     * block lineage and the verdict) sits at the top, above a density-heatmap
-     * strip, above a horizontally-scrollable strip of every 256-bit block as a
-     * full-res bit-grid. The block strip is VIRTUALIZED — only the visible window
+     * block lineage and the verdict) sits at the top, above a horizontally-
+     * scrollable strip of every 256-bit block as a full-res bit-grid, with the
+     * density-heatmap strip below it acting as the block strip's scrollbar. The
+     * block strip is VIRTUALIZED — only the visible window
      * (plus a small buffer) is mounted, absolutely positioned in a full-width
      * track — so a filter of any size stays cheap; each visible block lazily
      * fetches its bytes (batched range reads) and a filled slot is final. Its
@@ -1740,8 +1741,10 @@ export class InfoPanelManager {
             // (empty when not probed) so probing/clearing never shifts layout.
             `<div class="bloom-lineage-slot"></div>` +
             `<div class="bloom-verdict-slot"></div>` +
-            `<div class="bloom-strip-wrap"></div>` +
             `<div class="bloom-scroll"><div class="bloom-block-track"></div></div>` +
+            // The density strip sits BELOW the block strip, reading as its
+            // scrollbar (the viewport box is the thumb); the readout rides with it.
+            `<div class="bloom-strip-wrap"></div>` +
             `<div class="bloom-probe-note"></div>`;
         const input = section.querySelector<HTMLInputElement>('.bloom-probe-value')!;
         const probeBtn = section.querySelector<HTMLButtonElement>('.bloom-probe-btn')!;
