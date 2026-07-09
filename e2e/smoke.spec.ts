@@ -417,15 +417,21 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
     await expect(page.locator('#info-panel-container')).toContainText('Bloom Filter');
 
     // 'Hello' is in the column (footer stats min); the filter can only say maybe.
+    // A "maybe" renders the block with all eight checked bits set (no misses).
     const result = page.locator('.bloom-probe-result');
     await page.locator('.bloom-probe-value').fill('Hello');
     await page.locator('.bloom-probe-btn').click();
     await expect(result).toContainText('maybe present');
+    await expect(result.locator('svg.bloom-block')).toBeVisible();
+    await expect(result.locator('.bloom-lineage')).toContainText('8/8 bits set');
+    await expect(result.locator('.bloom-bit-miss')).toHaveCount(0);
 
-    // Garbage gets the exact answer: definitely absent.
+    // Garbage gets the exact answer: definitely absent — at least one miss bit,
+    // which is the visual proof the reader can skip the row group.
     await page.locator('.bloom-probe-value').fill('zzzzzz-not-here');
     await page.locator('.bloom-probe-btn').click();
     await expect(result).toContainText('definitely not present');
+    expect(await result.locator('.bloom-bit-miss').count()).toBeGreaterThan(0);
 
     // Value preview: decode the String column's data page in-browser and show
     // real values (the preview lives on the page, not the chunk).

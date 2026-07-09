@@ -25,6 +25,7 @@ import {
 import { base64Bytes, formatStatValue, parsePredicateValue } from '../business/stat-values';
 import { describeWkb, wkbToGeoJson } from '../business/wkb';
 import type {
+    BloomProbeResult,
     DictionaryEntry,
     DictionaryPreviewResult,
     PreviewEntry,
@@ -90,7 +91,11 @@ export interface RecoveryActions {
  * Tests a value against a column chunk's bloom filter. Only raw-parquet loads
  * have one (the worker holds the file); the value crosses as a string.
  */
-export type BloomProbe = (rowGroup: number, column: string, value: string) => Promise<boolean>;
+export type BloomProbe = (
+    rowGroup: number,
+    column: string,
+    value: string
+) => Promise<BloomProbeResult>;
 
 /**
  * Decodes a window of a data page in the worker's current file, starting at
@@ -137,6 +142,58 @@ function renderPreviewFailure(codec: string): string {
     return (
         `<div class="value-preview-codec-note">This chunk is ${name}-compressed and ` +
         `${name.toLowerCase()} can't be decoded in-browser.</div>`
+    );
+}
+
+/**
+ * The probed 256-bit block as an 8×32 bit grid (rows = words, columns = bits).
+ * The eight bits the probe checks are marked hit (set) or miss (unset); every
+ * other cell shows the block's actual contents dimly for texture. All hits ⟹
+ * "might contain"; a single miss is exact proof of absence.
+ */
+function renderBloomBlock(res: BloomProbeResult): string {
+    const bytes = base64Bytes(res.block);
+    if (!bytes || bytes.length < 32) {
+        return '';
+    }
+    const probedBit = new Map(res.bits.map(b => [b.word, b.bit]));
+    const CELL = 11;
+    const STEP = CELL + 1;
+    const width = 32 * STEP - 1;
+    const height = 8 * STEP - 1;
+    let cells = '';
+    for (let word = 0; word < 8; word++) {
+        // Each word is a little-endian uint32; bit `col` is (word >> col) & 1.
+        const value =
+            (bytes[word * 4]! |
+                (bytes[word * 4 + 1]! << 8) |
+                (bytes[word * 4 + 2]! << 16) |
+                (bytes[word * 4 + 3]! << 24)) >>>
+            0;
+        for (let col = 0; col < 32; col++) {
+            const set = (value >>> col) & 1;
+            const cls =
+                probedBit.get(word) === col
+                    ? set
+                        ? 'bloom-bit-hit'
+                        : 'bloom-bit-miss'
+                    : set
+                      ? 'bloom-bit-on'
+                      : 'bloom-bit-off';
+            cells +=
+                `<rect class="${cls}" x="${col * STEP}" y="${word * STEP}" ` +
+                `width="${CELL}" height="${CELL}" rx="1"/>`;
+        }
+    }
+    const hits = res.bits.filter(b => b.set).length;
+    const lineage =
+        `<div class="bloom-lineage">hash <code>0x${res.hash}</code> → block ` +
+        `${formatNumber(res.blockIndex)} of ${formatNumber(res.numBlocks)} · ${hits}/8 bits set` +
+        `</div>`;
+    return (
+        lineage +
+        `<svg class="bloom-block" viewBox="0 0 ${width} ${height}" width="${width}" ` +
+        `height="${height}" role="img" aria-label="probed bloom-filter block">${cells}</svg>`
     );
 }
 
@@ -1453,13 +1510,17 @@ export class InfoPanelManager {
             }
             result.textContent = 'Probing...';
             this.bloomProbe!(node.rowGroup, node.path, String(parsed)).then(
-                might => {
-                    // Static strings only: nothing user-typed goes into innerHTML.
-                    result.innerHTML = might
+                res => {
+                    // Static strings + numeric/hex derivation only; nothing
+                    // user-typed goes into innerHTML.
+                    const verdict = res.mightContain
                         ? '<strong>maybe present</strong> — a bloom filter can only ever ' +
                           'answer “definitely not” or “maybe”; this could be a false positive.'
                         : '<strong>definitely not present</strong> — the filter has no false ' +
                           'negatives, so a reader can safely skip this row group.';
+                    result.innerHTML =
+                        `<div class="bloom-verdict bloom-verdict-${res.mightContain ? 'maybe' : 'no'}">` +
+                        `${verdict}</div>${renderBloomBlock(res)}`;
                 },
                 (error: unknown) => {
                     if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
