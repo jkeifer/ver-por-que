@@ -43,6 +43,33 @@ test('renders a full dump and drills into a row group', async ({ page }) => {
     await expect(panel).toContainText('Row Group');
 });
 
+test('index segments decode their per-page stats', async ({ page }) => {
+    await loadFixture(page, 'data_index_bloom_encoding_stats_expected.json');
+    const viz = page.locator('#canvas-container svg');
+    const panel = page.locator('#info-panel-container');
+
+    // Column index → the actual per-page min/max, decoded to the column's type
+    // (the raw stat bytes are base64 of 'Hello'/'today').
+    await viz.locator('rect.segment[data-segment-id="index_region"]').click();
+    await viz.locator('rect.segment[data-segment-id="index_column_index"]').click();
+    await viz.locator('rect.segment[data-segment-id="colidx_rg0_String"]').click();
+    await expect(panel).toContainText('Per-Page Statistics');
+    const colTable = panel.locator('.index-table');
+    await expect(colTable).toContainText('Hello');
+    await expect(colTable).toContainText('today');
+
+    // Offset index → the per-page seek map (first row + byte offset + size).
+    await viz.locator('rect.segment[data-segment-id="index_offset_index"]').click();
+    await viz.locator('rect.segment[data-segment-id="offidx_rg0_String"]').click();
+    await expect(panel).toContainText('Page Locations');
+    await expect(panel.locator('.index-table th')).toContainText([
+        'Page',
+        'First row',
+        'Offset',
+        'Size',
+    ]);
+});
+
 test('renders a metadata-only export with the source suffix', async ({ page }) => {
     await loadFixture(page, 'metadata-export.json');
     await expect(page.locator('#loaded-file-source')).toContainText('(metadata-only export)');

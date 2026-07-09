@@ -42,8 +42,10 @@ import type {
 } from '../js/worker/pyodide-parquet';
 import type {
     AnyDump,
+    ColumnIndex,
     ColumnMetadata,
     ColumnStatistics,
+    OffsetIndex,
     SchemaGroup,
     SchemaLeaf,
     SchemaRoot,
@@ -690,6 +692,60 @@ function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null, wkb = false
 }
 
 /**
+ * A column index's real payload: per-page min/max and null counts, decoded to
+ * the column's logical type — the stats a reader scans to skip whole pages that
+ * can't match a predicate. All-null pages have no meaningful min/max (dash); a
+ * value is clipped for the cell (the point is the range, not the full string).
+ */
+function columnIndexTable(index: ColumnIndex, leaf: SchemaLeaf | null | undefined): string {
+    const clip = (s: string): string => (s.length > 28 ? `${s.slice(0, 27)}…` : s);
+    const stat = (v: string | undefined, nullPage: boolean): string => {
+        if (nullPage || v === undefined) {
+            return '<span class="value-preview-null">—</span>';
+        }
+        return escapeHtml(clip((leaf ? formatStatValue(v, leaf) : undefined) ?? v));
+    };
+    const body = index.null_pages
+        .map((nullPage, i) => {
+            const nulls = index.null_counts?.[i];
+            return (
+                `<tr><td class="idx-num">${i}</td>` +
+                `<td>${stat(index.min_values[i], nullPage)}</td>` +
+                `<td>${stat(index.max_values[i], nullPage)}</td>` +
+                `<td class="idx-num">${nulls === undefined ? '—' : formatNumber(nulls)}</td></tr>`
+            );
+        })
+        .join('');
+    return (
+        `<div class="value-preview-table-wrap"><table class="index-table">` +
+        `<thead><tr><th>Page</th><th>Min</th><th>Max</th><th>Nulls</th></tr></thead>` +
+        `<tbody>${body}</tbody></table></div>`
+    );
+}
+
+/**
+ * An offset index's real payload: for each page, the row it starts at, its byte
+ * offset in the file, and its compressed size — the map a reader uses to seek
+ * straight to the page holding a wanted row range without touching the rest.
+ */
+function offsetIndexTable(index: OffsetIndex): string {
+    const body = index.page_locations
+        .map(
+            (p, i) =>
+                `<tr><td class="idx-num">${i}</td>` +
+                `<td class="idx-num">${formatNumber(p.first_row_index)}</td>` +
+                `<td class="idx-num">${formatOffset(p.offset)}</td>` +
+                `<td class="idx-num">${formatBytes(p.compressed_page_size)}</td></tr>`
+        )
+        .join('');
+    return (
+        `<div class="value-preview-table-wrap"><table class="index-table">` +
+        `<thead><tr><th>Page</th><th>First row</th><th>Offset</th><th>Size</th></tr></thead>` +
+        `<tbody>${body}</tbody></table></div>`
+    );
+}
+
+/**
  * Statistics + geospatial + size/encoding sections for a column's metadata.
  * Shared by the physical `column_chunk` view and the metadata-only `chunk_meta`
  * view so both decode WKB min/max and surface the same extents consistently.
@@ -1118,8 +1174,7 @@ const PANELS: Registry = {
         {
             title: node.label,
             rows: [
-                ['Blocks', node.children.length],
-                ['Byte Range', `${formatOffset(node.start)}–${formatOffset(node.end)}`],
+                ['Columns', node.children.length],
                 [
                     'Purpose',
                     node.id === 'index_bloom_filter'
@@ -1130,7 +1185,7 @@ const PANELS: Registry = {
         },
     ],
 
-    column_index: node => {
+    column_index: (node, dump) => {
         const rows: Row[] = [['Column', node.path]];
         // index === null in a metadata-only export: span only, no contents.
         if (node.index) {
@@ -1154,10 +1209,20 @@ const PANELS: Registry = {
             rows.push(['Detail', METADATA_ONLY_NOTE]);
         }
         rows.push(['Purpose', 'Per-page min/max and null stats for predicate push-down']);
-        return [
+        const sections: Section[] = [
             layout(node),
             { title: 'Column Index', degraded: node.index ? undefined : 'metadata-only', rows },
         ];
+        // The actual per-page stats, decoded to the column's type — the reason
+        // this segment exists (skip pages that can't match a predicate).
+        if (node.index) {
+            const leaf = findSchemaLeaf(dump.metadata.schema_root, node.path);
+            sections.push({
+                title: 'Per-Page Statistics',
+                html: columnIndexTable(node.index, leaf),
+            });
+        }
+        return sections;
     },
 
     offset_index: node => {
@@ -1176,10 +1241,16 @@ const PANELS: Registry = {
             rows.push(['Detail', METADATA_ONLY_NOTE]);
         }
         rows.push(['Purpose', 'Page byte offsets and row ranges for seeking']);
-        return [
+        const sections: Section[] = [
             layout(node),
             { title: 'Offset Index', degraded: node.index ? undefined : 'metadata-only', rows },
         ];
+        // Per-page seek map: where each page starts (row + byte offset) and how
+        // big it is — how a reader jumps straight to a wanted row range.
+        if (node.index) {
+            sections.push({ title: 'Page Locations', html: offsetIndexTable(node.index) });
+        }
+        return sections;
     },
 
     bloom_filter: node => [
