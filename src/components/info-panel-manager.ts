@@ -382,7 +382,7 @@ function copyButton(full: string, label = 'Copy full value', glyph = '⧉'): str
  *  (a temporal type's int, ...) — the value the bloom probe hashes. `#` sets it
  *  apart from the `⧉` value/GeoJSON copies at a glance. */
 function copyPhysicalButton(value: string): string {
-    return copyButton(value, 'Copy physical value', '#');
+    return copyButton(value, 'Copy physical value (for the probe)', '#');
 }
 
 /**
