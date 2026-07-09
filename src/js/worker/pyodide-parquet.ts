@@ -236,16 +236,35 @@ async def _boot_from_dump(dump_json, url):
     f = await AsyncHttpFile(url).open()
     await _set_current(pf, f)
 
-def _coerce_probe_value(value, physical_type):
+def _is_binary_leaf(column_chunk):
+    # A "binary column": BYTE_ARRAY / FIXED_LEN_BYTE_ARRAY that is NOT a string
+    # leaf (geometry WKB, UUID, raw binary). column_chunk is a ColumnChunk
+    # (metadata), exposing .type and .schema_element. Mirrors isStringLeaf in
+    # src/business/stat-values.ts: get_logical_type() folds converted UTF8->STRING
+    # and ENUM->ENUM, so a single STRING/ENUM check covers the JS rule's
+    # logical-and-converted branches. String columns hash their typed text as
+    # UTF-8; binary columns take base64 of the raw bytes.
+    if column_chunk.type.name not in ('BYTE_ARRAY', 'FIXED_LEN_BYTE_ARRAY'):
+        return False
+    lt = column_chunk.schema_element.get_logical_type()
+    return not (lt is not None and lt.logical_type.name in ('STRING', 'ENUM'))
+
+def _coerce_probe_value(value, chunk):
     # Probe values always cross the JS boundary as strings; convert to the
-    # python type BloomFilter hashing expects for the column. BYTE_ARRAY /
-    # FIXED_LEN_BYTE_ARRAY take the string as-is (hashed as UTF-8); other
-    # types (BOOLEAN, INT96) are rejected by might_contain itself.
-    match physical_type.name:
+    # python type BloomFilter hashing expects for the column. String BYTE_ARRAY /
+    # FIXED_LEN_BYTE_ARRAY take the string as-is (hashed as UTF-8); binary ones
+    # carry base64 of the raw bytes, decoded back to bytes here so _plain_encode
+    # hashes the raw bytes. Other types (BOOLEAN, INT96) are rejected by
+    # might_contain itself.
+    match chunk.type.name:
         case 'INT32' | 'INT64':
             return int(value)
         case 'FLOAT' | 'DOUBLE':
             return float(value)
+        case 'BYTE_ARRAY' | 'FIXED_LEN_BYTE_ARRAY' if _is_binary_leaf(chunk):
+            # Base64 decode failure raises -> surfaces as "Probe failed"; the UI
+            # validates base64 first, so this is the belt-and-suspenders path.
+            return base64.b64decode(value)
         case _:
             return value
 
@@ -264,7 +283,7 @@ async def _probe_bloom(row_group, column, value):
     bloom = await BloomFilter.from_reader(ensure_async_reader(reader), chunk)
     # _plain_encode raises for unqueryable physical types (INT96/BOOLEAN), same
     # as might_contain would -- surfaces as a probe failure, not a bad result.
-    hash_ = xxh64(bloom._plain_encode(_coerce_probe_value(value, chunk.type)))
+    hash_ = xxh64(bloom._plain_encode(_coerce_probe_value(value, chunk)))
     num_blocks = bloom.num_blocks
     block_index = ((hash_ >> 32) * num_blocks) >> 32
     base = block_index * 32  # 256-bit block = 8 words * 4 bytes
@@ -335,6 +354,9 @@ async def _preview(row_group, column, page_index, offset, limit, skip_nulls):
     else:
         reader, chunk = _find_data_chunk(row_group, column)
         se = chunk.metadata.schema_element
+        # Binary (non-string byte) columns hash base64 of the raw bytes, so the
+        # UI copies the base64 physical for the probe. Computed once per page.
+        is_binary = _is_binary_leaf(chunk.metadata)
         values = []
         nulls = 0
         try:
@@ -350,10 +372,20 @@ async def _preview(row_group, column, page_index, offset, limit, skip_nulls):
             ):
                 logical = se.physical_to_logical_type(raw) if raw is not None else None
                 entry = {'value': _json_safe(logical), 'def': def_level, 'rep': rep_level}
+                # Attach the probe-ready physical when it differs from the display:
+                # numeric-backed logical types (temporal/decimal) carry the int;
+                # binary byte columns carry base64 of the raw bytes (UUID shows hex
+                # -> base64 attached; geometry/plain-binary already display base64,
+                # so _json_safe(raw) == value and nothing is attached). String
+                # columns are excluded by is_binary, so their bytes never leak as a
+                # misleading base64 overlay.
+                physical = None
                 if isinstance(raw, (int, float)) and not isinstance(raw, bool):
                     physical = _json_safe(raw)
-                    if physical != entry['value']:
-                        entry['physical'] = physical
+                elif is_binary and isinstance(raw, bytes):
+                    physical = _json_safe(raw)
+                if physical is not None and physical != entry['value']:
+                    entry['physical'] = physical
                 values.append(entry)
                 if logical is None:
                     nulls += 1

@@ -26,6 +26,7 @@ import {
     base64Bytes,
     decodeStatValue,
     formatStatValue,
+    isBinaryLeaf,
     parsePredicateValue,
 } from '../business/stat-values';
 import { describeWkb, wkbToGeoJson } from '../business/wkb';
@@ -1514,13 +1515,16 @@ export class InfoPanelManager {
         dump: AnyDump
     ): HTMLElement {
         const leaf = findSchemaLeaf(dump.metadata.schema_root, node.path);
+        // Binary columns (geometry/UUID/raw binary) aren't typeable as text; the
+        // probe takes base64 of the raw bytes and the worker decodes it.
+        const binary = leaf ? isBinaryLeaf(leaf) : false;
         const section = document.createElement('div');
         section.className = 'info-section regular-card bloom-probe-section';
         section.innerHTML =
             `<h5 class="info-section-title">Probe a Value</h5>` +
             `<div class="bloom-probe-controls">` +
             `<input type="text" class="bloom-probe-value" placeholder="${
-                leaf ? `${leaf.type} value` : 'value'
+                leaf ? `${leaf.type} value${binary ? ' (base64)' : ''}` : 'value'
             }">` +
             `<button type="button" class="bloom-probe-btn">Probe</button>` +
             `</div>` +
@@ -1528,17 +1532,27 @@ export class InfoPanelManager {
         const input = section.querySelector<HTMLInputElement>('.bloom-probe-value')!;
         const result = section.querySelector<HTMLElement>('.bloom-probe-result')!;
         const run = (): void => {
-            // Same typed-input parsing as the query panel: reject input that
-            // isn't a valid value for the column's physical type.
-            const parsed = leaf ? parsePredicateValue(input.value, leaf) : undefined;
-            if (parsed === undefined) {
+            // Binary columns take base64 of the raw bytes; validate it decodes,
+            // then send the trimmed base64 (the worker decodes it back to bytes).
+            // Everything else parses as its typed value, same as the query panel.
+            let value: string | undefined;
+            if (binary) {
+                const trimmed = input.value.trim();
+                value = base64Bytes(trimmed) ? trimmed : undefined;
+            } else {
+                const parsed = leaf ? parsePredicateValue(input.value, leaf) : undefined;
+                value = parsed === undefined ? undefined : String(parsed);
+            }
+            if (value === undefined) {
                 result.textContent = leaf
-                    ? `'${input.value}' is not a valid ${leaf.type} value`
+                    ? `'${input.value}' is not a valid ${leaf.type} value${
+                          binary ? ' (expected base64)' : ''
+                      }`
                     : `column '${node.path}' was not found in the schema`;
                 return;
             }
             result.textContent = 'Probing...';
-            this.bloomProbe!(node.rowGroup, node.path, String(parsed)).then(
+            this.bloomProbe!(node.rowGroup, node.path, value).then(
                 res => {
                     // Static strings + numeric/hex derivation only; nothing
                     // user-typed goes into innerHTML.

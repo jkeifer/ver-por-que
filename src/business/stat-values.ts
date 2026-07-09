@@ -39,6 +39,18 @@ function isStringLeaf(leaf: SchemaLeaf): boolean {
     return !lt && (leaf.converted_type === 'UTF8' || leaf.converted_type === 'ENUM');
 }
 
+/**
+ * A "binary column": BYTE_ARRAY / FIXED_LEN_BYTE_ARRAY that is NOT a string leaf
+ * (geometry WKB, UUID, raw binary). Its raw bytes aren't typeable, so base64 is
+ * the canonical form — copied as the physical and base64-decoded before hashing
+ * in a probe. The worker replicates this rule in Python (_is_binary_leaf).
+ */
+export function isBinaryLeaf(leaf: SchemaLeaf): boolean {
+    return (
+        (leaf.type === 'BYTE_ARRAY' || leaf.type === 'FIXED_LEN_BYTE_ARRAY') && !isStringLeaf(leaf)
+    );
+}
+
 /** True when the leaf is a DECIMAL (any physical backing). */
 function isDecimal(leaf: SchemaLeaf): boolean {
     return leaf.logical_type?.logical_type === 'DECIMAL' || leaf.converted_type === 'DECIMAL';
