@@ -383,7 +383,7 @@ export class QueryPanel {
 
     /** `rg\0column\0value` — the probe-result cache key. */
     private bloomKey(rg: number, column: string, value: string): string {
-        return `${rg} ${column} ${value}`;
+        return `${rg}\0${column}\0${value}`;
     }
 
     /** The probe string for an `=` predicate value, or null when the column is
@@ -395,6 +395,32 @@ export class QueryPanel {
         }
         const parsed = parsePredicateValue(value, leaf);
         return parsed === undefined ? null : String(parsed);
+    }
+
+    /**
+     * The `=` predicates in `predicates` that bloom can actually be consulted
+     * for: an `eq` op whose value parses to a probeable string on a non-binary
+     * column. `index` is the predicate's position in `predicates` (the key
+     * `buildBloomResults` stores its per-predicate outcome under). Empty
+     * whenever there's no live probe to consult, folding in the `bloomProbe`
+     * null-check every call site otherwise repeated — except `renderBloomNotice`,
+     * which runs precisely when `bloomProbe` IS null and so filters inline.
+     */
+    private probeable(predicates: Predicate[]): { column: string; value: string; index: number }[] {
+        if (!this.bloomProbe) {
+            return [];
+        }
+        const out: { column: string; value: string; index: number }[] = [];
+        predicates.forEach((p, index) => {
+            if (p.op !== 'eq') {
+                return;
+            }
+            const value = this.probeValue(p.column, p.value);
+            if (value !== null) {
+                out.push({ column: p.column, value, index });
+            }
+        });
+        return out;
     }
 
     /** Whether (rg, column) carries a bloom filter (from the footer metadata). */
@@ -410,29 +436,19 @@ export class QueryPanel {
      */
     private buildBloomResults(valid: Predicate[]): BloomResults {
         const out: BloomResults = new Map();
-        if (!this.bloomProbe) {
-            return out;
-        }
-        valid.forEach((p, i) => {
-            if (p.op !== 'eq') {
-                return;
-            }
-            const value = this.probeValue(p.column, p.value);
-            if (value === null) {
-                return;
-            }
+        for (const { column, value, index } of this.probeable(valid)) {
             const misses = new Set<number>();
             const hits = new Set<number>();
             this.dump.metadata.row_groups.forEach((_g, rg) => {
-                const r = this.bloomCache.get(this.bloomKey(rg, p.column, value));
+                const r = this.bloomCache.get(this.bloomKey(rg, column, value));
                 if (r !== undefined) {
                     (r ? hits : misses).add(rg);
                 }
             });
             if (misses.size > 0 || hits.size > 0) {
-                out.set(i, { misses, hits });
+                out.set(index, { misses, hits });
             }
-        });
+        }
         return out;
     }
 
@@ -445,32 +461,22 @@ export class QueryPanel {
      */
     private refineWithBloom(valid: Predicate[], columns: string[]): void {
         const gen = ++this.bloomGen;
-        if (!this.bloomProbe) {
-            return;
-        }
         const probes: Promise<void>[] = [];
-        for (const p of valid) {
-            if (p.op !== 'eq') {
-                continue;
-            }
-            const value = this.probeValue(p.column, p.value);
-            if (value === null) {
-                continue;
-            }
+        for (const { column, value } of this.probeable(valid)) {
             this.dump.metadata.row_groups.forEach((_g, rg) => {
                 if (
-                    !this.columnHasBloom(rg, p.column) ||
-                    this.resolution.matrixCell(rg, p.column).kind === 'pruned'
+                    !this.columnHasBloom(rg, column) ||
+                    this.resolution.matrixCell(rg, column).kind === 'pruned'
                 ) {
                     return;
                 }
-                const key = this.bloomKey(rg, p.column, value);
+                const key = this.bloomKey(rg, column, value);
                 if (this.bloomCache.has(key) || this.bloomInFlight.has(key)) {
                     return;
                 }
                 this.bloomInFlight.add(key);
                 probes.push(
-                    this.bloomProbe!(rg, p.column, value).then(
+                    this.bloomProbe!(rg, column, value).then(
                         res => {
                             this.bloomInFlight.delete(key);
                             this.bloomCache.set(key, res.mightContain);
@@ -558,19 +564,12 @@ export class QueryPanel {
      * as a whole-row "probing" state (rowProbing), not here.
      */
     private bloomMark(rg: number, column: string): BloomMark {
-        if (!this.bloomProbe) {
-            return '';
-        }
         let mark: BloomMark = '';
-        for (const p of this.resolution.state.predicates) {
-            if (p.op !== 'eq' || p.column !== column) {
+        for (const p of this.probeable(this.resolution.state.predicates)) {
+            if (p.column !== column) {
                 continue;
             }
-            const value = this.probeValue(column, p.value);
-            if (value === null) {
-                continue;
-            }
-            const cached = this.bloomCache.get(this.bloomKey(rg, column, value));
+            const cached = this.bloomCache.get(this.bloomKey(rg, p.column, p.value));
             if (cached === false) {
                 return 'miss';
             }
@@ -587,16 +586,9 @@ export class QueryPanel {
      * premature read/pruned color that would flip when the result lands.
      */
     private rowProbing(rg: number): boolean {
-        if (!this.bloomProbe) {
-            return false;
-        }
-        return this.resolution.state.predicates.some(p => {
-            if (p.op !== 'eq') {
-                return false;
-            }
-            const value = this.probeValue(p.column, p.value);
-            return value !== null && this.bloomInFlight.has(this.bloomKey(rg, p.column, value));
-        });
+        return this.probeable(this.resolution.state.predicates).some(p =>
+            this.bloomInFlight.has(this.bloomKey(rg, p.column, p.value))
+        );
     }
 
     /**
@@ -614,9 +606,12 @@ export class QueryPanel {
         }
         // Columns with an `=` predicate, a bloom filter, and at least one row
         // group that survived stats pruning (where bloom could still skip more).
+        // Note: unlike the other four call sites, this one runs precisely when
+        // `this.bloomProbe` is null (the early return above), so it can't route
+        // through `probeable` (which is empty in that case) — filter directly.
         const columns = new Set<string>();
         for (const p of this.resolution.state.predicates) {
-            if (p.op !== 'eq') {
+            if (p.op !== 'eq' || this.probeValue(p.column, p.value) === null) {
                 continue;
             }
             const survives = this.dump.metadata.row_groups.some(
