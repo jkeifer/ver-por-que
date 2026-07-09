@@ -647,7 +647,8 @@ class ParquetExplorer {
                     onUpdate: resolution => this.applyQueryRun(resolution),
                     onClear: () => this.clearQueryOverlay(),
                     loadFullStructure: src && metadataOnly ? () => void this.loadURL(src) : null,
-                }
+                },
+                this.bloomProbe
             );
 
             // Permalink: `#q=<json {predicates, columns}>` re-applies the query

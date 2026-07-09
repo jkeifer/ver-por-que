@@ -16,6 +16,7 @@ import {
     isValidPredicate,
     leafColumns,
     OP_LABEL,
+    type BloomResults,
     type Op,
     type Predicate,
     type QueryState,
@@ -26,9 +27,10 @@ import {
     type Resolution,
     type SegmentStatus,
 } from '../business/query-model';
-import type { SegmentNode } from '../business/segment-tree';
+import { findSchemaLeaf, isSet, type SegmentNode } from '../business/segment-tree';
+import { isBinaryLeaf, parsePredicateValue } from '../business/stat-values';
 import { formatBytes } from '../format';
-import { escapeHtml } from './info-panel-manager';
+import { escapeHtml, type BloomProbe } from './info-panel-manager';
 import type { AnyDump } from '../types';
 
 export interface QueryPanelDelegate {
@@ -52,6 +54,16 @@ const KIND_CLASS: Record<SegmentStatus['kind'], string> = {
     'eval-only': 'qm-eval',
     'not-selected': 'qm-skip',
     pruned: 'qm-pruned',
+};
+
+/** A cell's bloom-filter outcome for an `=` predicate on its column. */
+type BloomMark = '' | 'miss' | 'hit' | 'probing';
+
+/** Tooltip clause per bloom mark (appended under the cell's status reason). */
+const BLOOM_REASON: Record<Exclude<BloomMark, ''>, string> = {
+    miss: 'Bloom filter: definitely not present — this row group is pruned.',
+    hit: 'Bloom filter: maybe present — checked, could not rule it out.',
+    probing: 'Bloom filter: probing…',
 };
 
 /** One-line footer-statistics summary for a column ("type · min · max · nulls"). */
@@ -94,16 +106,28 @@ export class QueryPanel {
     private resolution: Resolution;
     /** Debounce handle for value-input edits. */
     private updateTimer: ReturnType<typeof setTimeout> | undefined;
+    /** Live bloom probe (worker-backed); null when the dump can't be probed. */
+    private readonly bloomProbe: BloomProbe | null;
+    /** Cache of probe results keyed by `rg\0column\0value` -> mightContain. */
+    private readonly bloomCache = new Map<string, boolean>();
+    /** Probe keys currently in flight (render them as "probing"). */
+    private readonly bloomInFlight = new Set<string>();
+    /** Monotonic generation; a probe batch from a stale query is discarded. */
+    private bloomGen = 0;
+    /** The bloom info notice above the matrix (metadata/no-probe honesty). */
+    private readonly bloomNoticeEl: HTMLElement;
 
     constructor(
         container: HTMLElement,
         dump: AnyDump,
         tree: SegmentNode,
-        delegate: QueryPanelDelegate
+        delegate: QueryPanelDelegate,
+        bloomProbe: BloomProbe | null = null
     ) {
         this.dump = dump;
         this.tree = tree;
         this.delegate = delegate;
+        this.bloomProbe = bloomProbe;
         this.columns = leafColumns(dump);
         this.stats = new Map(this.columns.map(c => [c, statsLine(dump, c)]));
         container.innerHTML = `
@@ -158,15 +182,27 @@ export class QueryPanel {
             </div>
             <div class="query-matrix-section">
                 <h2>Read Matrix</h2>
+                <p class="query-bloom-notice" hidden></p>
                 <div class="query-matrix-wrap"><table class="query-matrix"></table></div>
                 <div class="query-legend">
                     <span><span class="qm-swatch qm-read"></span>read and returned</span>
                     <span><span class="qm-swatch qm-eval"></span>read only to evaluate a predicate — not in the output</span>
                     <span><span class="qm-swatch qm-pruned"></span>skipped — a predicate pruned the row group</span>
                     <span><span class="qm-swatch qm-skip"></span>not read — not selected for output</span>
+                    <span><span class="qm-swatch qm-pruned"><span class="qm-bloom qm-bloom-miss"></span></span>skipped by a bloom filter (= predicate)</span>
+                    <span><span class="qm-swatch qm-read"><span class="qm-bloom qm-bloom-hit"></span></span>bloom filter checked — couldn't rule it out</span>
                 </div>
             </div>`;
         this.matrix = container.querySelector('.query-matrix')!;
+        this.bloomNoticeEl = container.querySelector('.query-bloom-notice')!;
+        // Delegated: the notice's upgrade button (re-rendered on every update).
+        if (this.delegate.loadFullStructure) {
+            this.bloomNoticeEl.addEventListener('click', e => {
+                if ((e.target as HTMLElement).closest('.recovery-btn')) {
+                    this.delegate.loadFullStructure!();
+                }
+            });
+        }
         this.tip = document.createElement('div');
         this.tip.className = 'qm-tip';
         this.tip.hidden = true;
@@ -320,13 +356,140 @@ export class QueryPanel {
                 valid.push(predicate);
             }
         }
-        this.resolution = resolve(this.dump, this.tree, { predicates: valid, columns });
+        // Resolve synchronously (folding in whatever bloom results are already
+        // cached), then kick off any new bloom probes; their results re-resolve.
+        this.applyResolution(valid, columns);
+        this.refineWithBloom(valid, columns);
+    }
+
+    /** Resolve + render + drive the delegate, folding in cached bloom results. */
+    private applyResolution(valid: Predicate[], columns: string[]): void {
+        this.resolution = resolve(
+            this.dump,
+            this.tree,
+            { predicates: valid, columns },
+            this.buildBloomResults(valid)
+        );
         this.render();
         if (this.resolution.active) {
             this.delegate.onUpdate(this.resolution);
         } else {
             this.delegate.onClear();
         }
+    }
+
+    /** `rg\0column\0value` — the probe-result cache key. */
+    private bloomKey(rg: number, column: string, value: string): string {
+        return `${rg} ${column} ${value}`;
+    }
+
+    /** The probe string for an `=` predicate value, or null when the column is
+     *  binary / the value doesn't parse (bloom isn't consulted for those). */
+    private probeValue(column: string, value: string): string | null {
+        const leaf = findSchemaLeaf(this.dump.metadata.schema_root, column);
+        if (!leaf || isBinaryLeaf(leaf)) {
+            return null;
+        }
+        const parsed = parsePredicateValue(value, leaf);
+        return parsed === undefined ? null : String(parsed);
+    }
+
+    /** Whether (rg, column) carries a bloom filter (from the footer metadata). */
+    private columnHasBloom(rg: number, column: string): boolean {
+        const chunk = this.dump.metadata.row_groups[rg]?.column_chunks[column];
+        return isSet(chunk?.metadata.bloom_filter_offset);
+    }
+
+    /**
+     * Assemble the cached bloom outcomes for the valid `=` predicates into the
+     * shape `resolve` folds in (per-predicate miss/hit row-group sets). Only
+     * cached results appear; un-probed row groups are simply absent.
+     */
+    private buildBloomResults(valid: Predicate[]): BloomResults {
+        const out: BloomResults = new Map();
+        if (!this.bloomProbe) {
+            return out;
+        }
+        valid.forEach((p, i) => {
+            if (p.op !== 'eq') {
+                return;
+            }
+            const value = this.probeValue(p.column, p.value);
+            if (value === null) {
+                return;
+            }
+            const misses = new Set<number>();
+            const hits = new Set<number>();
+            this.dump.metadata.row_groups.forEach((_g, rg) => {
+                const r = this.bloomCache.get(this.bloomKey(rg, p.column, value));
+                if (r !== undefined) {
+                    (r ? hits : misses).add(rg);
+                }
+            });
+            if (misses.size > 0 || hits.size > 0) {
+                out.set(i, { misses, hits });
+            }
+        });
+        return out;
+    }
+
+    /**
+     * Fire bloom probes for every (row group × `=` predicate) that has a filter
+     * and wasn't already pruned by statistics (bloom adds nothing there). Newly
+     * in-flight cells render as "probing"; when the batch settles it re-resolves
+     * with the results folded in. A generation guard drops a stale batch whose
+     * query has since changed.
+     */
+    private refineWithBloom(valid: Predicate[], columns: string[]): void {
+        const gen = ++this.bloomGen;
+        if (!this.bloomProbe) {
+            return;
+        }
+        const probes: Promise<void>[] = [];
+        for (const p of valid) {
+            if (p.op !== 'eq') {
+                continue;
+            }
+            const value = this.probeValue(p.column, p.value);
+            if (value === null) {
+                continue;
+            }
+            this.dump.metadata.row_groups.forEach((_g, rg) => {
+                if (
+                    !this.columnHasBloom(rg, p.column) ||
+                    this.resolution.matrixCell(rg, p.column).kind === 'pruned'
+                ) {
+                    return;
+                }
+                const key = this.bloomKey(rg, p.column, value);
+                if (this.bloomCache.has(key) || this.bloomInFlight.has(key)) {
+                    return;
+                }
+                this.bloomInFlight.add(key);
+                probes.push(
+                    this.bloomProbe!(rg, p.column, value).then(
+                        res => {
+                            this.bloomInFlight.delete(key);
+                            this.bloomCache.set(key, res.mightContain);
+                        },
+                        () => {
+                            // A failed probe leaves no cache entry (no marker) —
+                            // honest: we simply couldn't consult the filter.
+                            this.bloomInFlight.delete(key);
+                        }
+                    )
+                );
+            });
+        }
+        if (probes.length === 0) {
+            return;
+        }
+        this.render(); // show "probing" markers on the in-flight cells
+        void Promise.all(probes).then(() => {
+            if (gen === this.bloomGen) {
+                this.applyResolution(valid, columns);
+            }
+        });
     }
 
     /** Drop all predicates; the matrix falls back to the projection-only view. */
@@ -354,8 +517,14 @@ export class QueryPanel {
                         // Column name, then the status + its rationale (the reason
                         // already reads "Status — why"). Per-column stats live on
                         // the header, not here.
-                        const title = `${column}\n${s.reason}`;
-                        return `<td class="qm-cell ${KIND_CLASS[s.kind]}" title="${escapeHtml(title)}"></td>`;
+                        const mark = this.bloomMark(index, column);
+                        const dot = mark
+                            ? `<span class="qm-bloom qm-bloom-${mark}" aria-hidden="true"></span>`
+                            : '';
+                        const title = mark
+                            ? `${column}\n${s.reason}\n${BLOOM_REASON[mark]}`
+                            : `${column}\n${s.reason}`;
+                        return `<td class="qm-cell ${KIND_CLASS[s.kind]}" title="${escapeHtml(title)}">${dot}</td>`;
                     })
                     .join('');
                 return `<tr><th class="qm-rowhead">RG${index}</th>${cells}</tr>`;
@@ -365,7 +534,86 @@ export class QueryPanel {
         // The old cell/header the tooltip tracked is gone with the innerHTML.
         this.tipFor = null;
         this.tip.hidden = true;
+        this.renderBloomNotice();
         this.renderSummary(this.resolution.summary);
+    }
+
+    /**
+     * The bloom outcome to mark on cell (rg, column): the strongest across the
+     * `=` predicates on that column — a cached miss wins (the row group is
+     * pruned), else in-flight is "probing", else a cached hit. Empty when bloom
+     * can't be consulted or nothing was probed for this cell.
+     */
+    private bloomMark(rg: number, column: string): BloomMark {
+        if (!this.bloomProbe) {
+            return '';
+        }
+        let mark: BloomMark = '';
+        for (const p of this.resolution.state.predicates) {
+            if (p.op !== 'eq' || p.column !== column) {
+                continue;
+            }
+            const value = this.probeValue(column, p.value);
+            if (value === null) {
+                continue;
+            }
+            const key = this.bloomKey(rg, column, value);
+            const cached = this.bloomCache.get(key);
+            if (cached === false) {
+                return 'miss';
+            }
+            if (this.bloomInFlight.has(key)) {
+                mark = 'probing';
+            } else if (cached === true && mark !== 'probing') {
+                mark = 'hit';
+            }
+        }
+        return mark;
+    }
+
+    /**
+     * Honest notice above the matrix when the file HAS bloom filters that a real
+     * reader would use for an `=` predicate, but this dump can't probe them (a
+     * JSON/metadata dump with no fetchable source). The simulation is then an
+     * upper bound on rows read; offer the upgrade when a source exists. Hidden
+     * whenever we can actually probe (we just do it) or nothing applies.
+     */
+    private renderBloomNotice(): void {
+        const el = this.bloomNoticeEl;
+        if (this.bloomProbe) {
+            el.hidden = true;
+            return;
+        }
+        // Columns with an `=` predicate, a bloom filter, and at least one row
+        // group that survived stats pruning (where bloom could still skip more).
+        const columns = new Set<string>();
+        for (const p of this.resolution.state.predicates) {
+            if (p.op !== 'eq') {
+                continue;
+            }
+            const survives = this.dump.metadata.row_groups.some(
+                (_g, rg) =>
+                    this.columnHasBloom(rg, p.column) &&
+                    this.resolution.matrixCell(rg, p.column).kind !== 'pruned'
+            );
+            if (survives) {
+                columns.add(p.column);
+            }
+        }
+        if (columns.size === 0) {
+            el.hidden = true;
+            return;
+        }
+        const names = [...columns].map(c => `<code>${escapeHtml(c)}</code>`).join(', ');
+        const upgrade = this.delegate.loadFullStructure
+            ? ` <button type="button" class="btn btn-sm recovery-btn">Load full structure from source</button>`
+            : '';
+        el.innerHTML =
+            `This file has a bloom filter on ${names}. A real reader could skip more row ` +
+            `groups for that <code>=</code> predicate, but the filter isn't in this ` +
+            `${'column_chunks' in this.dump ? 'dump' : 'metadata-only export'} — the matrix is an ` +
+            `upper bound on what's read.${upgrade}`;
+        el.hidden = false;
     }
 
     /**

@@ -16,7 +16,7 @@
  * parsing, no per-consumer logic.
  */
 import { evaluate, leafColumns, rowCounts, type Decision, type QueryState } from './pruning';
-import type { Evaluation } from './pruning';
+import type { BloomResults, Evaluation } from './pruning';
 import type { SegmentNode } from './segment-tree';
 import type { AnyDump } from '../types';
 
@@ -164,12 +164,13 @@ function rowGroupStatus(ctx: QueryContext, rg: number): SegmentStatus {
     return d?.pruned ? pruned(d) : read(true, d);
 }
 
-/** Build the precedence context for a query. Used by `resolve` and by tests. */
-export function buildContext(dump: AnyDump, state: QueryState): QueryContext {
+/** Build the precedence context for a query. Used by `resolve` and by tests.
+ *  `bloom` (optional) folds async bloom-filter outcomes into the pruning. */
+export function buildContext(dump: AnyDump, state: QueryState, bloom?: BloomResults): QueryContext {
     return {
         projected: new Set(state.columns),
         predicateColumns: new Set(state.predicates.map(p => p.column)),
-        evaluation: evaluate(dump, state.predicates),
+        evaluation: evaluate(dump, state.predicates, bloom),
     };
 }
 
@@ -235,8 +236,13 @@ const METADATA_ONLY_NOTE =
  * incomplete rows before calling; `evaluate` throws on an unknown column or an
  * unparseable value).
  */
-export function resolve(dump: AnyDump, tree: SegmentNode, state: QueryState): Resolution {
-    const ctx = buildContext(dump, state);
+export function resolve(
+    dump: AnyDump,
+    tree: SegmentNode,
+    state: QueryState,
+    bloom?: BloomResults
+): Resolution {
+    const ctx = buildContext(dump, state, bloom);
     const statuses = new Map<string, SegmentStatus>();
 
     let rowGroupsRead = 0;
