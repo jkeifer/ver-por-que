@@ -1332,6 +1332,13 @@ code {
     color: var(--text-primary);
 }
 
+/* Reserved slot for the verdict line below the row: always present (empty when
+ * not probed) so probing/clearing never changes the card height. Sized to the
+ * verdict's typical two-line wrap at 0.85rem so the reveal doesn't push layout. */
+.bloom-verdict-slot {
+    min-height: 2.4rem;
+}
+
 .bloom-verdict {
     margin-bottom: var(--spacing-sm);
 }
@@ -1384,7 +1391,7 @@ code {
 
 /* Whole-filter density strip (base graphic + probe highlight) */
 .bloom-strip-wrap {
-    margin-bottom: var(--spacing-sm);
+    margin-bottom: var(--spacing-xs);
     font-size: 0.85rem;
     color: var(--text-secondary);
 }
@@ -1436,34 +1443,52 @@ code {
 }
 
 /* The viewport: a single non-wrapping row of full-res block grids below the
- * strip. */
+ * strip, framed as one inset panel so it reads as a viewport hanging off the
+ * strip map. Blocks grow to fill (see render's grow-to-fill), so the row nearly
+ * fills the panel and any small remainder centers. */
 .bloom-block-wrap {
     margin-bottom: var(--spacing-sm);
+    padding: var(--spacing-sm);
+    background: var(--bg-tertiary);
+    border-radius: var(--border-radius);
+}
+
+/* Reserved slot for the value→hash→block lineage: always present (empty when
+ * not probed) so probing/clearing never changes the card height. Sized to the
+ * lineage's one-line height (.bloom-lineage font 0.72rem). */
+.bloom-lineage-slot {
+    min-height: 1.1rem;
+    margin-bottom: var(--spacing-xs);
 }
 
 .bloom-block-row {
     display: flex;
     flex-wrap: nowrap;
     align-items: flex-start;
-    gap: var(--spacing-md);
+    justify-content: center;
+    gap: 12px;
     overflow: hidden;
 }
 
-/* N > 1: distribute the leftover width as gaps across the card. */
-.bloom-block-row-justified {
-    justify-content: space-between;
-}
-
-/* Each grid keeps its intrinsic size — flex never stretches or shrinks it, so
- * the cell size stays fixed regardless of how many fit. */
+/* Each grid keeps its intrinsic (grow-to-fill) size — flex never stretches or
+ * shrinks it, so the cell size stays consistent across the row. */
 .bloom-block-cell {
     flex: 0 0 auto;
 }
 
+/* Soft "selected" treatment: a light accent frame + faint tint, not a stray
+ * bracket. The probed bits stay green/red on top. */
 .bloom-block-cell.selected {
-    outline: 3px solid var(--outline-on-light);
-    outline-offset: 2px;
+    outline: 1px solid var(--accent-color);
+    outline-offset: 1px;
+    background: rgba(var(--accent-rgb), 0.06);
+    padding: 2px;
     border-radius: var(--border-radius);
+}
+
+/* The selected cell's label reads in accent so "selected" is unambiguous. */
+.bloom-block-cell.selected .bloom-block-label {
+    color: var(--accent-color);
 }
 
 .bloom-block-label {
@@ -1474,11 +1499,16 @@ code {
     white-space: nowrap;
 }
 
-/* Same footprint as a block grid (383 × 95 px) while its bytes are in flight,
- * so the row doesn't reflow when they arrive. */
+/* The probed block anchors the lineage's "block X": accent + a marked "· probed"
+ * suffix. Wins over the plain selected-label color (both classes can apply). */
+.bloom-block-label.probed {
+    color: var(--accent-color);
+    font-weight: 600;
+}
+
+/* Same footprint as a block grid (sized inline to the current cell size) while
+ * its bytes are in flight, so the row doesn't reflow when they arrive. */
 .bloom-block-placeholder {
-    width: 383px;
-    height: 95px;
     background: var(--border-light);
     border-radius: var(--border-radius);
     opacity: 0.4;
