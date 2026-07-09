@@ -735,6 +735,9 @@ code {
 }
 
 .copy-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     margin-left: var(--spacing-xs);
     padding: 1px 5px;
     border: 1px solid var(--border-medium);
@@ -743,7 +746,7 @@ code {
     color: var(--text-secondary);
     cursor: pointer;
     font-size: 0.75rem;
-    line-height: 1.2;
+    line-height: 1;
     vertical-align: middle;
 }
 
