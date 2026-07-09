@@ -223,6 +223,15 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         expect(Buffer.from(blocks, 'base64').length).toBe(4 * 32);
     });
 
+    it('prefetches every bloom filter to warm the reader block cache', async () => {
+        // 13 row groups x 10 columns, each with a populated bloom filter, so a
+        // prefetch warms 130 filters. Returns how many it read.
+        const bytes = new Uint8Array(readFileSync(fixturePath('weather_station_daily.parquet')));
+        expectValidDump(await parse(bytes, 'weather_station_daily.parquet'));
+        const warmed = await parse.prefetchBlooms();
+        expect(warmed).toBe(130);
+    });
+
     it('previews a data page of decoded values from the current-file slot', async () => {
         const bloomFile = new Uint8Array(
             readFileSync(fixturePath('data_index_bloom_encoding_with_length.parquet'))

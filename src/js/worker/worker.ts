@@ -81,6 +81,14 @@ ctx.addEventListener('message', event => {
         getParser(req.manifestUrl).catch(() => {});
         return;
     }
+    if (req.prefetchBlooms) {
+        // Fire-and-forget: warm the loaded file's bloom byte ranges. No response;
+        // failures are non-fatal (the first probe just pays the range fetch).
+        getParser(req.manifestUrl)
+            .then(parser => parser.prefetchBlooms())
+            .catch(() => {});
+        return;
+    }
     void (async () => {
         try {
             const parser = await getParser(req.manifestUrl);
