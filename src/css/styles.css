@@ -60,6 +60,12 @@
     --column-index-medium: #32cd32;
     --column-index-dark: #228b22;
 
+    /* Bloom filters — a distinct yellow/gold ramp so they don't read as data
+       pages (which are green), with light/medium/dark for neighbor alternation. */
+    --bloom-filter-light: #f9e79f;
+    --bloom-filter-medium: #f4d03f;
+    --bloom-filter-dark: #b7950b;
+
     /* Generic */
     --generic-segment-color: #85929e;
 
