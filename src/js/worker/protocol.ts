@@ -1,5 +1,10 @@
 /** Message shapes exchanged between main thread and the parquet worker. */
-import type { BloomProbeResult, DictionaryPreviewResult, PreviewResult } from './pyodide-parquet';
+import type {
+    BloomDensityResult,
+    BloomProbeResult,
+    DictionaryPreviewResult,
+    PreviewResult,
+} from './pyodide-parquet';
 
 interface ParseRequestBase {
     id: number;
@@ -10,6 +15,7 @@ interface ParseRequestBase {
     probe?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
+    bloomDensity?: undefined;
     boot?: undefined;
 }
 
@@ -24,6 +30,7 @@ export interface WarmupRequest {
     probe?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
+    bloomDensity?: undefined;
     boot?: undefined;
 }
 
@@ -54,6 +61,25 @@ export interface ProbeBloomRequest {
     warmup?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
+    bloomDensity?: undefined;
+    boot?: undefined;
+    bytes?: undefined;
+    url?: undefined;
+}
+
+/**
+ * Read a column chunk's whole bloom filter and reduce it to a density strip in
+ * the worker's current file. Returns the block count, overall fill, and the
+ * per-bucket fill fractions (BloomDensityResult).
+ */
+export interface BloomDensityRequest {
+    id: number;
+    manifestUrl: string;
+    bloomDensity: { rowGroup: number; column: string };
+    warmup?: undefined;
+    probe?: undefined;
+    preview?: undefined;
+    dictionaryPreview?: undefined;
     boot?: undefined;
     bytes?: undefined;
     url?: undefined;
@@ -79,6 +105,7 @@ export interface PreviewRequest {
     warmup?: undefined;
     probe?: undefined;
     dictionaryPreview?: undefined;
+    bloomDensity?: undefined;
     boot?: undefined;
     bytes?: undefined;
     url?: undefined;
@@ -97,6 +124,7 @@ export interface DictionaryPreviewRequest {
     warmup?: undefined;
     probe?: undefined;
     preview?: undefined;
+    bloomDensity?: undefined;
     boot?: undefined;
     bytes?: undefined;
     url?: undefined;
@@ -115,6 +143,7 @@ export interface BootRequest {
     probe?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
+    bloomDensity?: undefined;
     bytes?: undefined;
     url?: undefined;
 }
@@ -123,6 +152,7 @@ export interface BootRequest {
 export type WorkerRequest =
     | ParseRequest
     | ProbeBloomRequest
+    | BloomDensityRequest
     | PreviewRequest
     | DictionaryPreviewRequest
     | BootRequest
@@ -133,6 +163,7 @@ export interface ParseSuccess {
     ok: true;
     dump: string;
     bloomProbe?: undefined;
+    bloomDensity?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
     booted?: undefined;
@@ -145,6 +176,19 @@ export interface ProbeBloomSuccess {
      *  (false is exact absence, true is only ever a maybe). */
     bloomProbe: BloomProbeResult;
     dump?: undefined;
+    bloomDensity?: undefined;
+    preview?: undefined;
+    dictionaryPreview?: undefined;
+    booted?: undefined;
+}
+
+export interface BloomDensitySuccess {
+    id: number;
+    ok: true;
+    /** The whole filter reduced to a density strip (blocks, fill, buckets). */
+    bloomDensity: BloomDensityResult;
+    dump?: undefined;
+    bloomProbe?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
     booted?: undefined;
@@ -156,6 +200,7 @@ export interface PreviewSuccess {
     preview: PreviewResult;
     dump?: undefined;
     bloomProbe?: undefined;
+    bloomDensity?: undefined;
     dictionaryPreview?: undefined;
     booted?: undefined;
 }
@@ -166,6 +211,7 @@ export interface DictionaryPreviewSuccess {
     dictionaryPreview: DictionaryPreviewResult;
     dump?: undefined;
     bloomProbe?: undefined;
+    bloomDensity?: undefined;
     preview?: undefined;
     booted?: undefined;
 }
@@ -177,6 +223,7 @@ export interface BootSuccess {
     booted: true;
     dump?: undefined;
     bloomProbe?: undefined;
+    bloomDensity?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
 }
@@ -217,6 +264,7 @@ export interface ProgressEvent {
 export type WorkerResponse =
     | ParseSuccess
     | ProbeBloomSuccess
+    | BloomDensitySuccess
     | PreviewSuccess
     | DictionaryPreviewSuccess
     | BootSuccess

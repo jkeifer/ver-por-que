@@ -90,6 +90,12 @@ ctx.addEventListener('message', event => {
                 ctx.postMessage({ id: req.id, ok: true, bloomProbe });
                 return;
             }
+            if (req.bloomDensity) {
+                const { rowGroup, column } = req.bloomDensity;
+                const bloomDensity = await parser.bloomDensity(rowGroup, column);
+                ctx.postMessage({ id: req.id, ok: true, bloomDensity });
+                return;
+            }
             if (req.preview) {
                 const { rowGroup, column, pageIndex, offset, limit, skipNulls } = req.preview;
                 const preview = await parser.preview(

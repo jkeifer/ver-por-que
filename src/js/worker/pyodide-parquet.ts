@@ -95,6 +95,19 @@ export interface BloomProbeResult {
     bits: BloomProbeBit[];
 }
 
+/**
+ * A column chunk's whole bloom filter as a density strip: `numBlocks` 256-bit
+ * blocks, the overall `fill` (fraction of all bits set, in [0,1]), and `buckets`
+ * — per-block fill when there are ≤512 blocks, else the blocks partitioned into
+ * 512 contiguous buckets (each a fraction in [0,1]). Empty (numBlocks 0) filters
+ * come back with fill 0 and no buckets.
+ */
+export interface BloomDensityResult {
+    numBlocks: number;
+    fill: number;
+    buckets: number[];
+}
+
 /** One dictionary entry: a distinct value and its position in the dictionary. */
 export interface DictionaryEntry {
     value: PreviewValue;
@@ -121,6 +134,13 @@ export interface ParquetParser {
      * file is loaded, the chunk has no bloom filter, or the type can't probe.
      */
     probeBloom(rowGroup: number, column: string, value: string): Promise<BloomProbeResult>;
+    /**
+     * Reads a column chunk's whole bloom filter and reduces it to a density
+     * strip: the block count, overall fill, and up to 512 per-bucket fill
+     * fractions (one per block when small, else contiguous groups). Same
+     * current-file contract as probeBloom.
+     */
+    bloomDensity(rowGroup: number, column: string): Promise<BloomDensityResult>;
     /**
      * Decodes a window of data page `pageIndex` in column chunk (`rowGroup`,
      * `column`) of the most recently parsed file, starting at value index
@@ -304,6 +324,42 @@ async def _probe_bloom(row_group, column, value):
         'numBlocks': num_blocks,
         'block': base64.b64encode(block).decode('ascii'),
         'bits': bits,
+    })
+
+async def _bloom_density(row_group, column):
+    # Reduce the whole filter to a density strip: per 256-bit block, the fraction
+    # of set bits. With <=512 blocks it's one bucket per block; a bigger filter
+    # is partitioned into 512 contiguous buckets so the strip stays a fixed width
+    # (each bucket = set bits over its blocks / that group's bit capacity).
+    if _current is None:
+        raise RuntimeError('no parquet file is loaded in this worker')
+    pf, reader = _current
+    chunk = pf.metadata.row_groups[row_group].column_chunks[column]
+    bloom = await BloomFilter.from_reader(ensure_async_reader(reader), chunk)
+    num_blocks = bloom.num_blocks
+    if num_blocks == 0:
+        return json.dumps({'numBlocks': 0, 'fill': 0.0, 'buckets': []})
+    bitset = bloom.bitset
+    # popcount per block via int.from_bytes(...).bit_count() (256-bit ints).
+    block_bits = [
+        int.from_bytes(bytes(bitset[i * 32:i * 32 + 32]), 'big').bit_count()
+        for i in range(num_blocks)
+    ]
+    total_set = sum(block_bits)
+    if num_blocks <= 512:
+        buckets = [b / 256 for b in block_bits]
+    else:
+        num_buckets = 512
+        buckets = []
+        for k in range(num_buckets):
+            start = (k * num_blocks) // num_buckets
+            end = ((k + 1) * num_blocks) // num_buckets
+            span = end - start
+            buckets.append(sum(block_bits[start:end]) / (span * 256) if span else 0.0)
+    return json.dumps({
+        'numBlocks': num_blocks,
+        'fill': total_set / (num_blocks * 256),
+        'buckets': buckets,
     })
 
 _MAX_SAFE_INTEGER = 2**53 - 1  # Number.MAX_SAFE_INTEGER
@@ -521,6 +577,10 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         column: string,
         value: string
     ) => Promise<string>;
+    const bloomDensity = pyodide.globals.get('_bloom_density') as (
+        rowGroup: number,
+        column: string
+    ) => Promise<string>;
     const preview = pyodide.globals.get('_preview') as (
         rowGroup: number,
         column: string,
@@ -625,6 +685,8 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
     return Object.assign(parse, {
         probeBloom: async (rowGroup: number, column: string, value: string) =>
             JSON.parse(await probeBloom(rowGroup, column, value)) as BloomProbeResult,
+        bloomDensity: async (rowGroup: number, column: string) =>
+            JSON.parse(await bloomDensity(rowGroup, column)) as BloomDensityResult,
         // Values cross the boundary as a JSON string: strings/numbers survive
         // pyodide proxying, but this keeps the conversion rules in one place
         // (python's _json_safe) and the payload copy-free.
