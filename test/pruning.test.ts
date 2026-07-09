@@ -71,6 +71,19 @@ describe('evaluate — row groups (footer statistics)', () => {
         expect(evaluate(dump, [p('gt', 'Hello')]).rowGroups.get(0)!.pruned).toBe(false);
         expect(evaluate(dump, [p('gte', 'today')]).rowGroups.get(0)!.pruned).toBe(false);
         expect(evaluate(dump, [p('gte', 'zzz')]).rowGroups.get(0)!.pruned).toBe(true);
+        // ≠ never prunes a real range (min != max): some value differs from it.
+        expect(evaluate(dump, [p('ne', 'Hello')]).rowGroups.get(0)!.pruned).toBe(false);
+    });
+
+    it('prunes ≠ only for a single-point range equal to the value', () => {
+        const clone = structuredClone(dump);
+        const stats = clone.metadata.row_groups[0]!.column_chunks['String']!.metadata.statistics!;
+        stats.max_value = stats.min_value; // collapse the range to min == max == 'Hello'
+        const d = evaluate(clone, [p('ne', 'Hello')]).rowGroups.get(0)!;
+        expect(d.pruned).toBe(true);
+        expect(d.reason).toContain('every value equals');
+        // A different value against the same single point is still kept.
+        expect(evaluate(clone, [p('ne', 'today')]).rowGroups.get(0)!.pruned).toBe(false);
     });
 
     it('reports missing statistics honestly', () => {
