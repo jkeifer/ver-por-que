@@ -10,6 +10,7 @@ import { isParquet, isParquetURL, httpUrlOrNull } from './detect';
 import { validateFile, validateMetadata, type ValidationError } from './generated/validate';
 import { fetchBytes } from './js/fetch-progress';
 import { getHashParam, setHashParam } from './js/permalink';
+import { loadStoredFile, saveStoredFile, clearStoredFiles } from './js/storage';
 import { parseQueryState, type QueryState } from './business/pruning';
 import { isSet, project, type SegmentNode } from './business/segment-tree';
 import type { Resolution } from './business/query-model';
@@ -17,8 +18,6 @@ import { ParquetWorkerClient } from './js/worker/client';
 import type { AnyDump } from './types';
 import { BUILD_INFO } from './build-info.js';
 import samples from '../samples.json';
-
-const DB_NAME = 'ParquetExplorerDB';
 
 /** A sample card: title/desc/meta + the dump URL it loads and its attribution. */
 interface Sample {
@@ -31,13 +30,6 @@ interface Sample {
 
 /** The two renderers over the same segment tree. 'bytes' is the default. */
 type Lens = 'bytes' | 'treemap';
-
-interface StoredFile {
-    id: string;
-    data: AnyDump;
-    source: string;
-    timestamp: number;
-}
 
 class ParquetExplorer {
     private parquetData: AnyDump | null = null;
@@ -426,7 +418,7 @@ class ParquetExplorer {
         this.parquetData = data;
         this.capabilities = capabilities;
         this.hydrateFromSource();
-        await this.saveToStorage(data, source);
+        await saveStoredFile(data, source);
 
         this.showExplorer();
         this.populateUI();
@@ -691,7 +683,7 @@ class ParquetExplorer {
         this.updateLensButtons();
         // A permalink is meaningless with no dump loaded (lens and query included).
         history.replaceState(null, '', location.pathname + location.search);
-        await this.clearStorage();
+        await clearStoredFiles();
         this.clearFileStructureContent();
         this.showFileInput();
     }
@@ -800,7 +792,7 @@ class ParquetExplorer {
 
     private async tryLoadFromStorage(): Promise<void> {
         try {
-            const storedFile = await this.loadFromIndexedDB();
+            const storedFile = await loadStoredFile();
             if (storedFile) {
                 this.parquetData = storedFile.data;
                 this.hydrateFromSource();
@@ -809,119 +801,8 @@ class ParquetExplorer {
             }
         } catch (error) {
             console.warn('Failed to load from IndexedDB:', error);
-            void this.clearStorage();
+            void clearStoredFiles();
         }
-    }
-
-    private openDB(): Promise<IDBDatabase> {
-        return new Promise((resolve, reject) => {
-            const request = indexedDB.open(DB_NAME, 1);
-
-            request.onerror = () => reject(request.error);
-
-            request.onupgradeneeded = event => {
-                const db = (event.target as IDBOpenDBRequest).result;
-                if (!db.objectStoreNames.contains('files')) {
-                    db.createObjectStore('files', { keyPath: 'id' });
-                }
-            };
-
-            request.onsuccess = () => resolve(request.result);
-        });
-    }
-
-    private async withStore<T>(
-        mode: IDBTransactionMode,
-        run: (store: IDBObjectStore) => IDBRequest<T>
-    ): Promise<T> {
-        const db = await this.openDB();
-        return new Promise<T>((resolve, reject) => {
-            const request = run(db.transaction(['files'], mode).objectStore('files'));
-            request.onsuccess = () => {
-                db.close();
-                resolve(request.result);
-            };
-            request.onerror = () => {
-                db.close();
-                reject(request.error);
-            };
-        });
-    }
-
-    private async loadFromIndexedDB(): Promise<StoredFile | null> {
-        let db: IDBDatabase;
-        try {
-            db = await this.openDB();
-        } catch {
-            return null;
-        }
-
-        // onupgradeneeded only fires on a version bump, so a pre-existing v1 DB
-        // that somehow lost the 'files' store won't get it recreated by openDB.
-        // Recover by deleting the DB so the next open rebuilds it clean.
-        if (!db.objectStoreNames.contains('files')) {
-            db.close();
-            return new Promise(resolve => {
-                const deleteRequest = indexedDB.deleteDatabase(DB_NAME);
-                deleteRequest.onsuccess = () => resolve(null);
-                deleteRequest.onerror = () => resolve(null);
-            });
-        }
-
-        return new Promise(resolve => {
-            try {
-                const getRequest = db
-                    .transaction(['files'], 'readonly')
-                    .objectStore('files')
-                    .get('current-file');
-                getRequest.onsuccess = () => {
-                    db.close();
-                    resolve((getRequest.result as StoredFile | undefined) ?? null);
-                };
-                getRequest.onerror = () => {
-                    db.close();
-                    resolve(null);
-                };
-            } catch {
-                db.close();
-                resolve(null);
-            }
-        });
-    }
-
-    private async saveToStorage(data: AnyDump, source: string): Promise<void> {
-        try {
-            await this.saveToIndexedDB(data, source);
-        } catch (error) {
-            console.warn('Failed to save to IndexedDB:', error);
-        }
-    }
-
-    private async saveToIndexedDB(data: AnyDump, source: string): Promise<void> {
-        const fileData: StoredFile = {
-            id: 'current-file',
-            data: data,
-            source: source,
-            timestamp: Date.now(),
-        };
-        await this.withStore('readwrite', store => store.put(fileData));
-    }
-
-    private async clearStorage(): Promise<void> {
-        try {
-            await this.clearIndexedDB();
-        } catch (error) {
-            console.warn('Failed to clear IndexedDB:', error);
-        }
-    }
-
-    private clearIndexedDB(): Promise<void> {
-        return new Promise(resolve => {
-            const deleteRequest = indexedDB.deleteDatabase(DB_NAME);
-            deleteRequest.onsuccess = () => resolve();
-            deleteRequest.onerror = () => resolve();
-            deleteRequest.onblocked = () => resolve();
-        });
     }
 }
 
