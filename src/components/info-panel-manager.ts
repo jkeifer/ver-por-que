@@ -24,7 +24,13 @@ import {
 } from '../business/segment-tree';
 import { base64Bytes, formatStatValue, parsePredicateValue } from '../business/stat-values';
 import { describeWkb, wkbToGeoJson } from '../business/wkb';
-import type { PreviewEntry, PreviewResult, PreviewValue } from '../js/worker/pyodide-parquet';
+import type {
+    DictionaryEntry,
+    DictionaryPreviewResult,
+    PreviewEntry,
+    PreviewResult,
+    PreviewValue,
+} from '../js/worker/pyodide-parquet';
 import type {
     AnyDump,
     ColumnMetadata,
@@ -99,6 +105,18 @@ export type ValuePreview = (
     limit: number,
     skipNulls: boolean
 ) => Promise<PreviewResult>;
+
+/**
+ * Decodes a window of a column chunk's dictionary page (its distinct values) in
+ * the worker's current file, from entry `offset`. Only raw-parquet loads have
+ * one, same lifecycle as ValuePreview.
+ */
+export type DictionaryPreview = (
+    rowGroup: number,
+    column: string,
+    offset: number,
+    limit: number
+) => Promise<DictionaryPreviewResult>;
 
 /** Long values are cut with an ellipsis in the preview list. */
 const PREVIEW_VALUE_MAX_CHARS = 80;
@@ -178,6 +196,26 @@ interface PreviewWindowView {
     onNext: () => void;
 }
 
+/** "1–100 of 5,000 values" window-range label (empty page reads "0 values"). */
+function previewRange(start: number, next: number, total: number): string {
+    return total === 0
+        ? '0 values'
+        : `${formatNumber(start + 1)}–${formatNumber(next)} of ${formatNumber(total)} ` +
+              `value${total === 1 ? '' : 's'}`;
+}
+
+/** Prev/Next pager buttons, or '' when neither direction is available. */
+function pagerButtons(canPrev: boolean, canNext: boolean): string {
+    if (!canPrev && !canNext) {
+        return '';
+    }
+    return (
+        `<div class="value-preview-buttons">` +
+        `<button type="button" class="btn btn-sm value-preview-prev"${canPrev ? '' : ' disabled'}>‹ Prev</button>` +
+        `<button type="button" class="btn btn-sm value-preview-next"${canNext ? '' : ' disabled'}>Next ›</button></div>`
+    );
+}
+
 /**
  * Fills `result` with one window of a page's values (scrollable table, frozen
  * header, zebra rows) and a footer that pairs the range/count text and the
@@ -188,26 +226,13 @@ interface PreviewWindowView {
  */
 function renderPreviewWindow(result: HTMLElement, view: PreviewWindowView): void {
     const { entries, start, next, total, nulls, hideNulls } = view;
-    const range =
-        total === 0
-            ? '0 values'
-            : `${formatNumber(start + 1)}–${formatNumber(next)} of ${formatNumber(total)} ` +
-              `value${total === 1 ? '' : 's'}`;
+    const range = previewRange(start, next, total);
     const info = nulls > 0 ? `${range} · ${formatNumber(nulls)} null` : range;
     const toggle =
         nulls > 0
             ? `<label class="value-preview-filter">` +
               `<input type="checkbox" class="value-preview-hide-nulls"${hideNulls ? ' checked' : ''}> ` +
               `hide nulls</label>`
-            : '';
-    const canNext = next < total;
-    const buttons =
-        view.canPrev || canNext
-            ? `<div class="value-preview-buttons">` +
-              `<button type="button" class="btn btn-sm value-preview-prev"` +
-              `${view.canPrev ? '' : ' disabled'}>‹ Prev</button>` +
-              `<button type="button" class="btn btn-sm value-preview-next"` +
-              `${canNext ? '' : ' disabled'}>Next ›</button></div>`
             : '';
     result.innerHTML =
         `<div class="value-preview-table-wrap"><table class="value-preview-table">` +
@@ -216,12 +241,49 @@ function renderPreviewWindow(result: HTMLElement, view: PreviewWindowView): void
         `<tbody>${renderPreviewRows(entries, view.isWkb)}</tbody></table></div>` +
         `<div class="value-preview-pager">` +
         `<div class="value-preview-info"><span class="value-preview-range">${info}</span>${toggle}</div>` +
-        `${buttons}</div>`;
+        `${pagerButtons(view.canPrev, next < total)}</div>`;
     result
         .querySelector<HTMLInputElement>('.value-preview-hide-nulls')
         ?.addEventListener('change', e =>
             view.onToggleNulls((e.target as HTMLInputElement).checked)
         );
+    result.querySelector('.value-preview-prev')?.addEventListener('click', () => view.onPrev());
+    result.querySelector('.value-preview-next')?.addEventListener('click', () => view.onNext());
+}
+
+/**
+ * One window of dictionary entries as a `# | Value` table with a pager. Simpler
+ * than renderPreviewWindow: a dictionary has no def/rep levels and no nulls, so
+ * no level columns and no hide-nulls toggle, and paging is plain arithmetic.
+ */
+function renderDictionaryWindow(
+    result: HTMLElement,
+    view: {
+        entries: DictionaryEntry[];
+        start: number;
+        next: number;
+        total: number;
+        canPrev: boolean;
+        isWkb: boolean;
+        onPrev: () => void;
+        onNext: () => void;
+    }
+): void {
+    const rows = view.entries
+        .map(
+            e =>
+                `<tr><td class="value-preview-index">${e.index}</td>` +
+                `<td class="value-preview-value">${previewValueCell(e.value, view.isWkb)}</td></tr>`
+        )
+        .join('');
+    result.innerHTML =
+        `<div class="value-preview-table-wrap"><table class="value-preview-table">` +
+        `<thead><tr><th>#</th><th>Value</th></tr></thead>` +
+        `<tbody>${rows}</tbody></table></div>` +
+        `<div class="value-preview-pager">` +
+        `<div class="value-preview-info"><span class="value-preview-range">` +
+        `${previewRange(view.start, view.next, view.total)}</span></div>` +
+        `${pagerButtons(view.canPrev, view.next < view.total)}</div>`;
     result.querySelector('.value-preview-prev')?.addEventListener('click', () => view.onPrev());
     result.querySelector('.value-preview-next')?.addEventListener('click', () => view.onNext());
 }
@@ -1038,6 +1100,8 @@ export class InfoPanelManager {
     private bloomProbe: BloomProbe | null;
     /** Live value decoder; null for JSON-dump / metadata-only loads. */
     private valuePreview: ValuePreview | null;
+    /** Live dictionary decoder; same lifecycle as valuePreview. */
+    private dictionaryPreview: DictionaryPreview | null;
     /** Recovery actions for degraded cards; both null when no fetchable source. */
     private recovery: RecoveryActions;
     /** Active query resolution, or null when no predicate has run. */
@@ -1049,12 +1113,14 @@ export class InfoPanelManager {
         container: HTMLElement,
         bloomProbe: BloomProbe | null = null,
         valuePreview: ValuePreview | null = null,
+        dictionaryPreview: DictionaryPreview | null = null,
         recovery: RecoveryActions = { loadFullStructure: null, downloadFullFile: null }
     ) {
         this.container = container;
         this.container.innerHTML = '';
         this.bloomProbe = bloomProbe;
         this.valuePreview = valuePreview;
+        this.dictionaryPreview = dictionaryPreview;
         this.recovery = recovery;
         this.infoPanel = document.createElement('div');
         this.infoPanel.className = 'info-panel';
@@ -1162,6 +1228,12 @@ export class InfoPanelManager {
                 rows: [['Detail', VALUE_PREVIEW_UNAVAILABLE_NOTE]],
             });
         }
+        if (node.kind === 'dictionary_page' && !this.dictionaryPreview) {
+            sections.push({
+                title: 'Dictionary Values',
+                rows: [['Detail', VALUE_PREVIEW_UNAVAILABLE_NOTE]],
+            });
+        }
         this.infoPanel.style.display = 'block';
         this.infoPanel.innerHTML = `<h3>${heading}</h3><div class="info-sections">${sections
             .map(s => this.renderSection(s))
@@ -1185,6 +1257,13 @@ export class InfoPanelManager {
             this.infoPanel
                 .querySelector('.info-sections')!
                 .appendChild(this.buildValuePreviewSection(preview, isWkb));
+        }
+        if (node.kind === 'dictionary_page' && this.dictionaryPreview) {
+            const leaf = findSchemaLeaf(dump.metadata.schema_root, node.path);
+            const isWkb = isWkbColumn(leaf, geoparquetColumns(dump)[node.path]);
+            this.infoPanel
+                .querySelector('.info-sections')!
+                .appendChild(this.buildDictionaryPreviewSection(node.rowGroup, node.path, isWkb));
         }
         // Query section last: it anchors before the interactive sections above,
         // matching where a later setQuery will re-insert it.
@@ -1257,24 +1336,82 @@ export class InfoPanelManager {
                         },
                     });
                 },
-                (error: unknown) => {
-                    if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
-                        button.remove();
-                        result.innerHTML = '';
-                        this.appendRecovery(
-                            result,
-                            RANGE_UNSUPPORTED_MESSAGE,
-                            'Download full file',
-                            this.recovery.downloadFullFile
-                        );
+                (error: unknown) => this.handlePreviewError(error, result, button)
+            );
+        };
+        button.addEventListener('click', () => {
+            button.disabled = true;
+            result.textContent = 'Decoding values...';
+            load(0);
+        });
+        return section;
+    }
+
+    /**
+     * Shared failure handler for the value/dictionary previews: a
+     * range-unsupported error offers a full-file download; anything else shows
+     * the (retryable) failure and re-enables the button.
+     */
+    private handlePreviewError(
+        error: unknown,
+        result: HTMLElement,
+        button: HTMLButtonElement
+    ): void {
+        if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
+            button.remove();
+            result.innerHTML = '';
+            this.appendRecovery(
+                result,
+                RANGE_UNSUPPORTED_MESSAGE,
+                'Download full file',
+                this.recovery.downloadFullFile
+            );
+            return;
+        }
+        // Pyodide errors embed the python traceback; the last line is the actual
+        // exception. Keep the button so it's retryable.
+        const message = (error as Error).message.trim();
+        button.disabled = false;
+        result.textContent = `Preview failed: ${message.split('\n').pop()!}`;
+    }
+
+    /** Interactive dictionary preview: decode this chunk's distinct values on demand. */
+    private buildDictionaryPreviewSection(
+        rowGroup: number,
+        column: string,
+        isWkb: boolean
+    ): HTMLElement {
+        const section = document.createElement('div');
+        section.className = 'info-section large-card value-preview-section';
+        section.innerHTML =
+            `<h5 class="info-section-title">Dictionary Values</h5>` +
+            `<button type="button" class="btn btn-sm value-preview-btn">Preview dictionary values</button>` +
+            `<div class="value-preview-result"></div>`;
+        const button = section.querySelector<HTMLButtonElement>('.value-preview-btn')!;
+        const result = section.querySelector<HTMLElement>('.value-preview-result')!;
+        // Dictionary paging is plain arithmetic (no null-skip): the window at
+        // `offset` is [offset, offset+PREVIEW_PAGE_SIZE). The dictionary is
+        // decoded once worker-side, so later pages are local and can't fail.
+        const load = (offset: number): void => {
+            this.dictionaryPreview!(rowGroup, column, offset, PREVIEW_PAGE_SIZE).then(
+                res => {
+                    button.remove();
+                    if (res.error !== undefined) {
+                        result.innerHTML = renderPreviewFailure(res.codec);
                         return;
                     }
-                    // Pyodide errors embed the python traceback; the last line
-                    // is the actual exception. Keep the button so it's retryable.
-                    const message = (error as Error).message.trim();
-                    button.disabled = false;
-                    result.textContent = `Preview failed: ${message.split('\n').pop()!}`;
-                }
+                    renderDictionaryWindow(result, {
+                        entries: res.values,
+                        start: offset,
+                        next: res.next,
+                        total: res.total,
+                        canPrev: offset > 0,
+                        isWkb,
+                        onPrev: () => load(Math.max(0, offset - PREVIEW_PAGE_SIZE)),
+                        onNext: () => load(res.next),
+                    });
+                },
+                (error: unknown) => this.handlePreviewError(error, result, button)
             );
         };
         button.addEventListener('click', () => {
