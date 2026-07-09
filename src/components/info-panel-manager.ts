@@ -206,9 +206,11 @@ function renderBloomBlock(res: BloomProbeResult): string {
  * A single value cell: NULL is explicit; long values ellipsize with a copy
  * button for the full value. A GEOMETRY/GEOGRAPHY cell (raw WKB as base64) is
  * shown as a summary with a copy button that yields the full GeoJSON geometry;
- * WKB that won't parse falls back to the plain-string path (never mangled).
+ * WKB that won't parse falls back to the plain-string path (never mangled). When
+ * a `physical` value is given (a logical column displays a converted value), a
+ * second button copies the raw physical value the bloom probe hashes.
  */
-function previewValueCell(value: PreviewValue, isWkb = false): string {
+function previewValueCell(value: PreviewValue, isWkb = false, physical?: PreviewValue): string {
     if (value === null) {
         return '<span class="value-preview-null">NULL</span>';
     }
@@ -220,11 +222,17 @@ function previewValueCell(value: PreviewValue, isWkb = false): string {
             return escapeHtml(summary) + copyGeoJsonButton(value);
         }
     }
+    const physicalBtn =
+        physical === undefined || physical === null
+            ? ''
+            : copyButton(String(physical), 'Copy physical value (for the probe)');
     const s = String(value);
     if (s.length > PREVIEW_VALUE_MAX_CHARS) {
-        return escapeHtml(`${s.slice(0, PREVIEW_VALUE_MAX_CHARS - 1)}…`) + copyButton(s);
+        return (
+            escapeHtml(`${s.slice(0, PREVIEW_VALUE_MAX_CHARS - 1)}…`) + copyButton(s) + physicalBtn
+        );
     }
-    return escapeHtml(s);
+    return escapeHtml(s) + physicalBtn;
 }
 
 /** tbody rows; `#` is each value's own absolute page index (sparse under null-skip). */
@@ -233,7 +241,7 @@ function renderPreviewRows(entries: PreviewEntry[], isWkb: boolean): string {
         .map(
             entry =>
                 `<tr><td class="value-preview-index">${entry.index}</td>` +
-                `<td class="value-preview-value">${previewValueCell(entry.value, isWkb)}</td>` +
+                `<td class="value-preview-value">${previewValueCell(entry.value, isWkb, entry.physical)}</td>` +
                 `<td class="value-preview-level">${entry.def}</td>` +
                 `<td class="value-preview-level">${entry.rep}</td></tr>`
         )

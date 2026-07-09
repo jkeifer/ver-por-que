@@ -54,6 +54,10 @@ export interface PreviewEntry {
     def: number;
     rep: number;
     index: number;
+    /** The raw physical value, present only when it differs from the displayed
+     *  (logically converted) `value` — i.e. logical types. It's what the bloom
+     *  probe hashes, so the UI offers it for copy. */
+    physical?: PreviewValue;
 }
 
 /**
@@ -330,11 +334,36 @@ async def _preview(row_group, column, page_index, offset, limit, skip_nulls):
         _, _, _, values, nulls = _preview_cache
     else:
         reader, chunk = _find_data_chunk(row_group, column)
+        se = chunk.metadata.schema_element
         values = []
         nulls = 0
         try:
-            for value, def_level, rep_level in await chunk.parse_data_page(page_index, reader):
-                values.append({'value': _json_safe(value), 'def': def_level, 'rep': rep_level})
+            # Decode the page twice: once logical (what we display) and once
+            # physical (logical conversion skipped) -- the raw value the bloom
+            # probe hashes. They differ only for logical types (temporal, ...),
+            # so 'physical' is carried only then, letting a user copy the
+            # probe-ready value. If the exclusion doesn't match, the physical
+            # pass just equals the logical one and nothing is carried (graceful).
+            # ponytail: the second decode is wasted for plain columns; it's
+            # one-time per page (the decoded page is cached below).
+            logical_rows = list(await chunk.parse_data_page(page_index, reader))
+            physical_rows = list(
+                await chunk.parse_data_page(
+                    page_index, reader, excluded_logical_columns=[se.full_path]
+                )
+            )
+            for (value, def_level, rep_level), phys_row in zip(logical_rows, physical_rows):
+                entry = {'value': _json_safe(value), 'def': def_level, 'rep': rep_level}
+                raw = phys_row[0]
+                # Offer the physical value only for numeric-backed logical types
+                # (temporal, decimal, ...), where the display differs from the
+                # integer the probe hashes. Byte-array strings decode to
+                # themselves -- exactly what you'd type -- so they get no button.
+                if isinstance(raw, (int, float)) and not isinstance(raw, bool):
+                    physical = _json_safe(raw)
+                    if physical != entry['value']:
+                        entry['physical'] = physical
+                values.append(entry)
                 if value is None:
                     nulls += 1
         except ParquetDataError as error:

@@ -222,6 +222,9 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         expect(page.values).toHaveLength(14);
         expect(page.values.slice(0, 3).map(v => v.value)).toEqual(['Hello', 'This is', 'a']);
         expect(page.values[13]!.value).toBe('dog');
+        // A string column's value IS what you'd probe, so no physical overlay
+        // (the raw bytes are not offered as a misleading base64 copy).
+        expect(page.values.every(v => v.physical === undefined)).toBe(true);
         // Every value carries its Dremel definition + repetition levels.
         expect(page.values.every(v => typeof v.def === 'number' && typeof v.rep === 'number')).toBe(
             true
@@ -270,6 +273,39 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         expect(skipped.values.map(v => v.index)).toEqual([0, 3]);
         expect(skipped.total).toBe(6);
         expect(skipped.next).toBe(6); // whole page consumed → range 1–6 of 6, no next page
+    });
+
+    it('previews a logical column with the raw physical value alongside', async () => {
+        const bytes = new Uint8Array(readFileSync(fixturePath('temporal.parquet')));
+        expectValidDump(await parse(bytes, 'temporal.parquet'));
+
+        // TIMESTAMP (INT64) displays an ISO datetime, but the bloom probe hashes
+        // the raw microseconds int; the preview carries both. The displayed
+        // string is localized (tz-naive), so assert only on the physical value.
+        const ts = await parse.preview(0, 'ts', 0, 0, 100, false);
+        if (ts.error !== undefined) {
+            throw new Error(`unexpected codec failure: ${ts.codec}`);
+        }
+        expect(ts.values[0]!.physical).toBe(1_609_459_200_000_000); // µs since epoch (UTC)
+        expect(typeof ts.values[0]!.value).toBe('string'); // the human datetime
+        expect(ts.values.every(v => typeof v.physical === 'number')).toBe(true);
+        expect(ts.values.every(v => v.value !== v.physical)).toBe(true);
+
+        // DATE (INT32) displays an ISO date; physical is the day count.
+        const d = await parse.preview(0, 'd', 0, 0, 100, false);
+        if (d.error !== undefined) {
+            throw new Error(`unexpected codec failure: ${d.codec}`);
+        }
+        expect(String(d.values[0]!.value)).toContain('2021-01-01');
+        expect(d.values[0]!.physical).toBe(18628); // days since epoch
+
+        // Plain string: display == what you'd type, so no physical overlay.
+        const s = await parse.preview(0, 's', 0, 0, 100, false);
+        if (s.error !== undefined) {
+            throw new Error(`unexpected codec failure: ${s.codec}`);
+        }
+        expect(s.values.map(v => v.value)).toEqual(['alpha', 'bravo', 'charlie']);
+        expect(s.values.every(v => v.physical === undefined)).toBe(true);
     });
 
     it('boots from a JSON dump + URL and probes via range reads, no re-parse', async () => {
