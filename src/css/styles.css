@@ -949,11 +949,11 @@ code {
 }
 
 .query-matrix {
-    table-layout: fixed;
-    /* Track the container both ways: columns grow to fill a wide page and
-       shrink on a narrow one. The nowrap row-head text is a natural floor —
-       past that the wrap's overflow-x scrolls. */
-    width: 100%;
+    /* Columns fill a wide page (min-width: 100%) but never shrink below the
+       per-cell floor (see .qm-cell min-width); a wide file with many columns
+       overflows the max-content table and the wrap's overflow-x scrolls. */
+    width: max-content;
+    min-width: 100%;
     border-collapse: collapse;
     font-family: var(--font-mono);
     font-size: 0.8rem;
@@ -1003,6 +1003,10 @@ code {
 .qm-cell {
     position: relative;
     height: 1.5rem;
+    /* Floor so columns never squish to a sliver on a wide file (many columns);
+       past it the matrix overflows and scrolls horizontally, and the bloom
+       marker keeps room to read. */
+    min-width: 2.25rem;
     border: 2px solid var(--bg-primary);
     border-radius: var(--border-radius);
 }
