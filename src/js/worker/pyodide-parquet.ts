@@ -68,6 +68,22 @@ export type PreviewResult =
     | { values: PreviewEntry[]; total: number; nulls: number; next: number; error?: undefined }
     | { error: 'codec_unavailable'; codec: string };
 
+/** One dictionary entry: a distinct value and its position in the dictionary. */
+export interface DictionaryEntry {
+    value: PreviewValue;
+    index: number;
+}
+
+/**
+ * Result of a dictionary preview: one window of a chunk's distinct values
+ * (`values`), the dictionary's total entry count (`total`), and `next` (one
+ * past this window). A dictionary has no def/rep levels and no nulls, so it
+ * carries neither. Or a typed codec failure, like PreviewResult.
+ */
+export type DictionaryPreviewResult =
+    | { values: DictionaryEntry[]; total: number; next: number; error?: undefined }
+    | { error: 'codec_unavailable'; codec: string };
+
 /** Parses parquet sources into por-que dump JSON, plus follow-up queries. */
 export interface ParquetParser {
     (source: ParquetSource, name: string): Promise<string>;
@@ -96,6 +112,18 @@ export interface ParquetParser {
         limit: number,
         skipNulls: boolean
     ): Promise<PreviewResult>;
+    /**
+     * Decodes a `[offset, offset+limit)` window of the dictionary page in column
+     * chunk (`rowGroup`, `column`) — the chunk's distinct values. Decoded once
+     * and cached, so paging never re-decodes. Codec-unavailable failures come
+     * back as a typed result, not a rejection.
+     */
+    previewDictionary(
+        rowGroup: number,
+        column: string,
+        offset: number,
+        limit: number
+    ): Promise<DictionaryPreviewResult>;
     /**
      * Rehydrates a full dump into the current-file slot and attaches a
      * range-reading reader at `url`, so bloom/preview work on a JSON-loaded
@@ -126,9 +154,15 @@ _current = None
 # pages bites, grow the cache lazily as the user pages instead of decoding whole.
 _preview_cache = None
 
+# Decoded-dictionary cache for dictionary-page previews: (row_group, column,
+# values). A chunk's dictionary is decoded once and pagination slices it, same
+# decode-once/slice-many contract as _preview_cache. Holds ONE dictionary.
+_dict_cache = None
+
 async def _set_current(pf, reader):
-    global _current, _preview_cache
+    global _current, _preview_cache, _dict_cache
     _preview_cache = None
+    _dict_cache = None
     if _current is not None:
         try:
             closing = _current[1].close()
@@ -216,6 +250,24 @@ def _json_safe(value):
         case _:
             return str(value)
 
+def _find_data_chunk(row_group, column):
+    # The physical column-chunk object (it carries the page parsers), matched by
+    # (row_group, path). Raises if no file is loaded or the column is absent.
+    if _current is None:
+        raise RuntimeError('no parquet file is loaded in this worker')
+    pf, reader = _current
+    chunk = next(
+        (
+            cc
+            for cc in pf.column_chunks
+            if cc.row_group == row_group and cc.path_in_schema == column
+        ),
+        None,
+    )
+    if chunk is None:
+        raise KeyError(f'no column chunk {column!r} in row group {row_group}')
+    return reader, chunk
+
 async def _preview(row_group, column, page_index, offset, limit, skip_nulls):
     # Decode-once, slice-many: the first request for a page decodes it whole and
     # caches it; pagination re-slices the cache. Only the requested window (plus
@@ -225,19 +277,7 @@ async def _preview(row_group, column, page_index, offset, limit, skip_nulls):
     if _preview_cache is not None and _preview_cache[:3] == (row_group, column, page_index):
         _, _, _, values, nulls = _preview_cache
     else:
-        if _current is None:
-            raise RuntimeError('no parquet file is loaded in this worker')
-        pf, reader = _current
-        chunk = next(
-            (
-                cc
-                for cc in pf.column_chunks
-                if cc.row_group == row_group and cc.path_in_schema == column
-            ),
-            None,
-        )
-        if chunk is None:
-            raise KeyError(f'no column chunk {column!r} in row group {row_group}')
+        reader, chunk = _find_data_chunk(row_group, column)
         values = []
         nulls = 0
         try:
@@ -274,6 +314,30 @@ async def _preview(row_group, column, page_index, offset, limit, skip_nulls):
         next_index = min(offset + limit, total)
         window = [{**values[i], 'index': i} for i in range(offset, next_index)]
     return json.dumps({'values': window, 'total': total, 'nulls': nulls, 'next': next_index})
+
+async def _preview_dictionary(row_group, column, offset, limit):
+    # A dictionary page is a flat list of the chunk's distinct values (no
+    # def/rep levels, no nulls), so paging is plain arithmetic over the decoded
+    # list. Decode-once/slice-many like _preview.
+    global _dict_cache
+    if _dict_cache is not None and _dict_cache[:2] == (row_group, column):
+        _, _, values = _dict_cache
+    else:
+        reader, chunk = _find_data_chunk(row_group, column)
+        try:
+            decoded = await chunk._parse_dictionary(reader)
+        except ParquetDataError as error:
+            # Same codec-unavailable (lzo) contract as _preview: a typed result,
+            # not a raise.
+            if 'requires' in str(error) and 'package' in str(error):
+                return json.dumps({'error': 'codec_unavailable', 'codec': chunk.codec.name})
+            raise
+        values = [_json_safe(v) for v in decoded]
+        _dict_cache = (row_group, column, values)
+    total = len(values)
+    next_index = min(offset + limit, total)
+    window = [{'value': values[i], 'index': i} for i in range(offset, next_index)]
+    return json.dumps({'values': window, 'total': total, 'next': next_index})
 `;
 
 /**
@@ -354,6 +418,12 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         offset: number,
         limit: number,
         skipNulls: boolean
+    ) => Promise<string>;
+    const previewDictionary = pyodide.globals.get('_preview_dictionary') as (
+        rowGroup: number,
+        column: string,
+        offset: number,
+        limit: number
     ) => Promise<string>;
     const bootFromDump = pyodide.globals.get('_boot_from_dump') as (
         dumpJson: string,
@@ -459,6 +529,15 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
             JSON.parse(
                 await preview(rowGroup, column, pageIndex, offset, limit, skipNulls)
             ) as PreviewResult,
+        previewDictionary: async (
+            rowGroup: number,
+            column: string,
+            offset: number,
+            limit: number
+        ) =>
+            JSON.parse(
+                await previewDictionary(rowGroup, column, offset, limit)
+            ) as DictionaryPreviewResult,
         bootFromDump: (dumpJson: string, url: string) => bootFromDump(dumpJson, url),
     });
 }

@@ -1,5 +1,5 @@
 /** Message shapes exchanged between main thread and the parquet worker. */
-import type { PreviewResult } from './pyodide-parquet';
+import type { DictionaryPreviewResult, PreviewResult } from './pyodide-parquet';
 
 interface ParseRequestBase {
     id: number;
@@ -9,6 +9,7 @@ interface ParseRequestBase {
     warmup?: undefined;
     probe?: undefined;
     preview?: undefined;
+    dictionaryPreview?: undefined;
     boot?: undefined;
 }
 
@@ -22,6 +23,7 @@ export interface WarmupRequest {
     manifestUrl: string;
     probe?: undefined;
     preview?: undefined;
+    dictionaryPreview?: undefined;
     boot?: undefined;
 }
 
@@ -51,6 +53,7 @@ export interface ProbeBloomRequest {
     probe: { rowGroup: number; column: string; value: string };
     warmup?: undefined;
     preview?: undefined;
+    dictionaryPreview?: undefined;
     boot?: undefined;
     bytes?: undefined;
     url?: undefined;
@@ -75,6 +78,25 @@ export interface PreviewRequest {
     };
     warmup?: undefined;
     probe?: undefined;
+    dictionaryPreview?: undefined;
+    boot?: undefined;
+    bytes?: undefined;
+    url?: undefined;
+}
+
+/**
+ * Decode one `[offset, offset+limit)` window of a column chunk's dictionary
+ * page (its distinct values) in the worker's current file. Decoded once and
+ * cached, like PreviewRequest. Codec-unavailable failures come back as a typed
+ * success payload (DictionaryPreviewResult), never an error response.
+ */
+export interface DictionaryPreviewRequest {
+    id: number;
+    manifestUrl: string;
+    dictionaryPreview: { rowGroup: number; column: string; offset: number; limit: number };
+    warmup?: undefined;
+    probe?: undefined;
+    preview?: undefined;
     boot?: undefined;
     bytes?: undefined;
     url?: undefined;
@@ -92,13 +114,19 @@ export interface BootRequest {
     warmup?: undefined;
     probe?: undefined;
     preview?: undefined;
+    dictionaryPreview?: undefined;
     bytes?: undefined;
     url?: undefined;
 }
 
 /** Everything the main thread can send to the worker. */
 export type WorkerRequest =
-    ParseRequest | ProbeBloomRequest | PreviewRequest | BootRequest | WarmupRequest;
+    | ParseRequest
+    | ProbeBloomRequest
+    | PreviewRequest
+    | DictionaryPreviewRequest
+    | BootRequest
+    | WarmupRequest;
 
 export interface ParseSuccess {
     id: number;
@@ -106,6 +134,7 @@ export interface ParseSuccess {
     dump: string;
     mightContain?: undefined;
     preview?: undefined;
+    dictionaryPreview?: undefined;
     booted?: undefined;
 }
 
@@ -116,6 +145,7 @@ export interface ProbeBloomSuccess {
     mightContain: boolean;
     dump?: undefined;
     preview?: undefined;
+    dictionaryPreview?: undefined;
     booted?: undefined;
 }
 
@@ -125,6 +155,17 @@ export interface PreviewSuccess {
     preview: PreviewResult;
     dump?: undefined;
     mightContain?: undefined;
+    dictionaryPreview?: undefined;
+    booted?: undefined;
+}
+
+export interface DictionaryPreviewSuccess {
+    id: number;
+    ok: true;
+    dictionaryPreview: DictionaryPreviewResult;
+    dump?: undefined;
+    mightContain?: undefined;
+    preview?: undefined;
     booted?: undefined;
 }
 
@@ -136,6 +177,7 @@ export interface BootSuccess {
     dump?: undefined;
     mightContain?: undefined;
     preview?: undefined;
+    dictionaryPreview?: undefined;
 }
 
 export interface ParseFailure {
@@ -175,6 +217,7 @@ export type WorkerResponse =
     | ParseSuccess
     | ProbeBloomSuccess
     | PreviewSuccess
+    | DictionaryPreviewSuccess
     | BootSuccess
     | ParseFailure
     | StatusEvent

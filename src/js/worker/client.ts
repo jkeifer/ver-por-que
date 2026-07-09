@@ -5,6 +5,8 @@
 import type {
     BootRequest,
     BootSuccess,
+    DictionaryPreviewRequest,
+    DictionaryPreviewSuccess,
     ParseRequest,
     ParseSuccess,
     PreviewRequest,
@@ -13,9 +15,10 @@ import type {
     ProbeBloomSuccess,
     WorkerResponse,
 } from './protocol';
-import type { PreviewResult } from './pyodide-parquet';
+import type { DictionaryPreviewResult, PreviewResult } from './pyodide-parquet';
 
-type Success = ParseSuccess | ProbeBloomSuccess | PreviewSuccess | BootSuccess;
+type Success =
+    ParseSuccess | ProbeBloomSuccess | PreviewSuccess | DictionaryPreviewSuccess | BootSuccess;
 
 interface Pending {
     resolve: (msg: Success) => void;
@@ -125,6 +128,22 @@ export class ParquetWorkerClient {
     }
 
     /**
+     * Decodes a window of a column chunk's dictionary page (its distinct values)
+     * in the worker's current file. Decoded once and cached, so paging is cheap.
+     * Codec-unavailable results resolve (typed), never reject.
+     */
+    previewDictionary(
+        rowGroup: number,
+        column: string,
+        offset: number,
+        limit: number
+    ): Promise<DictionaryPreviewResult> {
+        return this.request({
+            dictionaryPreview: { rowGroup, column, offset, limit },
+        }).then(msg => msg.dictionaryPreview!);
+    }
+
+    /**
      * Rehydrates a full dump into the worker's current-file slot and attaches a
      * range reader at `url`, so probeBloom/preview work on a JSON-loaded dump
      * without re-parsing the file. One-time per dump; the caller memoizes.
@@ -146,6 +165,7 @@ export class ParquetWorkerClient {
             | ({ name: string } & ({ bytes: ArrayBuffer } | { url: string }))
             | { probe: ProbeBloomRequest['probe'] }
             | { preview: PreviewRequest['preview'] }
+            | { dictionaryPreview: DictionaryPreviewRequest['dictionaryPreview'] }
             | { boot: BootRequest['boot'] },
         transfer: Transferable[] = []
     ): Promise<Success> {
@@ -154,7 +174,11 @@ export class ParquetWorkerClient {
         return new Promise<Success>((resolve, reject) => {
             this.pending.set(id, { resolve, reject });
             const req = { id, manifestUrl: manifestUrl(), ...payload } as
-                ParseRequest | ProbeBloomRequest | PreviewRequest | BootRequest;
+                | ParseRequest
+                | ProbeBloomRequest
+                | PreviewRequest
+                | DictionaryPreviewRequest
+                | BootRequest;
             worker.postMessage(req, transfer);
         });
     }
