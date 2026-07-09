@@ -223,9 +223,7 @@ function previewValueCell(value: PreviewValue, isWkb = false, physical?: Preview
         }
     }
     const physicalBtn =
-        physical === undefined || physical === null
-            ? ''
-            : copyButton(String(physical), 'Copy physical value (for the probe)');
+        physical === undefined || physical === null ? '' : copyPhysicalButton(String(physical));
     const s = String(value);
     if (s.length > PREVIEW_VALUE_MAX_CHARS) {
         return (
@@ -368,12 +366,20 @@ type Row =
     | [string, string | number, { wkb: string }]
     | [string, string | number, { physical: string }];
 
-/** A copy-to-clipboard button carrying the full (untruncated) value. */
-function copyButton(full: string, label = 'Copy full value'): string {
+/** A copy-to-clipboard button carrying the full (untruncated) value. `glyph` is
+ *  a trusted literal (the button face), never user input. */
+function copyButton(full: string, label = 'Copy full value', glyph = '⧉'): string {
     return (
         `<button type="button" class="copy-btn" data-copy="${escapeHtml(full)}"` +
-        ` title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">⧉</button>`
+        ` title="${escapeHtml(label)}" aria-label="${escapeHtml(label)}">${glyph}</button>`
     );
+}
+
+/** Copy button for the raw physical value a logical column displays converted
+ *  (a temporal type's int, ...) — the value the bloom probe hashes. `#` sets it
+ *  apart from the `⧉` value/GeoJSON copies at a glance. */
+function copyPhysicalButton(value: string): string {
+    return copyButton(value, 'Copy physical value', '#');
 }
 
 /**
@@ -1606,7 +1612,7 @@ export class InfoPanelManager {
                               ? copyButton(copy)
                               : 'wkb' in copy
                                 ? copyGeoJsonButton(copy.wkb)
-                                : copyButton(copy.physical, 'Copy physical value (for the probe)');
+                                : copyPhysicalButton(copy.physical);
                     return (
                         `<div class="info-item"><span class="info-label">${escapeHtml(String(label))}:</span>` +
                         `<span class="info-value">${escapeHtml(String(value))}${btn}</span></div>`
