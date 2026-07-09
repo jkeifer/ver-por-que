@@ -80,7 +80,7 @@ export class VisualizationConfig {
         index_page: ['--index-page-light', '--index-page-medium', '--index-page-dark'],
         column_index: ['--column-index-medium'],
         offset_index: ['--column-index-dark'],
-        bloom_filter: ['--column-index-light'],
+        bloom_filter: ['--bloom-filter-light', '--bloom-filter-medium', '--bloom-filter-dark'],
         schema_root: ['--schema-group-dark'],
         schema_group: ['--schema-group-light', '--schema-group-medium', '--schema-group-dark'],
         schema_leaf: ['--schema-element-light', '--schema-element-medium', '--schema-element-dark'],
