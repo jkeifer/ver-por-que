@@ -3,6 +3,8 @@
  * (so the JSON path pays zero pyodide cost) and reuses it thereafter.
  */
 import type {
+    BloomBlockRequest,
+    BloomBlockSuccess,
     BloomDensityRequest,
     BloomDensitySuccess,
     BootRequest,
@@ -28,6 +30,7 @@ type Success =
     | ParseSuccess
     | ProbeBloomSuccess
     | BloomDensitySuccess
+    | BloomBlockSuccess
     | PreviewSuccess
     | DictionaryPreviewSuccess
     | BootSuccess;
@@ -130,6 +133,17 @@ export class ParquetWorkerClient {
     }
 
     /**
+     * Reads one 256-bit block's 32 raw bytes (base64) from a column chunk's bloom
+     * filter in the worker's current file, so any block's bit-grid renders on
+     * demand at any filter size.
+     */
+    bloomBlock(rowGroup: number, column: string, blockIndex: number): Promise<string> {
+        return this.request({ bloomBlock: { rowGroup, column, blockIndex } }).then(
+            msg => msg.bloomBlock!
+        );
+    }
+
+    /**
      * Decodes a window of a data page in the worker's current file, starting at
      * value `offset`. With `skipNulls`, the window is up to `limit` non-null
      * values. The page is decoded once and cached, so paging is cheap.
@@ -186,6 +200,7 @@ export class ParquetWorkerClient {
             | ({ name: string } & ({ bytes: ArrayBuffer } | { url: string }))
             | { probe: ProbeBloomRequest['probe'] }
             | { bloomDensity: BloomDensityRequest['bloomDensity'] }
+            | { bloomBlock: BloomBlockRequest['bloomBlock'] }
             | { preview: PreviewRequest['preview'] }
             | { dictionaryPreview: DictionaryPreviewRequest['dictionaryPreview'] }
             | { boot: BootRequest['boot'] },
@@ -199,6 +214,7 @@ export class ParquetWorkerClient {
                 | ParseRequest
                 | ProbeBloomRequest
                 | BloomDensityRequest
+                | BloomBlockRequest
                 | PreviewRequest
                 | DictionaryPreviewRequest
                 | BootRequest;
