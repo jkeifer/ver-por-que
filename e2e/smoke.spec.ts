@@ -337,7 +337,7 @@ test('decodes a GeoParquet geometry column (WKB stats + GeoJSON copy)', async ({
     // (#) copy of the raw base64 WKB the bloom probe hashes.
     await expect(panel.locator('button.copy-btn[title="Copy as GeoJSON"]').first()).toBeVisible();
     await expect(
-        panel.locator('button.copy-btn[title="Copy physical value"]').first()
+        panel.locator('button.copy-btn[title^="Copy physical value"]').first()
     ).toBeVisible();
 });
 
