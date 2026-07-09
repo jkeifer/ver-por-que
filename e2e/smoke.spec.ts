@@ -458,6 +458,49 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
 });
 
 test(
+    'bloom density strip renders and probe highlights + clears',
+    { tag: '@slow' },
+    async ({ page }) => {
+        test.skip(!hasWheel, 'run `npm run wheel` to stage the por-que/hctef wheels first');
+        // First parse downloads the ~12MB pyodide runtime from the CDN.
+        test.setTimeout(240_000);
+
+        // Every column of this fixture carries a real, populated bloom filter.
+        await loadFixture(page, 'weather_station_daily.parquet');
+        const source = page.locator('#loaded-file-source');
+        await expect(source).toContainText('weather_station_daily.parquet', { timeout: 210_000 });
+
+        const viz = page.locator('#canvas-container svg');
+        await viz.locator('rect.segment[data-segment-id="data_region"]').click();
+        await viz.locator('rect.segment[data-segment-id="rg_0"]').click();
+        await viz.locator('rect.segment[data-segment-id="bloomfilter_rg0_temperature"]').click();
+
+        const panel = page.locator('#info-panel-container');
+        await expect(panel).toContainText('Probe a Value');
+
+        // Base state: the whole-filter density strip is visible BEFORE any probe.
+        await expect(panel.locator('svg.bloom-strip')).toBeVisible();
+        await expect(panel).toContainText('% full');
+
+        // Probe a value: verdict + per-block bit-grid + a Clear button appear.
+        const result = page.locator('.bloom-probe-result');
+        await page.locator('.bloom-probe-value').fill('20.5');
+        await page.locator('.bloom-probe-btn').click();
+        await expect(result).toContainText('present');
+        await expect(result.locator('svg.bloom-block')).toBeVisible();
+        await expect(result.locator('.bloom-probe-clear')).toBeVisible();
+        // The strip is still there, now with a highlighted bucket.
+        await expect(panel.locator('svg.bloom-strip .bloom-strip-hit')).toHaveCount(1);
+
+        // Clear: the result area empties but the base strip remains.
+        await result.locator('.bloom-probe-clear').click();
+        await expect(result.locator('svg.bloom-block')).toHaveCount(0);
+        await expect(panel.locator('svg.bloom-strip')).toBeVisible();
+        await expect(panel.locator('svg.bloom-strip .bloom-strip-hit')).toHaveCount(0);
+    }
+);
+
+test(
     'decodes geometry values in the preview through pyodide',
     { tag: '@slow' },
     async ({ page }) => {
