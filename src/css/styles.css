@@ -726,6 +726,10 @@ code {
 }
 
 .info-value {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    flex-wrap: wrap;
     color: var(--text-primary);
     font-family: var(--font-mono);
     font-size: 0.8rem;
