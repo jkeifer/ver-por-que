@@ -329,7 +329,10 @@ export function createBloomProbeWidget(
             value = parsed === undefined ? undefined : String(parsed);
         }
         if (value === undefined) {
-            note.textContent = leaf
+            // Show the input error in the reserved status area (not the bottom
+            // note), so it doesn't grow/shift the card. textContent escapes the
+            // user's value.
+            status.textContent = leaf
                 ? `'${input.value}' is not a valid ${leaf.type} value${
                       binary ? ' (expected base64)' : ''
                   }`
@@ -352,10 +355,9 @@ export function createBloomProbeWidget(
                 onScroll();
             },
             (error: unknown) => {
-                // Revert the status from "Probing…" (to the hint or prior result)
-                // and surface the failure in the note.
-                renderStatus();
-                reportWorkerError(note, error, 'Probe failed', deps.recovery);
+                // Surface the failure in the reserved status area (replacing
+                // "Probing…"), not the bottom note, so nothing shifts.
+                reportWorkerError(status, error, 'Probe failed', deps.recovery);
             }
         );
     };
