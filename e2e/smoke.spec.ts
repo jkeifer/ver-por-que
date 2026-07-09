@@ -333,8 +333,12 @@ test('decodes a GeoParquet geometry column (WKB stats + GeoJSON copy)', async ({
     // Spatial extent from the `geo` metadata, and the WKB max decoded (not base64).
     await expect(panel).toContainText('Geospatial Statistics');
     await expect(panel).toContainText('MULTIPOLYGON');
-    // The decoded geometry stat offers a copy-as-GeoJSON button.
+    // The decoded geometry stat offers a copy-as-GeoJSON button AND a physical
+    // (#) copy of the raw base64 WKB the bloom probe hashes.
     await expect(panel.locator('button.copy-btn[title="Copy as GeoJSON"]').first()).toBeVisible();
+    await expect(
+        panel.locator('button.copy-btn[title="Copy physical value"]').first()
+    ).toBeVisible();
 });
 
 test('downloads the loaded dump as re-validating JSON', async ({ page }) => {
