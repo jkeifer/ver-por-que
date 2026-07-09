@@ -1001,9 +1001,75 @@ code {
 }
 
 .qm-cell {
+    position: relative;
     height: 1.5rem;
     border: 2px solid var(--bg-primary);
     border-radius: var(--border-radius);
+}
+
+/* Bloom-filter outcome marker, top-right of a cell (and inside a legend swatch):
+ * a "miss" (proven absent -> the cell is pruned red) is a solid light dot; a
+ * "hit" (checked, couldn't rule out) is a faint hollow ring; "probing" pulses. */
+.qm-bloom {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    pointer-events: none;
+}
+
+.query-legend .qm-swatch .qm-bloom {
+    top: 1px;
+    right: 1px;
+    width: 5px;
+    height: 5px;
+}
+
+.qm-bloom-miss {
+    background: #fff;
+    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+.qm-bloom-hit {
+    background: transparent;
+    border: 1px solid rgba(0, 0, 0, 0.45);
+}
+
+.qm-bloom-probing {
+    background: rgba(0, 0, 0, 0.55);
+    animation: qm-bloom-pulse 1s ease-in-out infinite;
+}
+
+@keyframes qm-bloom-pulse {
+    0%,
+    100% {
+        opacity: 0.25;
+    }
+    50% {
+        opacity: 1;
+    }
+}
+
+/* Honest notice above the matrix: the file has bloom filters this dump can't
+ * probe, so the simulation understates skipping. */
+.query-bloom-notice {
+    margin: 0 0 var(--spacing-sm);
+    padding: var(--spacing-sm);
+    font-size: 0.85rem;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    border-left: 3px solid var(--viz-yellow);
+    border-radius: var(--border-radius);
+}
+
+.query-bloom-notice code {
+    padding: 0 2px;
+}
+
+.query-bloom-notice .recovery-btn {
+    margin-left: var(--spacing-xs);
 }
 
 .qm-read {

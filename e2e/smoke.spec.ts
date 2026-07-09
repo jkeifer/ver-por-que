@@ -572,6 +572,36 @@ test(
     }
 );
 
+test('query matrix consults bloom filters for = predicates', { tag: '@slow' }, async ({ page }) => {
+    test.skip(!hasWheel, 'run `npm run wheel` to stage the por-que/hctef wheels first');
+    test.setTimeout(240_000);
+
+    // Every column of this fixture carries a bloom filter, and a raw-parquet
+    // load wires the probe straight at the worker's current file.
+    await loadFixture(page, 'weather_station_daily.parquet');
+    await expect(page.locator('#loaded-file-source')).toContainText(
+        'weather_station_daily.parquet',
+        { timeout: 210_000 }
+    );
+
+    // An = predicate on a bloom-filtered column with an in-range value: some
+    // row groups survive stats pruning and get probed asynchronously.
+    await page.locator('#query-add-predicate').click();
+    await page.locator('.qp-column').selectOption('temperature');
+    await page.locator('.qp-op').selectOption('eq');
+    await page.locator('.qp-value').fill('20.5');
+
+    // The probes run against the (warm) worker; bloom markers appear on the
+    // matrix cells when the results land — proof the matrix consulted them.
+    await expect
+        .poll(async () => page.locator('.query-matrix .qm-bloom').count(), { timeout: 120_000 })
+        .toBeGreaterThan(0);
+
+    // Clearing the query drops the markers.
+    await page.locator('#query-clear-btn').click();
+    await expect(page.locator('.query-matrix .qm-bloom')).toHaveCount(0);
+});
+
 test(
     'decodes geometry values in the preview through pyodide',
     { tag: '@slow' },

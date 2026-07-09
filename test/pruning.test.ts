@@ -50,6 +50,21 @@ describe('evaluate — row groups (footer statistics)', () => {
         });
     });
 
+    it('folds a bloom miss into a prune the stats range could not make', () => {
+        // 'Hello' is inside ['Hello','today'] so stats keep it; a bloom "miss"
+        // for row group 0 proves it's absent anyway -> pruned.
+        const bloom = new Map([[0, { misses: new Set([0]), hits: new Set<number>() }]]);
+        const d = evaluate(dump, [p('eq', 'Hello')], bloom).rowGroups.get(0)!;
+        expect(d.pruned).toBe(true);
+        expect(d.reason).toContain("bloom filter proves 'Hello' is absent");
+    });
+
+    it('leaves the row group as stats decided on a bloom hit', () => {
+        const bloom = new Map([[0, { misses: new Set<number>(), hits: new Set([0]) }]]);
+        const d = evaluate(dump, [p('eq', 'Hello')], bloom).rowGroups.get(0)!;
+        expect(d.pruned).toBe(false);
+    });
+
     it('prunes on > past the max, with the stated reason', () => {
         const d = evaluate(dump, [p('gt', 'zzz')]).rowGroups.get(0)!;
         expect(d.pruned).toBe(true);

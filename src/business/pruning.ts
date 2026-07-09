@@ -33,6 +33,21 @@ export interface Predicate {
     value: string;
 }
 
+/**
+ * Bloom outcomes for ONE `eq` predicate: the row groups the column's bloom
+ * filter proved absent (a "miss" — safe to prune, a skip min/max couldn't make)
+ * and those it couldn't rule out (a "hit" — maybe present). A bloom filter is an
+ * equality membership test, so this only ever comes from `eq` predicates. Keyed
+ * by the predicate's index in the query in `BloomResults`.
+ */
+export interface BloomOutcome {
+    misses: Set<number>;
+    hits: Set<number>;
+}
+
+/** Per-predicate bloom outcomes, keyed by the predicate's index in the query. */
+export type BloomResults = Map<number, BloomOutcome>;
+
 export type Decision = { pruned: boolean; reason: string };
 
 export interface Evaluation {
@@ -280,8 +295,10 @@ function decideStats(
     return decide(min, max, op, v);
 }
 
-/** Evaluate one predicate against a dump (raw, un-annotated reasons). */
-function evaluateOne(dump: AnyDump, p: Predicate): Evaluation {
+/** Evaluate one predicate against a dump (raw, un-annotated reasons). A bloom
+ *  "miss" for a row group overrides its footer-statistics decision with a prune:
+ *  the filter proves the value is absent even though it fell inside [min, max]. */
+function evaluateOne(dump: AnyDump, p: Predicate, bloom?: BloomOutcome): Evaluation {
     const leaf = findSchemaLeaf(dump.metadata.schema_root, p.column);
     if (!leaf) {
         throw new Error(`unknown column '${p.column}'`);
@@ -306,6 +323,20 @@ function evaluateOne(dump: AnyDump, p: Predicate): Evaluation {
                 : decideStats(meta.statistics, meta.num_values, leaf, p.op, value!)
         );
     });
+
+    // A bloom "miss" is exact proof the value isn't in the row group — a prune
+    // the footer min/max range couldn't make (the value fell inside [min, max]
+    // but simply isn't present). Overrides that row group's stats decision.
+    if (bloom) {
+        for (const rg of bloom.misses) {
+            if (rowGroups.has(rg)) {
+                rowGroups.set(rg, {
+                    pruned: true,
+                    reason: `pruned — bloom filter proves ${fmt(p.value)} is absent from this row group`,
+                });
+            }
+        }
+    }
 
     const pages = new Map<string, Decision>();
     if ('column_chunks' in dump) {
@@ -389,11 +420,16 @@ function mergeInto<K>(
  * Metadata-only dumps get row-group decisions only — the column index exists
  * in the footer, but its parsed contents (and the page nodes) aren't in the
  * export.
+ *
+ * `bloom` is optional per-predicate bloom-filter outcomes (see BloomResults):
+ * a "miss" for a row group prunes it even when its min/max range couldn't. It's
+ * gathered asynchronously by the UI (worker probes) and folded in on re-evaluate;
+ * absent it, evaluation is exactly the synchronous statistics result.
  */
-export function evaluate(dump: AnyDump, predicates: Predicate[]): Evaluation {
-    const runs = predicates.map(predicate => ({
+export function evaluate(dump: AnyDump, predicates: Predicate[], bloom?: BloomResults): Evaluation {
+    const runs = predicates.map((predicate, i) => ({
         predicate,
-        result: evaluateOne(dump, predicate),
+        result: evaluateOne(dump, predicate, bloom?.get(i)),
     }));
     const rowGroups = new Map<number, Decision>();
     const pages = new Map<string, Decision>();
