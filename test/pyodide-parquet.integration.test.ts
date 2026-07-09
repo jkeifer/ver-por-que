@@ -29,11 +29,9 @@ const hasWheel = existsSync(manifestPath);
 const fixturePath = (name: string): string =>
     fileURLToPath(new URL(`./fixtures/${name}`, import.meta.url));
 
-// Pinned to the same apache/parquet-testing ref as the python test fixtures.
-const PARQUET_TESTING_REF = '1a2a75127be06fc0123f03ebd36c966f7beda27d';
-const PARQUET_URL =
-    `https://raw.githubusercontent.com/apache/parquet-testing/` +
-    `${PARQUET_TESTING_REF}/data/alltypes_plain.snappy.parquet`;
+// Committed from apache/parquet-testing @ 1a2a75127be06fc0123f03ebd36c966f7beda27d
+// (data/alltypes_plain.snappy.parquet), the same ref the python test fixtures pin.
+const ALLTYPES_FIXTURE = 'alltypes_plain.snappy.parquet';
 
 function loadWheels(): WheelAsset[] {
     const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as {
@@ -131,7 +129,7 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
             onProgress: f => fractions.push(f),
             onDetail: d => details.push(d),
         });
-        data = new Uint8Array(await (await fetch(PARQUET_URL)).arrayBuffer());
+        data = new Uint8Array(readFileSync(fixturePath(ALLTYPES_FIXTURE)));
     }, 180_000);
 
     afterEach(() => {
