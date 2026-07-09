@@ -763,7 +763,9 @@ const PANELS: Registry = {
         const rows: Row[] = [
             ['Page Type', p.page_type ?? 'DICTIONARY_PAGE'],
             ['Encoding', p.encoding],
-            ['Values', formatNumber(p.num_values)],
+            // num_values on a dictionary page is the count of distinct entries
+            // (the column chunk's dictionary cardinality), not a row count.
+            ['Dictionary Entries', formatNumber(p.num_values)],
             ['Header Size', formatBytes(p.header_size)],
             ['Compressed Size', formatBytes(p.compressed_page_size)],
             ['Uncompressed Size', formatBytes(p.uncompressed_page_size)],
