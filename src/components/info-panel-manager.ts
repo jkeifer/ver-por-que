@@ -22,7 +22,12 @@ import {
     type Kind,
     type SegmentNode,
 } from '../business/segment-tree';
-import { base64Bytes, formatStatValue, parsePredicateValue } from '../business/stat-values';
+import {
+    base64Bytes,
+    decodeStatValue,
+    formatStatValue,
+    parsePredicateValue,
+} from '../business/stat-values';
 import { describeWkb, wkbToGeoJson } from '../business/wkb';
 import type {
     BloomProbeResult,
@@ -346,12 +351,14 @@ function renderDictionaryWindow(
 }
 
 /** A label/value row. An optional third element is a copy payload: a plain
- *  string (the full value, when truncated), or `{ wkb }` base64 to copy as
- *  GeoJSON (converted lazily on click). */
+ *  string (the full value, when truncated), `{ wkb }` base64 to copy as GeoJSON
+ *  (converted lazily on click), or `{ physical }` — the raw physical value a
+ *  logical column displays converted, for pasting into the bloom probe. */
 type Row =
     | [string, string | number]
     | [string, string | number, string]
-    | [string, string | number, { wkb: string }];
+    | [string, string | number, { wkb: string }]
+    | [string, string | number, { physical: string }];
 
 /** A copy-to-clipboard button carrying the full (untruncated) value. */
 function copyButton(full: string, label = 'Copy full value'): string {
@@ -505,6 +512,14 @@ function statRows(stats: ColumnStatistics, leaf?: SchemaLeaf | null, wkb = false
             }
         }
         const full = (leaf ? formatStatValue(v, leaf) : undefined) ?? v;
+        // A logical column (e.g. a temporal type) displays a converted value,
+        // but the bloom probe hashes the raw physical value. When they differ,
+        // offer the physical value for copy so it can be pasted into the probe.
+        const physical = leaf ? decodeStatValue(v, leaf) : undefined;
+        const physicalStr = physical === undefined ? undefined : String(physical);
+        if (physicalStr !== undefined && physicalStr !== full) {
+            return [label, full, { physical: physicalStr }];
+        }
         const [shown, copy] = truncateCopy(full, 50);
         return copy === undefined ? [label, shown] : [label, shown, copy];
     };
@@ -1581,7 +1596,9 @@ export class InfoPanelManager {
                             ? ''
                             : typeof copy === 'string'
                               ? copyButton(copy)
-                              : copyGeoJsonButton(copy.wkb);
+                              : 'wkb' in copy
+                                ? copyGeoJsonButton(copy.wkb)
+                                : copyButton(copy.physical, 'Copy physical value (for the probe)');
                     return (
                         `<div class="info-item"><span class="info-label">${escapeHtml(String(label))}:</span>` +
                         `<span class="info-value">${escapeHtml(String(value))}${btn}</span></div>`
