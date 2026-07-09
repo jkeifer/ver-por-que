@@ -24,12 +24,16 @@ pages.
   between them.
 - **Interactive drill-down**: click a segment — row group, column chunk, page,
   dictionary, or index — to see its details.
-- **Info-panel extras**: a **hex inspector** for any byte span, single-page
-  **value preview**, and a **bloom-filter** membership probe.
+- **Info-panel extras**: a paged **value preview** for any data page (with
+  Dremel levels and null-skipping), **dictionary values**, and an interactive
+  **bloom-filter** card — probe a value through its hash → block → bit lineage,
+  over a density strip of the whole filter.
 - **Query simulation**: build an AND of predicates plus an output-column
   projection and watch which row groups and pages a reader would skip — and
-  why, from the file's own statistics.
-- **Shareable links**: the selected node and active lens live in the URL hash.
+  why, from the file's own statistics and (for `=` predicates) its bloom
+  filters.
+- **Shareable links**: the selected node, active lens, and query state live in
+  the URL hash.
 - **Works offline**: after the first load, the app shell, wheels, and Python
   runtime are cached.
 
@@ -105,7 +109,7 @@ to use the deployed version.
 
    - View the physical layout as a byte map, or switch to the treemap lens
    - Click segments to see details about row groups, columns, and pages —
-     including a hex inspector, value preview, and bloom-filter probe
+     including value and dictionary previews and the bloom-filter probe
    - Understand how your data is compressed and encoded
 
 1. **Simulate a query** (optional): build predicates and pick output columns to

@@ -39,7 +39,7 @@ help you get started with development and contributing to the project.
    ```
 
    The application will, by default, be available at
-   [`http://localhost:1234`](http://localhost:1234)
+   [`http://localhost:5173`](http://localhost:5173) (Vite's default port)
 
 4. **Test the application**
 
@@ -155,21 +155,24 @@ src/
 ├── build-info.{js,d.ts}   # Git commit info, written at build time by get-git-info.js
 ├── generated/             # GENERATED (gitignored): por-que.d.ts + validate.js/.d.ts
 ├── js/
-│   ├── permalink.ts       # URL-hash state (de)serialization (#node=, lens=)
+│   ├── permalink.ts       # URL-hash state (de)serialization (#node=, lens=, q=)
 │   ├── fetch-progress.ts  # Streaming URL→bytes with download-progress reporting
+│   ├── storage.ts         # IndexedDB persistence of the loaded dump (restore on reload)
 │   └── worker/            # In-browser parquet parsing (pyodide in a Web Worker)
 │       ├── client.ts          # Main-thread handle; lazily spins up the worker
 │       ├── worker.ts          # Worker shell (loads pyodide from the CDN)
 │       ├── pyodide-parquet.ts # Worker-agnostic boot/parse/probe/preview (node-testable)
-│       └── protocol.ts        # Request/response message shapes
+│       └── protocol.ts        # Request/response message shapes (kind-tagged unions)
 ├── domain/
-│   └── parquet-type-resolver.ts # Logical-type pretty-printing / display logic
+│   ├── parquet-type-resolver.ts # Logical-type pretty-printing / display logic
+│   └── geoparquet.ts            # GeoParquet `geo` metadata: WKB columns, display types
 ├── business/                        # Pure logic (no DOM)
 │   ├── segment-tree.ts              # project(): validated dump → SegmentNode tree
 │   ├── segment-layout-calculator.ts # Byte positions for the byte-map lens
 │   ├── min-sizing.ts                # Minimum-sizing math shared by both lenses
 │   ├── treemap-layout.ts            # squarify(): size-proportional rectangles
 │   ├── stat-values.ts               # Decode base64 statistics bytes → comparable values
+│   ├── wkb.ts                       # WKB geometry parsing (summaries, GeoJSON copy)
 │   ├── pruning.ts                   # Predicate-pushdown pruning engine
 │   └── query-model.ts               # resolve(): per-segment status under a query
 ├── components/
@@ -177,7 +180,16 @@ src/
 │   ├── svg-byte-visualizer.ts     # Byte-map lens renderer
 │   ├── svg-funnels.ts             # Drill-down funnel shapes for the byte-map lens
 │   ├── treemap-visualizer.ts      # Treemap lens renderer
-│   ├── info-panel-manager.ts      # Declarative kind → panel sections registry
+│   ├── info-panel-manager.ts      # Info-panel orchestration + DOM wiring
+│   ├── info-panel/                # The panel's modules (pure rendering + widgets)
+│   │   ├── panels.ts              # Declarative kind → panel sections registry
+│   │   ├── view.ts                # Row/Section types, escaping, copy buttons
+│   │   ├── column-rows.ts         # Column metadata/stats/index-table builders
+│   │   ├── preview-view.ts        # Value/dictionary preview table rendering
+│   │   ├── bloom-probe-widget.ts  # Interactive bloom card (probe + block strip)
+│   │   ├── bloom-view.ts          # Pure bloom rendering (bit grids, density strip)
+│   │   ├── capabilities.ts        # Worker-backed capability types (WorkerCapabilities)
+│   │   └── recovery.ts            # Degraded-card recovery (range-unsupported fallback)
 │   └── query-panel.ts             # Query-simulation panel (matrix + builder)
 └── config/
     └── visualization-config.ts     # Layout constants + kind → color map
@@ -227,13 +239,20 @@ re-derive offsets.
   matrix, info panel, and lenses all consume
 - `stat-values.ts` decodes the base64 statistics bytes into comparable values
 - `QueryPanel` (`components/query-panel.ts`) is the RG×column matrix + predicate
-  builder; evaluation is live
+  builder; evaluation is live. On raw-parquet loads it also probes the file's
+  bloom filters for `=` predicates (async, cached) and folds the misses back
+  into the evaluation as row-group prunes the min/max range couldn't make
 
-#### InfoPanelManager (`components/info-panel-manager.ts`)
+#### Info panel (`components/info-panel-manager.ts` + `components/info-panel/`)
 
-- A `Record<Kind, (node, dump) => Section[]>` registry plus one renderer
-- Hosts the hex inspector, single-page value preview, and bloom-filter probe —
-  the last two round-trip to the worker (`preview` / `probe` requests)
+- The manager is orchestration + DOM wiring; the pure rendering lives in the
+  `info-panel/` modules. `panels.ts` is the declarative registry: one handler
+  per segment `kind` mapping a node to its sections
+- The interactive cards — the paged value preview, the dictionary preview, and
+  the bloom-probe widget (probe lineage + virtualized block strip over a
+  density minimap) — round-trip to the worker through the `WorkerCapabilities`
+  bundle (`capabilities.ts`); JSON/metadata-only loads pass null and the cards
+  degrade honestly (`recovery.ts` offers re-parse / full-download fallbacks)
 
 #### Layout math (`business/segment-layout-calculator.ts`, `min-sizing.ts`, `treemap-layout.ts`)
 
@@ -243,8 +262,11 @@ re-derive offsets.
 
 #### Worker (`js/worker/`)
 
-- pyodide + por-que/hctef parse `.parquet` off the main thread and answer bloom
-  `probe` / value `preview` requests; `protocol.ts` is the message contract
+- pyodide + por-que/hctef parse `.parquet` off the main thread and answer the
+  follow-up requests against the current-file slot: bloom `probe` /
+  `bloomDensity` / `bloomBlocks`, value `preview` / `dictionaryPreview`, `boot`
+  (rehydrate a JSON dump + attach a range reader), and `prefetchBlooms`;
+  `protocol.ts` is the message contract (kind-tagged request/response unions)
 
 ## 🎯 Contributing Guidelines
 
@@ -360,8 +382,8 @@ npm run build                   # Rebuild
 Unit tests run under [Vitest](https://vitest.dev/) (`npm test`) and live in
 `test/`. They cover the pure logic: formatting and detection helpers, the
 segment layout calculator, min-sizing and treemap layout, the pruning/query
-engine and statistics decoding, permalink (de)serialization, and the tree
-projection (`project`). The projection tests read real dump fixtures from
+engine and statistics decoding, WKB geometry parsing, permalink
+(de)serialization, and the tree projection (`project`). The projection tests read real dump fixtures from
 `test/fixtures/` (vendored from por-que's test suite), assert the validator
 accepts them and rejects mutations, and check the tree has real offsets, sorted
 children, and correct `kind` coverage. New logic in those layers should come
@@ -371,11 +393,14 @@ with a focused test.
 in-browser parsing: it boots real pyodide, installs the locally-built wheels,
 parses a real parquet file — from bytes, and from a URL served by a local
 range-supporting HTTP server (plus the no-range fallback) — and asserts the
-dumps pass the validator. It skips (with a message) when the wheels are absent,
-so run `npm run wheel` first — CI does. It downloads a parquet fixture from
-`apache/parquet-testing` pinned to the same ref as the python fixtures, and has
-a long timeout. A lighter `pyodide-parquet.mock.test.ts` covers the same code
-paths without booting pyodide.
+dumps pass the validator. It also exercises the follow-up requests (bloom
+probe/density/blocks and prefetch, value/dictionary previews, dump boot). It
+skips (with a message) when the wheels are absent, so run `npm run wheel`
+first — CI does. Its parquet fixtures are committed under `test/fixtures/`
+(vendored from `apache/parquet-testing` at the same ref as the python
+fixtures), so the suite runs offline; it has a long timeout for the pyodide
+boot. A lighter `pyodide-parquet.mock.test.ts` covers the same code paths
+without booting pyodide.
 
 End-to-end tests run under [Playwright](https://playwright.dev/) (`npm run
 e2e`, `e2e/smoke.spec.ts`): they drive the built app in a real browser —
