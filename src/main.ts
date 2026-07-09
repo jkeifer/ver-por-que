@@ -485,25 +485,25 @@ class ParquetExplorer {
     /**
      * Fire-and-forget on load: warm every bloom filter's byte range into the
      * worker reader's block cache, so the first query probe / bloom-node open
-     * pays no range fetch (the remote-dump case). A raw-parquet load already
-     * holds the file in the worker; a JSON dump with a fetchable source boots
-     * the reader first. No bloom capability or no filters -> nothing to warm.
+     * pays no range fetch. Only worth it for a REMOTE file (the bitsets live over
+     * the network) — a local upload already holds them in worker memory, so
+     * warming would just re-read 130 filters through pyodide for nothing. Gated
+     * on a fetchable source: a URL parquet parse already has the reader; a JSON
+     * dump with a source boots it first.
      */
     private warmBloomFilters(workerHasFile: boolean): void {
-        if (!this.bloomProbe || !this.hasBloomFilters()) {
+        const url = this.fetchableSource();
+        if (!url || !this.bloomProbe || !this.hasBloomFilters()) {
             return;
         }
         if (workerHasFile) {
             this.workerClient?.prefetchBlooms();
             return;
         }
-        const url = this.fetchableSource();
-        if (url) {
-            this.ensureWorkerBooted(url).then(
-                () => this.workerClient?.prefetchBlooms(),
-                () => {}
-            );
-        }
+        this.ensureWorkerBooted(url).then(
+            () => this.workerClient?.prefetchBlooms(),
+            () => {}
+        );
     }
 
     /**
