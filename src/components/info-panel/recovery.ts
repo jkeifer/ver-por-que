@@ -46,3 +46,31 @@ export function appendRecovery(
         el.appendChild(btn);
     }
 }
+
+/**
+ * Report a worker/decode failure into `el`. A range-unsupported error (when a
+ * download-full-file recovery exists) replaces `el` with the fallback action
+ * and returns true; anything else shows `<prefix>: <last line of the python
+ * traceback>` and returns false — the caller may then keep a retry affordance.
+ * The single home for the on-demand read failure path shared by the value /
+ * dictionary previews and the bloom probe.
+ */
+export function reportWorkerError(
+    el: HTMLElement,
+    error: unknown,
+    prefix: string,
+    recovery: RecoveryActions
+): boolean {
+    if (isIncrementalReadError(error) && recovery.downloadFullFile) {
+        appendRecovery(
+            el,
+            RANGE_UNSUPPORTED_MESSAGE,
+            'Download full file',
+            recovery.downloadFullFile
+        );
+        return true;
+    }
+    // Pyodide errors embed the python traceback; the last line is the exception.
+    el.textContent = `${prefix}: ${(error as Error).message.trim().split('\n').pop()!}`;
+    return false;
+}
