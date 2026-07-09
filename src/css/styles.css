@@ -1315,6 +1315,56 @@ code {
     color: var(--text-primary);
 }
 
+.bloom-verdict {
+    margin-bottom: var(--spacing-sm);
+}
+
+/* value → hash → block lineage above the bit grid */
+.bloom-lineage {
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    color: var(--text-muted);
+    margin-bottom: var(--spacing-xs);
+}
+
+.bloom-lineage code {
+    font-size: 0.72rem;
+    padding: 0 2px;
+}
+
+/* The probed 256-bit block: 8 words × 32 bits. Scales down on narrow cards. */
+.bloom-block {
+    display: block;
+    max-width: 100%;
+    height: auto;
+}
+
+.bloom-block rect {
+    stroke: var(--bg-primary);
+    stroke-width: 0.5;
+}
+
+/* Unset / set bits of the block (context), then the eight probed bits. */
+.bloom-block .bloom-bit-off {
+    fill: var(--border-light);
+}
+
+.bloom-block .bloom-bit-on {
+    fill: rgba(var(--accent-rgb), 0.5);
+}
+
+.bloom-block .bloom-bit-hit {
+    fill: #27ae60;
+    stroke: #1e8449;
+    stroke-width: 1.5;
+}
+
+.bloom-block .bloom-bit-miss {
+    fill: #e74c3c;
+    stroke: #c0392b;
+    stroke-width: 1.5;
+}
+
 /* Value preview (Value Preview section) */
 .value-preview-codec-note,
 .value-preview-btn {
