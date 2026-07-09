@@ -438,6 +438,13 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
     const preview = page.locator('.value-preview-result');
     await expect(preview).toContainText('14 values');
     await expect(preview).toContainText('Hello');
+
+    // Dictionary preview: the String column is dictionary-encoded, so its
+    // dictionary page decodes to the column's distinct values (incl. 'Hello').
+    await viz.locator('rect.segment[data-segment-id="rg_0_col_String_dict"]').click();
+    await expect(panel).toContainText('Dictionary Values');
+    await page.locator('.value-preview-btn').click();
+    await expect(preview).toContainText('Hello');
 });
 
 test(

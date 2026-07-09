@@ -325,14 +325,20 @@ async def _preview_dictionary(row_group, column, offset, limit):
     else:
         reader, chunk = _find_data_chunk(row_group, column)
         try:
-            decoded = await chunk._parse_dictionary(reader)
+            # _parse_dictionary (unlike parse_data_page) doesn't adapt the
+            # reader itself; the bytes path keeps a sync BytesIO in the slot.
+            decoded = await chunk._parse_dictionary(ensure_async_reader(reader))
         except ParquetDataError as error:
             # Same codec-unavailable (lzo) contract as _preview: a typed result,
             # not a raise.
             if 'requires' in str(error) and 'package' in str(error):
                 return json.dumps({'error': 'codec_unavailable', 'codec': chunk.codec.name})
             raise
-        values = [_json_safe(v) for v in decoded]
+        # _parse_dictionary returns raw physical values (BYTE_ARRAY -> bytes);
+        # apply the same logical rendering the data-page parser does, so a UTF8
+        # column reads as text (not base64) and matches the value preview.
+        se = chunk.metadata.schema_element
+        values = [_json_safe(se.physical_to_logical_type(v) if v is not None else v) for v in decoded]
         _dict_cache = (row_group, column, values)
     total = len(values)
     next_index = min(offset + limit, total)
