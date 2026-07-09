@@ -501,12 +501,14 @@ test(
         const marked = await panel.locator('.bloom-bit-hit, .bloom-bit-miss').count();
         expect(marked).toBe(8);
 
-        // Click a DIFFERENT strip cell (the first cell, block 0): the grid
-        // switches to that block, shown plain (no verdict, no hit/miss marks).
-        await panel.locator('.bloom-strip-cell[data-block="0"]').click();
+        // Click a NON-probed strip cell: its block's 32 bytes are fetched on
+        // demand (bloomBlock) and the grid re-renders plain — no verdict, no
+        // hit/miss marks. This exercises the on-demand path at any filter size.
+        const nonProbed = panel.locator('.bloom-strip-cell:not(.probed)').first();
+        await nonProbed.click();
         await expect(result).not.toContainText('present');
         await expect(panel.locator('.bloom-bit-hit, .bloom-bit-miss')).toHaveCount(0);
-        await expect(panel.locator('svg.bloom-block')).toBeVisible();
+        await expect(panel.locator('.bloom-block-wrap svg.bloom-block')).toBeVisible();
 
         // Clear: the probe overlay (marks + verdict) is gone and Clear disabled.
         await page.locator('.bloom-probe-clear').click();

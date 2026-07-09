@@ -1621,11 +1621,12 @@ export class InfoPanelManager {
      * Interactive bloom-filter section (full-width): the whole filter renders as
      * a clickable density strip (one cell per 256-bit block for small filters,
      * else per contiguous bucket) plus one selected block's 8×32 bit-grid
-     * (default block 0). Clicking a strip cell views that block. Probing a value
-     * selects the block it lands in, marks the strip cell, and shows the eight
-     * checked bits hit/miss with the verdict + lineage. Clear removes the probe
-     * overlay but keeps the currently selected block visible. The density (with
-     * the whole bitset for small filters) is fetched once so nothing re-reads.
+     * (default block 0). Clicking a strip cell fetches and views that block —
+     * works identically at any filter size (the block's 32 bytes come on demand
+     * via bloomBlock, cached so nothing refetches). Probing a value selects the
+     * block it lands in (no fetch — the probe result carries its bytes), marks
+     * the strip cell, and shows the eight checked bits hit/miss with the verdict
+     * + lineage. Clear removes the probe overlay but keeps the selected block.
      */
     private buildBloomProbeSection(
         node: Extract<SegmentNode, { kind: 'bloom_filter' }>,
@@ -1656,44 +1657,35 @@ export class InfoPanelManager {
         const blockWrap = section.querySelector<HTMLElement>('.bloom-block-wrap')!;
         const result = section.querySelector<HTMLElement>('.bloom-probe-result')!;
 
-        // Closure state, all reset by re-render: the fetched density (kept so the
-        // strip/grid re-draw without re-reading the filter), the block currently
-        // being viewed (default 0), and the last probe (null until probed).
+        // Closure state: the fetched density (kept so the strip re-draws without
+        // re-reading the filter), the block currently being viewed (default 0),
+        // the last probe (null until probed), a cache of fetched block bytes
+        // (avoid refetching), and a monotonic token so a slow fetch that resolves
+        // after the user clicks another cell is ignored (only the latest wins).
         let density: BloomDensityResult | null = null;
         let selectedBlock = 0;
         let probe: BloomProbeResult | null = null;
+        const blockCache = new Map<number, Uint8Array>();
+        let renderToken = 0;
 
-        // The raw 32 bytes of `block`, sliced from the shipped whole bitset, or
-        // null when the bitset isn't present (huge filter) or the block is the
-        // probed one but not derivable — callers fall back to the probe's block.
-        const blockBytes = (block: number): Uint8Array | null => {
-            if (!density?.bitset) {
-                return null;
+        // The selected block's 32 bytes, or null when not yet available: the
+        // probed block reads straight from the probe result; any other block
+        // comes from the cache (missing => the async render fetches it).
+        const bytesFor = (block: number): Uint8Array | null => {
+            if (probe && block === probe.blockIndex) {
+                return base64Bytes(probe.block) ?? null;
             }
-            const all = base64Bytes(density.bitset);
-            return all ? all.subarray(block * 32, block * 32 + 32) : null;
+            return blockCache.get(block) ?? null;
         };
 
-        const render = (): void => {
-            if (!density) {
-                return;
-            }
-            // Strip: mark the selected cell always, the probed cell while probed.
-            stripWrap.innerHTML = renderBloomStrip(density, selectedBlock, probe?.blockIndex);
-            // Bit-grid for the selected block. Show hit/miss marks only when the
-            // selected block IS the probed block (viewing another shows it plain).
-            const viewingProbed = probe !== null && selectedBlock === probe.blockIndex;
-            const bytes =
-                blockBytes(selectedBlock) ??
-                // Huge-filter fallback: no bitset shipped, so only the probed
-                // block's bytes are available (from the probe result itself).
-                (viewingProbed ? base64Bytes(probe!.block) : null);
+        // Draw the block grid for `bytes` (or a placeholder), plus the verdict and
+        // lineage when it's the probed block being viewed.
+        const drawBlock = (bytes: Uint8Array | null, viewingProbed: boolean): void => {
             blockWrap.innerHTML =
                 bytes && bytes.length >= 32
                     ? (viewingProbed ? renderBloomLineage(probe!) : '') +
                       renderBloomBlock(bytes, viewingProbed ? probe!.bits : undefined)
                     : '<div class="bloom-lineage">Click a strip cell or probe a value.</div>';
-            // Verdict only while viewing the probed block.
             if (viewingProbed) {
                 const verdict = probe!.mightContain
                     ? '<strong>maybe present</strong> — a bloom filter can only ever ' +
@@ -1706,6 +1698,55 @@ export class InfoPanelManager {
             } else {
                 result.innerHTML = '';
             }
+        };
+
+        const render = (): void => {
+            if (!density) {
+                return;
+            }
+            // Strip: mark the selected cell always, the probed cell while probed.
+            stripWrap.innerHTML = renderBloomStrip(density, selectedBlock, probe?.blockIndex);
+            const viewingProbed = probe !== null && selectedBlock === probe.blockIndex;
+            const bytes = bytesFor(selectedBlock);
+            if (bytes || !this.bloomBlock) {
+                drawBlock(bytes, viewingProbed);
+                return;
+            }
+            // Miss: fetch this block on demand. Bump the token so a click on a
+            // different cell mid-fetch discards this stale result. A brief loading
+            // note occupies the grid while the 32 bytes come back.
+            const token = ++renderToken;
+            const block = selectedBlock;
+            blockWrap.innerHTML = '<div class="bloom-lineage">Loading block…</div>';
+            result.innerHTML = '';
+            this.bloomBlock(node.rowGroup, node.path, block).then(
+                b64 => {
+                    if (token !== renderToken) {
+                        return; // a newer selection superseded this fetch
+                    }
+                    const decoded = base64Bytes(b64) ?? null;
+                    if (decoded) {
+                        blockCache.set(block, decoded);
+                    }
+                    drawBlock(decoded, probe !== null && block === probe.blockIndex);
+                },
+                (error: unknown) => {
+                    if (token !== renderToken) {
+                        return;
+                    }
+                    if (isIncrementalReadError(error) && this.recovery.downloadFullFile) {
+                        this.appendRecovery(
+                            blockWrap,
+                            RANGE_UNSUPPORTED_MESSAGE,
+                            'Download full file',
+                            this.recovery.downloadFullFile
+                        );
+                        return;
+                    }
+                    const message = (error as Error).message.trim();
+                    blockWrap.textContent = `Block unavailable: ${message.split('\n').pop()!}`;
+                }
+            );
         };
 
         // Base graphic: fetch the whole filter's density once and draw block 0.
@@ -1732,12 +1773,11 @@ export class InfoPanelManager {
             );
         }
 
-        // Delegated strip-cell selection: click a cell to view its block. With no
-        // shipped bitset (huge filter) only the probed block is renderable, so
-        // selecting a plain cell can't show a grid — ignore clicks then.
+        // Delegated strip-cell selection: click a cell to view its block. Works
+        // at any filter size — the block's bytes are fetched on demand by render.
         stripWrap.addEventListener('click', e => {
             const cell = (e.target as HTMLElement).closest('.bloom-strip-cell');
-            if (!(cell instanceof SVGElement) || !density?.bitset) {
+            if (!(cell instanceof SVGElement) || !density) {
                 return;
             }
             selectedBlock = Number(cell.getAttribute('data-block'));
@@ -1770,6 +1810,10 @@ export class InfoPanelManager {
                     probe = res;
                     selectedBlock = res.blockIndex;
                     clearBtn.disabled = false;
+                    // Invalidate any in-flight block fetch: the probed block draws
+                    // synchronously from the probe result, so a stale fetch must
+                    // not overwrite it when it resolves.
+                    renderToken++;
                     render();
                 },
                 (error: unknown) => {
@@ -1792,8 +1836,12 @@ export class InfoPanelManager {
         probeBtn.addEventListener('click', run);
         clearBtn.addEventListener('click', () => {
             // Drop the probe overlay but keep the currently selected block shown.
+            // The block may need a fresh fetch now (it was the probe's block, whose
+            // bytes came from the probe result); render handles that. Bump the
+            // token so any in-flight fetch from before is discarded.
             probe = null;
             clearBtn.disabled = true;
+            renderToken++;
             render();
         });
         input.addEventListener('keypress', e => {
