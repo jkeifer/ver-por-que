@@ -143,12 +143,14 @@ export interface ParquetParser {
      */
     bloomDensity(rowGroup: number, column: string): Promise<BloomDensityResult>;
     /**
-     * Reads a single 256-bit block's 32 raw bytes (base64) from a column chunk's
-     * bloom filter in the most recently parsed file, so the UI can render any
-     * block's bit-grid on demand at any filter size. Same current-file contract
-     * as bloomDensity; rejects on an out-of-range block index.
+     * Reads a contiguous run of `count` 256-bit blocks' raw bytes (base64,
+     * `count*32` bytes) starting at block `start` from a column chunk's bloom
+     * filter in the most recently parsed file, so the UI can render a window of
+     * block bit-grids on demand at any filter size in one call. Same current-file
+     * contract as bloomDensity; `start`/`count` are clamped to the block range,
+     * so a window that overruns the last block returns fewer bytes.
      */
-    bloomBlock(rowGroup: number, column: string, blockIndex: number): Promise<string>;
+    bloomBlocks(rowGroup: number, column: string, start: number, count: number): Promise<string>;
     /**
      * Decodes a window of data page `pageIndex` in column chunk (`rowGroup`,
      * `column`) of the most recently parsed file, starting at value index
@@ -371,22 +373,24 @@ async def _bloom_density(row_group, column):
         result['buckets'] = buckets
     return json.dumps(result)
 
-async def _bloom_block(row_group, column, block_index):
-    # Return a single 256-bit block's 32 raw bytes (base64) on demand, so the UI
-    # can render any block's bit-grid at any filter size without shipping the
-    # whole bitset. Same current-file contract as _bloom_density; a block is 32
-    # bytes at offset block_index*32. Out-of-range indices raise (surfaces as an
-    # error), never a silent short slice.
+async def _bloom_blocks(row_group, column, start, count):
+    # Return a contiguous run of "count" 256-bit blocks' raw bytes (base64) on
+    # demand, so the UI can render a window of full-res block grids at any filter
+    # size in ONE fetch without shipping the whole bitset. Same current-file
+    # contract as _bloom_density; each block is 32 bytes, so the run is
+    # bitset[start*32 : (start+count)*32] (count*32 bytes). start/count are
+    # clamped to [0, num_blocks] rather than raising, so a window that overruns
+    # the last block simply returns fewer bytes.
     if _current is None:
         raise RuntimeError('no parquet file is loaded in this worker')
     pf, reader = _current
     chunk = pf.metadata.row_groups[row_group].column_chunks[column]
     bloom = await BloomFilter.from_reader(ensure_async_reader(reader), chunk)
-    if block_index < 0 or block_index >= bloom.num_blocks:
-        raise IndexError(f'block {block_index} out of range (0..{bloom.num_blocks - 1})')
-    base = block_index * 32
-    block = bytes(bloom.bitset[base:base + 32])
-    return json.dumps({'block': base64.b64encode(block).decode('ascii')})
+    num_blocks = bloom.num_blocks
+    start = max(0, min(start, num_blocks))
+    end = max(start, min(start + count, num_blocks))
+    blocks = bytes(bloom.bitset[start * 32:end * 32])
+    return json.dumps({'blocks': base64.b64encode(blocks).decode('ascii')})
 
 _MAX_SAFE_INTEGER = 2**53 - 1  # Number.MAX_SAFE_INTEGER
 
@@ -607,10 +611,11 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         rowGroup: number,
         column: string
     ) => Promise<string>;
-    const bloomBlock = pyodide.globals.get('_bloom_block') as (
+    const bloomBlocks = pyodide.globals.get('_bloom_blocks') as (
         rowGroup: number,
         column: string,
-        blockIndex: number
+        start: number,
+        count: number
     ) => Promise<string>;
     const preview = pyodide.globals.get('_preview') as (
         rowGroup: number,
@@ -718,8 +723,9 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
             JSON.parse(await probeBloom(rowGroup, column, value)) as BloomProbeResult,
         bloomDensity: async (rowGroup: number, column: string) =>
             JSON.parse(await bloomDensity(rowGroup, column)) as BloomDensityResult,
-        bloomBlock: async (rowGroup: number, column: string, blockIndex: number) =>
-            (JSON.parse(await bloomBlock(rowGroup, column, blockIndex)) as { block: string }).block,
+        bloomBlocks: async (rowGroup: number, column: string, start: number, count: number) =>
+            (JSON.parse(await bloomBlocks(rowGroup, column, start, count)) as { blocks: string })
+                .blocks,
         // Values cross the boundary as a JSON string: strings/numbers survive
         // pyodide proxying, but this keeps the conversion rules in one place
         // (python's _json_safe) and the payload copy-free.

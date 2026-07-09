@@ -3,7 +3,7 @@
  */
 import {
     InfoPanelManager,
-    type BloomBlock,
+    type BloomBlocks,
     type BloomDensity,
     type BloomProbe,
     type DictionaryPreview,
@@ -58,9 +58,9 @@ class ParquetExplorer {
     // Whole-filter density reader against the worker's current file; same
     // lifecycle as the bloom probe.
     private bloomDensity: BloomDensity | null = null;
-    // Single-block byte reader against the worker's current file; same lifecycle
+    // Block-range byte reader against the worker's current file; same lifecycle
     // as the bloom probe.
-    private bloomBlock: BloomBlock | null = null;
+    private bloomBlocks: BloomBlocks | null = null;
     // Value decoder against the worker's current file; same lifecycle as the
     // bloom probe.
     private valuePreview: ValuePreview | null = null;
@@ -294,7 +294,7 @@ class ParquetExplorer {
                     url,
                     this.workerBloomProbe(),
                     this.workerBloomDensity(),
-                    this.workerBloomBlock(),
+                    this.workerBloomBlocks(),
                     this.workerValuePreview(),
                     this.workerDictionaryPreview()
                 );
@@ -327,7 +327,7 @@ class ParquetExplorer {
                 source,
                 this.workerBloomProbe(),
                 this.workerBloomDensity(),
-                this.workerBloomBlock(),
+                this.workerBloomBlocks(),
                 this.workerValuePreview(),
                 this.workerDictionaryPreview()
             );
@@ -378,10 +378,10 @@ class ParquetExplorer {
         return (rowGroup, column) => this.workerClient!.bloomDensity(rowGroup, column);
     }
 
-    /** Single-block byte reader routed at the same worker current-file slot. */
-    private workerBloomBlock(): BloomBlock {
-        return (rowGroup, column, blockIndex) =>
-            this.workerClient!.bloomBlock(rowGroup, column, blockIndex);
+    /** Block-range byte reader routed at the same worker current-file slot. */
+    private workerBloomBlocks(): BloomBlocks {
+        return (rowGroup, column, start, count) =>
+            this.workerClient!.bloomBlocks(rowGroup, column, start, count);
     }
 
     /** Value decoder routed at the same worker current-file slot. */
@@ -415,7 +415,7 @@ class ParquetExplorer {
         source: string,
         bloomProbe: BloomProbe | null = null,
         bloomDensity: BloomDensity | null = null,
-        bloomBlock: BloomBlock | null = null,
+        bloomBlocks: BloomBlocks | null = null,
         valuePreview: ValuePreview | null = null,
         dictionaryPreview: DictionaryPreview | null = null
     ): Promise<void> {
@@ -454,7 +454,7 @@ class ParquetExplorer {
         this.parquetData = data;
         this.bloomProbe = bloomProbe;
         this.bloomDensity = bloomDensity;
-        this.bloomBlock = bloomBlock;
+        this.bloomBlocks = bloomBlocks;
         this.valuePreview = valuePreview;
         this.dictionaryPreview = dictionaryPreview;
         this.hydrateFromSource();
@@ -496,9 +496,9 @@ class ParquetExplorer {
                 this.ensureWorkerBooted(url).then(() =>
                     this.workerClient!.bloomDensity(rowGroup, column)
                 );
-            this.bloomBlock = (rowGroup, column, blockIndex) =>
+            this.bloomBlocks = (rowGroup, column, start, count) =>
                 this.ensureWorkerBooted(url).then(() =>
-                    this.workerClient!.bloomBlock(rowGroup, column, blockIndex)
+                    this.workerClient!.bloomBlocks(rowGroup, column, start, count)
                 );
             this.valuePreview = (rowGroup, column, pageIndex, offset, limit, skipNulls) =>
                 this.ensureWorkerBooted(url).then(() =>
@@ -574,7 +574,7 @@ class ParquetExplorer {
                 infoPanelContainer,
                 this.bloomProbe,
                 this.bloomDensity,
-                this.bloomBlock,
+                this.bloomBlocks,
                 this.valuePreview,
                 this.dictionaryPreview,
                 {
@@ -715,7 +715,7 @@ class ParquetExplorer {
         this.tree = null;
         this.bloomProbe = null;
         this.bloomDensity = null;
-        this.bloomBlock = null;
+        this.bloomBlocks = null;
         this.valuePreview = null;
         this.dictionaryPreview = null;
         this.workerBooted = null;

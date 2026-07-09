@@ -112,11 +112,16 @@ export type BloomProbe = (
 export type BloomDensity = (rowGroup: number, column: string) => Promise<BloomDensityResult>;
 
 /**
- * Reads one 256-bit block's 32 raw bytes (base64) from a column chunk's bloom
- * filter, so any block's bit-grid renders on demand at any filter size. Same
- * lifecycle as BloomDensity.
+ * Reads a contiguous run of `count` 256-bit blocks' raw bytes (base64) from a
+ * column chunk's bloom filter, so a window of block bit-grids renders on demand
+ * at any filter size in one call. Same lifecycle as BloomDensity.
  */
-export type BloomBlock = (rowGroup: number, column: string, blockIndex: number) => Promise<string>;
+export type BloomBlocks = (
+    rowGroup: number,
+    column: string,
+    start: number,
+    count: number
+) => Promise<string>;
 
 /**
  * Decodes a window of a data page in the worker's current file, starting at
@@ -1334,8 +1339,8 @@ export class InfoPanelManager {
     private bloomProbe: BloomProbe | null;
     /** Live whole-filter density reader; same lifecycle as bloomProbe. */
     private bloomDensity: BloomDensity | null;
-    /** Live single-block byte reader; same lifecycle as bloomProbe. */
-    private bloomBlock: BloomBlock | null;
+    /** Live block-range byte reader; same lifecycle as bloomProbe. */
+    private bloomBlocks: BloomBlocks | null;
     /** Live value decoder; null for JSON-dump / metadata-only loads. */
     private valuePreview: ValuePreview | null;
     /** Live dictionary decoder; same lifecycle as valuePreview. */
@@ -1351,7 +1356,7 @@ export class InfoPanelManager {
         container: HTMLElement,
         bloomProbe: BloomProbe | null = null,
         bloomDensity: BloomDensity | null = null,
-        bloomBlock: BloomBlock | null = null,
+        bloomBlocks: BloomBlocks | null = null,
         valuePreview: ValuePreview | null = null,
         dictionaryPreview: DictionaryPreview | null = null,
         recovery: RecoveryActions = { loadFullStructure: null, downloadFullFile: null }
@@ -1360,7 +1365,7 @@ export class InfoPanelManager {
         this.container.innerHTML = '';
         this.bloomProbe = bloomProbe;
         this.bloomDensity = bloomDensity;
-        this.bloomBlock = bloomBlock;
+        this.bloomBlocks = bloomBlocks;
         this.valuePreview = valuePreview;
         this.dictionaryPreview = dictionaryPreview;
         this.recovery = recovery;
@@ -1755,7 +1760,7 @@ export class InfoPanelManager {
             stripWrap.innerHTML = renderBloomStrip(density, selectedBlock, probe?.blockIndex);
             const viewingProbed = probe !== null && selectedBlock === probe.blockIndex;
             const bytes = bytesFor(selectedBlock);
-            if (bytes || !this.bloomBlock) {
+            if (bytes || !this.bloomBlocks) {
                 drawBlock(bytes, viewingProbed);
                 return;
             }
@@ -1766,7 +1771,7 @@ export class InfoPanelManager {
             const block = selectedBlock;
             blockWrap.innerHTML = '<div class="bloom-lineage">Loading block…</div>';
             result.innerHTML = '';
-            this.bloomBlock(node.rowGroup, node.path, block).then(
+            this.bloomBlocks(node.rowGroup, node.path, block, 1).then(
                 b64 => {
                     if (token !== renderToken) {
                         return; // a newer selection superseded this fetch

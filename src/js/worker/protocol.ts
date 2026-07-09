@@ -16,7 +16,7 @@ interface ParseRequestBase {
     preview?: undefined;
     dictionaryPreview?: undefined;
     bloomDensity?: undefined;
-    bloomBlock?: undefined;
+    bloomBlocks?: undefined;
     boot?: undefined;
 }
 
@@ -32,7 +32,7 @@ export interface WarmupRequest {
     preview?: undefined;
     dictionaryPreview?: undefined;
     bloomDensity?: undefined;
-    bloomBlock?: undefined;
+    bloomBlocks?: undefined;
     boot?: undefined;
 }
 
@@ -64,7 +64,7 @@ export interface ProbeBloomRequest {
     preview?: undefined;
     dictionaryPreview?: undefined;
     bloomDensity?: undefined;
-    bloomBlock?: undefined;
+    bloomBlocks?: undefined;
     boot?: undefined;
     bytes?: undefined;
     url?: undefined;
@@ -83,21 +83,21 @@ export interface BloomDensityRequest {
     probe?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
-    bloomBlock?: undefined;
+    bloomBlocks?: undefined;
     boot?: undefined;
     bytes?: undefined;
     url?: undefined;
 }
 
 /**
- * Read one 256-bit block's 32 raw bytes (base64) from a column chunk's bloom
- * filter in the worker's current file, so the UI can render any block's bit-grid
- * on demand at any filter size.
+ * Read a contiguous run of `count` 256-bit blocks' raw bytes (base64) from a
+ * column chunk's bloom filter in the worker's current file, so the UI can render
+ * a window of block bit-grids on demand at any filter size in one call.
  */
-export interface BloomBlockRequest {
+export interface BloomBlocksRequest {
     id: number;
     manifestUrl: string;
-    bloomBlock: { rowGroup: number; column: string; blockIndex: number };
+    bloomBlocks: { rowGroup: number; column: string; start: number; count: number };
     warmup?: undefined;
     probe?: undefined;
     preview?: undefined;
@@ -129,7 +129,7 @@ export interface PreviewRequest {
     probe?: undefined;
     dictionaryPreview?: undefined;
     bloomDensity?: undefined;
-    bloomBlock?: undefined;
+    bloomBlocks?: undefined;
     boot?: undefined;
     bytes?: undefined;
     url?: undefined;
@@ -149,7 +149,7 @@ export interface DictionaryPreviewRequest {
     probe?: undefined;
     preview?: undefined;
     bloomDensity?: undefined;
-    bloomBlock?: undefined;
+    bloomBlocks?: undefined;
     boot?: undefined;
     bytes?: undefined;
     url?: undefined;
@@ -169,7 +169,7 @@ export interface BootRequest {
     preview?: undefined;
     dictionaryPreview?: undefined;
     bloomDensity?: undefined;
-    bloomBlock?: undefined;
+    bloomBlocks?: undefined;
     bytes?: undefined;
     url?: undefined;
 }
@@ -179,7 +179,7 @@ export type WorkerRequest =
     | ParseRequest
     | ProbeBloomRequest
     | BloomDensityRequest
-    | BloomBlockRequest
+    | BloomBlocksRequest
     | PreviewRequest
     | DictionaryPreviewRequest
     | BootRequest
@@ -191,7 +191,7 @@ export interface ParseSuccess {
     dump: string;
     bloomProbe?: undefined;
     bloomDensity?: undefined;
-    bloomBlock?: undefined;
+    bloomBlocks?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
     booted?: undefined;
@@ -205,7 +205,7 @@ export interface ProbeBloomSuccess {
     bloomProbe: BloomProbeResult;
     dump?: undefined;
     bloomDensity?: undefined;
-    bloomBlock?: undefined;
+    bloomBlocks?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
     booted?: undefined;
@@ -218,17 +218,17 @@ export interface BloomDensitySuccess {
     bloomDensity: BloomDensityResult;
     dump?: undefined;
     bloomProbe?: undefined;
-    bloomBlock?: undefined;
+    bloomBlocks?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
     booted?: undefined;
 }
 
-export interface BloomBlockSuccess {
+export interface BloomBlocksSuccess {
     id: number;
     ok: true;
-    /** One 256-bit block's 32 raw bytes, base64. */
-    bloomBlock: string;
+    /** A contiguous run of 256-bit blocks' raw bytes, base64 (count*32 bytes). */
+    bloomBlocks: string;
     dump?: undefined;
     bloomProbe?: undefined;
     bloomDensity?: undefined;
@@ -244,7 +244,7 @@ export interface PreviewSuccess {
     dump?: undefined;
     bloomProbe?: undefined;
     bloomDensity?: undefined;
-    bloomBlock?: undefined;
+    bloomBlocks?: undefined;
     dictionaryPreview?: undefined;
     booted?: undefined;
 }
@@ -256,7 +256,7 @@ export interface DictionaryPreviewSuccess {
     dump?: undefined;
     bloomProbe?: undefined;
     bloomDensity?: undefined;
-    bloomBlock?: undefined;
+    bloomBlocks?: undefined;
     preview?: undefined;
     booted?: undefined;
 }
@@ -269,7 +269,7 @@ export interface BootSuccess {
     dump?: undefined;
     bloomProbe?: undefined;
     bloomDensity?: undefined;
-    bloomBlock?: undefined;
+    bloomBlocks?: undefined;
     preview?: undefined;
     dictionaryPreview?: undefined;
 }
@@ -311,7 +311,7 @@ export type WorkerResponse =
     | ParseSuccess
     | ProbeBloomSuccess
     | BloomDensitySuccess
-    | BloomBlockSuccess
+    | BloomBlocksSuccess
     | PreviewSuccess
     | DictionaryPreviewSuccess
     | BootSuccess

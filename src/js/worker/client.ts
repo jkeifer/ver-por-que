@@ -3,8 +3,8 @@
  * (so the JSON path pays zero pyodide cost) and reuses it thereafter.
  */
 import type {
-    BloomBlockRequest,
-    BloomBlockSuccess,
+    BloomBlocksRequest,
+    BloomBlocksSuccess,
     BloomDensityRequest,
     BloomDensitySuccess,
     BootRequest,
@@ -30,7 +30,7 @@ type Success =
     | ParseSuccess
     | ProbeBloomSuccess
     | BloomDensitySuccess
-    | BloomBlockSuccess
+    | BloomBlocksSuccess
     | PreviewSuccess
     | DictionaryPreviewSuccess
     | BootSuccess;
@@ -133,13 +133,13 @@ export class ParquetWorkerClient {
     }
 
     /**
-     * Reads one 256-bit block's 32 raw bytes (base64) from a column chunk's bloom
-     * filter in the worker's current file, so any block's bit-grid renders on
-     * demand at any filter size.
+     * Reads a contiguous run of `count` 256-bit blocks' raw bytes (base64) from a
+     * column chunk's bloom filter in the worker's current file, so a window of
+     * block bit-grids renders on demand at any filter size in one call.
      */
-    bloomBlock(rowGroup: number, column: string, blockIndex: number): Promise<string> {
-        return this.request({ bloomBlock: { rowGroup, column, blockIndex } }).then(
-            msg => msg.bloomBlock!
+    bloomBlocks(rowGroup: number, column: string, start: number, count: number): Promise<string> {
+        return this.request({ bloomBlocks: { rowGroup, column, start, count } }).then(
+            msg => msg.bloomBlocks!
         );
     }
 
@@ -200,7 +200,7 @@ export class ParquetWorkerClient {
             | ({ name: string } & ({ bytes: ArrayBuffer } | { url: string }))
             | { probe: ProbeBloomRequest['probe'] }
             | { bloomDensity: BloomDensityRequest['bloomDensity'] }
-            | { bloomBlock: BloomBlockRequest['bloomBlock'] }
+            | { bloomBlocks: BloomBlocksRequest['bloomBlocks'] }
             | { preview: PreviewRequest['preview'] }
             | { dictionaryPreview: DictionaryPreviewRequest['dictionaryPreview'] }
             | { boot: BootRequest['boot'] },
@@ -214,7 +214,7 @@ export class ParquetWorkerClient {
                 | ParseRequest
                 | ProbeBloomRequest
                 | BloomDensityRequest
-                | BloomBlockRequest
+                | BloomBlocksRequest
                 | PreviewRequest
                 | DictionaryPreviewRequest
                 | BootRequest;

@@ -96,10 +96,10 @@ ctx.addEventListener('message', event => {
                 ctx.postMessage({ id: req.id, ok: true, bloomDensity });
                 return;
             }
-            if (req.bloomBlock) {
-                const { rowGroup, column, blockIndex } = req.bloomBlock;
-                const bloomBlock = await parser.bloomBlock(rowGroup, column, blockIndex);
-                ctx.postMessage({ id: req.id, ok: true, bloomBlock });
+            if (req.bloomBlocks) {
+                const { rowGroup, column, start, count } = req.bloomBlocks;
+                const bloomBlocks = await parser.bloomBlocks(rowGroup, column, start, count);
+                ctx.postMessage({ id: req.id, ok: true, bloomBlocks });
                 return;
             }
             if (req.preview) {
