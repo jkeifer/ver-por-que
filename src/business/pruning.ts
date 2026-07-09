@@ -18,9 +18,10 @@ import {
 } from './stat-values';
 import type { AnyDump, ColumnStatistics, SchemaLeaf, SchemaGroup, SchemaRoot } from '../types';
 
-export type Op = 'eq' | 'lt' | 'lte' | 'gt' | 'gte';
+export type Op = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte';
 
-export const OP_LABEL: Record<Op, string> = { eq: '=', lt: '<', lte: '≤', gt: '>', gte: '≥' };
+// prettier-ignore
+export const OP_LABEL: Record<Op, string> = { eq: '=', ne: '≠', lt: '<', lte: '≤', gt: '>', gte: '≥' };
 
 export function isOp(v: unknown): v is Op {
     return typeof v === 'string' && v in OP_LABEL;
@@ -190,6 +191,11 @@ function lt(a: StatValue, b: StatValue): boolean {
     return (na as number) < (nb as number);
 }
 
+/** a == b for same-typed decoded values (neither is less than the other). */
+function eq(a: StatValue, b: StatValue): boolean {
+    return !lt(a, b) && !lt(b, a);
+}
+
 /** Prune/keep against a [min, max] range. All ops here never match null. */
 function decide(min: StatValue, max: StatValue, op: Op, v: StatValue): Decision {
     const pruned = (reason: string): Decision => ({ pruned: true, reason: `pruned — ${reason}` });
@@ -202,6 +208,17 @@ function decide(min: StatValue, max: StatValue, op: Op, v: StatValue): Decision 
                 return pruned(`query value ${fmt(v)} > max value ${fmt(max)}`);
             }
             break;
+        case 'ne':
+            // ≠ can only skip a range that is the single value v (min==max==v);
+            // any other range holds some value that differs, so it's never
+            // pruned — the point of surfacing ≠ is showing it almost never helps.
+            if (eq(min, max) && eq(min, v)) {
+                return pruned(`every value equals ${fmt(v)}; nothing in the range is ≠ ${fmt(v)}`);
+            }
+            return {
+                pruned: false,
+                reason: `kept — a ≠ predicate can't skip a range; values other than ${fmt(v)} may exist in [${fmt(min)},${fmt(max)}]`,
+            };
         case 'lt':
             if (!lt(min, v)) {
                 return pruned(
