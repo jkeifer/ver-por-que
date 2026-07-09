@@ -103,6 +103,17 @@ ctx.addEventListener('message', event => {
                 ctx.postMessage({ id: req.id, ok: true, preview });
                 return;
             }
+            if (req.dictionaryPreview) {
+                const { rowGroup, column, offset, limit } = req.dictionaryPreview;
+                const dictionaryPreview = await parser.previewDictionary(
+                    rowGroup,
+                    column,
+                    offset,
+                    limit
+                );
+                ctx.postMessage({ id: req.id, ok: true, dictionaryPreview });
+                return;
+            }
             if (req.boot) {
                 await parser.bootFromDump(req.boot.dumpJson, req.boot.url);
                 ctx.postMessage({ id: req.id, ok: true, booted: true });
