@@ -338,33 +338,24 @@ async def _preview(row_group, column, page_index, offset, limit, skip_nulls):
         values = []
         nulls = 0
         try:
-            # Decode the page twice: once logical (what we display) and once
-            # physical (logical conversion skipped) -- the raw value the bloom
-            # probe hashes. They differ only for logical types (temporal, ...),
-            # so 'physical' is carried only then, letting a user copy the
-            # probe-ready value. If the exclusion doesn't match, the physical
-            # pass just equals the logical one and nothing is carried (graceful).
-            # ponytail: the second decode is wasted for plain columns; it's
-            # one-time per page (the decoded page is cached below).
-            logical_rows = list(await chunk.parse_data_page(page_index, reader))
-            physical_rows = list(
-                await chunk.parse_data_page(
-                    page_index, reader, excluded_logical_columns=[se.full_path]
-                )
-            )
-            for (value, def_level, rep_level), phys_row in zip(logical_rows, physical_rows):
-                entry = {'value': _json_safe(value), 'def': def_level, 'rep': rep_level}
-                raw = phys_row[0]
-                # Offer the physical value only for numeric-backed logical types
-                # (temporal, decimal, ...), where the display differs from the
-                # integer the probe hashes. Byte-array strings decode to
-                # themselves -- exactly what you'd type -- so they get no button.
+            # Decode physical values once (logical conversion skipped), then apply
+            # the same physical_to_logical_type the data-page parser uses -- so a
+            # single pass yields both the display value and the raw physical value
+            # the bloom probe hashes. They differ only for numeric-backed logical
+            # types (temporal, decimal, ...), where 'physical' is carried so the
+            # user can copy the probe-ready value; byte-array strings decode to
+            # themselves -- exactly what you'd type -- so they get no button.
+            for raw, def_level, rep_level in await chunk.parse_data_page(
+                page_index, reader, excluded_logical_columns=[se.full_path]
+            ):
+                logical = se.physical_to_logical_type(raw) if raw is not None else None
+                entry = {'value': _json_safe(logical), 'def': def_level, 'rep': rep_level}
                 if isinstance(raw, (int, float)) and not isinstance(raw, bool):
                     physical = _json_safe(raw)
                     if physical != entry['value']:
                         entry['physical'] = physical
                 values.append(entry)
-                if value is None:
+                if logical is None:
                     nulls += 1
         except ParquetDataError as error:
             # compressors.py raises '<Codec> compression requires <pkg> package'
