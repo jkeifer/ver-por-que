@@ -1,14 +1,7 @@
 /**
  * Main application logic for the Parquet Explorer (JSON Mode).
  */
-import {
-    InfoPanelManager,
-    type BloomBlocks,
-    type BloomDensity,
-    type BloomProbe,
-    type DictionaryPreview,
-    type ValuePreview,
-} from './components/info-panel-manager';
+import { InfoPanelManager, type WorkerCapabilities } from './components/info-panel-manager';
 import { QueryPanel } from './components/query-panel';
 import { SvgByteVisualizer } from './components/svg-byte-visualizer';
 import { TreemapVisualizer } from './components/treemap-visualizer';
@@ -51,26 +44,16 @@ class ParquetExplorer {
     // The segment tree, projected once per dump and shared by both lenses and
     // the query panel — renderers consume it, they never re-project.
     private tree: SegmentNode | null = null;
-    // Bloom-filter probe against the worker's current file. Only raw-parquet
-    // loads have one (the worker keeps the parsed file alive); JSON dumps and
-    // restores degrade with a note.
-    private bloomProbe: BloomProbe | null = null;
-    // Whole-filter density reader against the worker's current file; same
-    // lifecycle as the bloom probe.
-    private bloomDensity: BloomDensity | null = null;
-    // Block-range byte reader against the worker's current file; same lifecycle
-    // as the bloom probe.
-    private bloomBlocks: BloomBlocks | null = null;
-    // Value decoder against the worker's current file; same lifecycle as the
-    // bloom probe.
-    private valuePreview: ValuePreview | null = null;
-    // Dictionary decoder against the worker's current file; same lifecycle as
-    // the value preview.
-    private dictionaryPreview: DictionaryPreview | null = null;
-    // For a full dump loaded from JSON (or restored) whose source is a
-    // fetchable URL: the one-time boot that rehydrates the dump into the
-    // worker and attaches a range reader, so bloom/preview read only the spans
-    // they need. Reset on every load so the slot always matches the dump.
+    // The worker-backed capabilities (bloom probe/density/blocks, value +
+    // dictionary preview) routed at the worker's current-file slot. Present as
+    // a bundle for a raw-parquet load or a full dump with a fetchable source;
+    // null for a metadata-only / source-less dump, where the cards degrade.
+    private capabilities: WorkerCapabilities | null = null;
+    // The one-time boot that readies the worker's current-file slot for the
+    // loaded dump. A raw-parquet parse resolves it immediately (the worker
+    // already holds the file); a full dump with a fetchable URL boots it
+    // lazily on first capability use. Reset on every load so it always matches
+    // the current dump.
     private workerBooted: Promise<void> | null = null;
     private infoPanelManager: InfoPanelManager | null = null;
     private fileStructureViz: Visualizer | null = null;
@@ -289,15 +272,10 @@ class ParquetExplorer {
             // whole and sniffed as before.
             if (isParquetURL(url)) {
                 const dump = await this.parseParquetURL(url);
-                await this.parseJSON(
-                    dump,
-                    url,
-                    this.workerBloomProbe(),
-                    this.workerBloomDensity(),
-                    this.workerBloomBlocks(),
-                    this.workerValuePreview(),
-                    this.workerDictionaryPreview()
-                );
+                // The worker already holds the file, so "ready" is trivially
+                // resolved and the capabilities read the current-file slot.
+                this.workerBooted = Promise.resolve();
+                await this.parseJSON(dump, url, this.buildCapabilities());
                 return;
             }
 
@@ -322,15 +300,10 @@ class ParquetExplorer {
             // The worker takes ownership of the buffer (postMessage detaches
             // it); nothing here needs it afterward.
             const dump = await this.parseParquet(buffer, source);
-            await this.parseJSON(
-                dump,
-                source,
-                this.workerBloomProbe(),
-                this.workerBloomDensity(),
-                this.workerBloomBlocks(),
-                this.workerValuePreview(),
-                this.workerDictionaryPreview()
-            );
+            // The worker already holds the file, so "ready" is trivially
+            // resolved and the capabilities read the current-file slot.
+            this.workerBooted = Promise.resolve();
+            await this.parseJSON(dump, source, this.buildCapabilities());
         } else {
             this.updateLoadingStatus('Parsing JSON data...');
             await this.parseJSON(new TextDecoder().decode(buffer), source);
@@ -366,34 +339,37 @@ class ParquetExplorer {
     }
 
     /**
-     * Probe routed at the worker's current-file slot, which the parse that
-     * just completed populated. Valid until the next parse replaces it.
+     * The five worker-backed capabilities, each routed at the worker's
+     * current-file slot behind the same `ready()` gate. `ready()` returns the
+     * one-time boot: a raw-parquet load pre-resolves it (the worker already
+     * holds the file), while a full dump with a fetchable URL boots the slot
+     * lazily on first use. Valid until the next load resets `workerBooted`.
      */
-    private workerBloomProbe(): BloomProbe {
-        return (rowGroup, column, value) => this.workerClient!.probeBloom(rowGroup, column, value);
-    }
-
-    /** Whole-filter density reader routed at the same worker current-file slot. */
-    private workerBloomDensity(): BloomDensity {
-        return (rowGroup, column) => this.workerClient!.bloomDensity(rowGroup, column);
-    }
-
-    /** Block-range byte reader routed at the same worker current-file slot. */
-    private workerBloomBlocks(): BloomBlocks {
-        return (rowGroup, column, start, count) =>
-            this.workerClient!.bloomBlocks(rowGroup, column, start, count);
-    }
-
-    /** Value decoder routed at the same worker current-file slot. */
-    private workerValuePreview(): ValuePreview {
-        return (rowGroup, column, pageIndex, offset, limit, skipNulls) =>
-            this.workerClient!.preview(rowGroup, column, pageIndex, offset, limit, skipNulls);
-    }
-
-    /** Dictionary decoder routed at the same worker current-file slot. */
-    private workerDictionaryPreview(): DictionaryPreview {
-        return (rowGroup, column, offset, limit) =>
-            this.workerClient!.previewDictionary(rowGroup, column, offset, limit);
+    private buildCapabilities(url?: string): WorkerCapabilities {
+        const ready = (): Promise<void> => this.ensureWorkerBooted(url);
+        return {
+            bloomProbe: (rowGroup, column, value) =>
+                ready().then(() => this.workerClient!.probeBloom(rowGroup, column, value)),
+            bloomDensity: (rowGroup, column) =>
+                ready().then(() => this.workerClient!.bloomDensity(rowGroup, column)),
+            bloomBlocks: (rowGroup, column, start, count) =>
+                ready().then(() => this.workerClient!.bloomBlocks(rowGroup, column, start, count)),
+            valuePreview: (rowGroup, column, pageIndex, offset, limit, skipNulls) =>
+                ready().then(() =>
+                    this.workerClient!.preview(
+                        rowGroup,
+                        column,
+                        pageIndex,
+                        offset,
+                        limit,
+                        skipNulls
+                    )
+                ),
+            dictionaryPreview: (rowGroup, column, offset, limit) =>
+                ready().then(() =>
+                    this.workerClient!.previewDictionary(rowGroup, column, offset, limit)
+                ),
+        };
     }
 
     private ensureWorkerClient(): ParquetWorkerClient {
@@ -413,11 +389,7 @@ class ParquetExplorer {
     private async parseJSON(
         jsonText: string,
         source: string,
-        bloomProbe: BloomProbe | null = null,
-        bloomDensity: BloomDensity | null = null,
-        bloomBlocks: BloomBlocks | null = null,
-        valuePreview: ValuePreview | null = null,
-        dictionaryPreview: DictionaryPreview | null = null
+        capabilities: WorkerCapabilities | null = null
     ): Promise<void> {
         const parsed: unknown = JSON.parse(jsonText);
 
@@ -452,11 +424,7 @@ class ParquetExplorer {
         }
 
         this.parquetData = data;
-        this.bloomProbe = bloomProbe;
-        this.bloomDensity = bloomDensity;
-        this.bloomBlocks = bloomBlocks;
-        this.valuePreview = valuePreview;
-        this.dictionaryPreview = dictionaryPreview;
+        this.capabilities = capabilities;
         this.hydrateFromSource();
         await this.saveToStorage(data, source);
 
@@ -464,9 +432,8 @@ class ParquetExplorer {
         this.populateUI();
         this.hideLoadingScreen();
         // Background-warm the bloom byte ranges so the first query probe / bloom
-        // node open pays no range fetch. `bloomProbe` was passed non-null only by
-        // a raw-parquet load (the worker already holds the file).
-        this.warmBloomFilters(bloomProbe !== null);
+        // node open pays no range fetch.
+        this.warmBloomFilters();
     }
 
     /** The dump's recorded source, when it's a fetchable http(s) URL. */
@@ -488,16 +455,13 @@ class ParquetExplorer {
      * pays no range fetch. Only worth it for a REMOTE file (the bitsets live over
      * the network) — a local upload already holds them in worker memory, so
      * warming would just re-read 130 filters through pyodide for nothing. Gated
-     * on a fetchable source: a URL parquet parse already has the reader; a JSON
-     * dump with a source boots it first.
+     * on a fetchable source: a URL parquet parse already has the reader (its
+     * boot is pre-resolved); a JSON dump with a source boots it first. Both go
+     * through the same ready() gate, so the path is identical either way.
      */
-    private warmBloomFilters(workerHasFile: boolean): void {
+    private warmBloomFilters(): void {
         const url = this.fetchableSource();
-        if (!url || !this.bloomProbe || !this.hasBloomFilters()) {
-            return;
-        }
-        if (workerHasFile) {
-            this.workerClient?.prefetchBlooms();
+        if (!url || !this.capabilities || !this.hasBloomFilters()) {
             return;
         }
         this.ensureWorkerBooted(url).then(
@@ -508,49 +472,25 @@ class ParquetExplorer {
 
     /**
      * JSON-dump and restored loads arrive source-less, but nothing they need is
-     * actually missing: a full dump carries every offset, and bloom/preview
+     * actually missing: a full dump carries every offset, and the capabilities
      * lazily boot a range reader in the worker on first use (see
-     * ensureWorkerBooted). So when the dump records a fetchable URL, wire those
-     * byte-level features straight at it. Metadata-only dumps have no chunk/page
-     * nodes to probe from, so they rely on the "load full structure" button.
+     * ensureWorkerBooted). So when the dump records a fetchable URL, wire the
+     * capabilities straight at it. A raw-parquet load already built them (and
+     * pre-resolved the boot), so leave those alone. Metadata-only dumps have no
+     * chunk/page nodes to probe from, so they rely on the "load full structure"
+     * button.
      */
     private hydrateFromSource(): void {
-        this.workerBooted = null;
-        if (this.bloomProbe) {
-            return; // a raw-parquet load already wired bloom/preview at the worker
-        }
-        const url = this.fetchableSource();
-        if (!url) {
+        if (this.capabilities) {
+            // A raw-parquet load already built the capabilities and pre-resolved
+            // workerBooted (the worker holds the file); leave both in place.
             return;
         }
-        if (this.parquetData && 'column_chunks' in this.parquetData) {
-            this.bloomProbe = (rowGroup, column, value) =>
-                this.ensureWorkerBooted(url).then(() =>
-                    this.workerClient!.probeBloom(rowGroup, column, value)
-                );
-            this.bloomDensity = (rowGroup, column) =>
-                this.ensureWorkerBooted(url).then(() =>
-                    this.workerClient!.bloomDensity(rowGroup, column)
-                );
-            this.bloomBlocks = (rowGroup, column, start, count) =>
-                this.ensureWorkerBooted(url).then(() =>
-                    this.workerClient!.bloomBlocks(rowGroup, column, start, count)
-                );
-            this.valuePreview = (rowGroup, column, pageIndex, offset, limit, skipNulls) =>
-                this.ensureWorkerBooted(url).then(() =>
-                    this.workerClient!.preview(
-                        rowGroup,
-                        column,
-                        pageIndex,
-                        offset,
-                        limit,
-                        skipNulls
-                    )
-                );
-            this.dictionaryPreview = (rowGroup, column, offset, limit) =>
-                this.ensureWorkerBooted(url).then(() =>
-                    this.workerClient!.previewDictionary(rowGroup, column, offset, limit)
-                );
+        // A fresh dump / restore: drop any prior boot so the slot matches.
+        this.workerBooted = null;
+        const url = this.fetchableSource();
+        if (url && this.parquetData && 'column_chunks' in this.parquetData) {
+            this.capabilities = this.buildCapabilities(url);
         }
     }
 
@@ -558,12 +498,13 @@ class ParquetExplorer {
      * Boot the worker's current-file slot for the loaded dump once (rehydrate
      * the dump JSON + attach a range reader at `url` — a footer-sized read at
      * most, never a download), then reuse it for every probe until the next
-     * load resets it.
+     * load resets it. `url` is only read on the lazy dump path; a raw-parquet
+     * load pre-resolves `workerBooted`, so it's never dereferenced there.
      */
-    private ensureWorkerBooted(url: string): Promise<void> {
+    private ensureWorkerBooted(url?: string): Promise<void> {
         if (!this.workerBooted) {
             const dumpJson = JSON.stringify(this.parquetData);
-            this.workerBooted = this.ensureWorkerClient().bootFromDump(dumpJson, url);
+            this.workerBooted = this.ensureWorkerClient().bootFromDump(dumpJson, url!);
         }
         return this.workerBooted;
     }
@@ -606,18 +547,10 @@ class ParquetExplorer {
 
             const src = this.fetchableSource();
             const metadataOnly = !('column_chunks' in data);
-            this.infoPanelManager = new InfoPanelManager(
-                infoPanelContainer,
-                this.bloomProbe,
-                this.bloomDensity,
-                this.bloomBlocks,
-                this.valuePreview,
-                this.dictionaryPreview,
-                {
-                    loadFullStructure: src && metadataOnly ? () => void this.loadURL(src) : null,
-                    downloadFullFile: src ? () => void this.downloadFullFile(src) : null,
-                }
-            );
+            this.infoPanelManager = new InfoPanelManager(infoPanelContainer, this.capabilities, {
+                loadFullStructure: src && metadataOnly ? () => void this.loadURL(src) : null,
+                downloadFullFile: src ? () => void this.downloadFullFile(src) : null,
+            });
 
             // A new dump invalidates the previous dump's selection and dimming.
             this.selectedNodeId = null;
@@ -648,7 +581,7 @@ class ParquetExplorer {
                     onClear: () => this.clearQueryOverlay(),
                     loadFullStructure: src && metadataOnly ? () => void this.loadURL(src) : null,
                 },
-                this.bloomProbe
+                this.capabilities?.bloomProbe ?? null
             );
 
             // Permalink: `#q=<json {predicates, columns}>` re-applies the query
@@ -750,11 +683,7 @@ class ParquetExplorer {
     private async handleReset(): Promise<void> {
         this.parquetData = null;
         this.tree = null;
-        this.bloomProbe = null;
-        this.bloomDensity = null;
-        this.bloomBlocks = null;
-        this.valuePreview = null;
-        this.dictionaryPreview = null;
+        this.capabilities = null;
         this.workerBooted = null;
         this.lens = 'bytes';
         this.selectedNodeId = null;

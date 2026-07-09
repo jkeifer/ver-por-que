@@ -65,3 +65,17 @@ export type DictionaryPreview = (
     offset: number,
     limit: number
 ) => Promise<DictionaryPreviewResult>;
+
+/**
+ * The five worker-backed capabilities as one bundle. They share a lifecycle —
+ * present together (a raw-parquet load, or a full dump with a fetchable source)
+ * or absent together (metadata-only / source-less) — so they wire, reset, and
+ * degrade as a unit rather than five parallel slots.
+ */
+export interface WorkerCapabilities {
+    bloomProbe: BloomProbe;
+    bloomDensity: BloomDensity;
+    bloomBlocks: BloomBlocks;
+    valuePreview: ValuePreview;
+    dictionaryPreview: DictionaryPreview;
+}

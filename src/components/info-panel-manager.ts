@@ -31,6 +31,7 @@ import type {
     BloomProbe,
     DictionaryPreview,
     ValuePreview,
+    WorkerCapabilities,
 } from './info-panel/capabilities';
 import {
     renderDictionaryWindow,
@@ -43,7 +44,14 @@ import { PANEL_KINDS, panelSections } from './info-panel/panels';
 // keep a single entry point for the panel's public surface.
 export { escapeHtml, isIncrementalReadError, PANEL_KINDS };
 export type { RecoveryActions };
-export type { BloomBlocks, BloomDensity, BloomProbe, DictionaryPreview, ValuePreview };
+export type {
+    BloomBlocks,
+    BloomDensity,
+    BloomProbe,
+    DictionaryPreview,
+    ValuePreview,
+    WorkerCapabilities,
+};
 
 const BLOOM_PROBE_UNAVAILABLE_NOTE =
     'Probing needs the filter bytes — load the original .parquet to test values.';
@@ -64,16 +72,9 @@ interface PreviewTarget {
 export class InfoPanelManager {
     private container: HTMLElement;
     private infoPanel: HTMLElement;
-    /** Live bloom-filter probe; null for JSON-dump / metadata-only loads. */
-    private bloomProbe: BloomProbe | null;
-    /** Live whole-filter density reader; same lifecycle as bloomProbe. */
-    private bloomDensity: BloomDensity | null;
-    /** Live block-range byte reader; same lifecycle as bloomProbe. */
-    private bloomBlocks: BloomBlocks | null;
-    /** Live value decoder; null for JSON-dump / metadata-only loads. */
-    private valuePreview: ValuePreview | null;
-    /** Live dictionary decoder; same lifecycle as valuePreview. */
-    private dictionaryPreview: DictionaryPreview | null;
+    /** The live worker-backed capabilities (bloom / preview), or null for a
+     *  JSON-dump / metadata-only load, in which case the cards degrade. */
+    private capabilities: WorkerCapabilities | null;
     /** Recovery actions for degraded cards; both null when no fetchable source. */
     private recovery: RecoveryActions;
     /** Active query resolution, or null when no predicate has run. */
@@ -87,20 +88,12 @@ export class InfoPanelManager {
 
     constructor(
         container: HTMLElement,
-        bloomProbe: BloomProbe | null = null,
-        bloomDensity: BloomDensity | null = null,
-        bloomBlocks: BloomBlocks | null = null,
-        valuePreview: ValuePreview | null = null,
-        dictionaryPreview: DictionaryPreview | null = null,
+        capabilities: WorkerCapabilities | null = null,
         recovery: RecoveryActions = { loadFullStructure: null, downloadFullFile: null }
     ) {
         this.container = container;
         this.container.innerHTML = '';
-        this.bloomProbe = bloomProbe;
-        this.bloomDensity = bloomDensity;
-        this.bloomBlocks = bloomBlocks;
-        this.valuePreview = valuePreview;
-        this.dictionaryPreview = dictionaryPreview;
+        this.capabilities = capabilities;
         this.recovery = recovery;
         this.infoPanel = document.createElement('div');
         this.infoPanel.className = 'info-panel';
@@ -192,7 +185,7 @@ export class InfoPanelManager {
         this.current = { node, dump };
         const heading = node.kind === 'file' ? 'File Overview' : describe(node);
         const sections = panelSections(node, dump);
-        if (node.kind === 'bloom_filter' && !this.bloomProbe) {
+        if (node.kind === 'bloom_filter' && !this.capabilities) {
             // No live worker file (JSON dump, metadata export, or restore):
             // same degradation pattern as METADATA_ONLY_NOTE.
             sections.push({
@@ -201,14 +194,14 @@ export class InfoPanelManager {
             });
         }
         const preview = this.previewTarget(node);
-        if (preview && !this.valuePreview) {
+        if (preview && !this.capabilities) {
             // Same degradation pattern as the bloom probe above.
             sections.push({
                 title: 'Value Preview',
                 rows: [['Detail', VALUE_PREVIEW_UNAVAILABLE_NOTE]],
             });
         }
-        if (node.kind === 'dictionary_page' && !this.dictionaryPreview) {
+        if (node.kind === 'dictionary_page' && !this.capabilities) {
             sections.push({
                 title: 'Dictionary Values',
                 rows: [['Detail', VALUE_PREVIEW_UNAVAILABLE_NOTE]],
@@ -224,16 +217,16 @@ export class InfoPanelManager {
                 .querySelectorAll('.recovery-btn[data-action="upgrade"]')
                 .forEach(btn => btn.addEventListener('click', upgrade));
         }
-        if (node.kind === 'bloom_filter' && this.bloomProbe) {
+        if (node.kind === 'bloom_filter' && this.capabilities) {
             this.bloomWidget = createBloomProbeWidget(node, dump, {
-                bloomProbe: this.bloomProbe,
-                bloomDensity: this.bloomDensity,
-                bloomBlocks: this.bloomBlocks,
+                bloomProbe: this.capabilities.bloomProbe,
+                bloomDensity: this.capabilities.bloomDensity,
+                bloomBlocks: this.capabilities.bloomBlocks,
                 recovery: this.recovery,
             });
             this.infoPanel.querySelector('.info-sections')!.appendChild(this.bloomWidget.element);
         }
-        if (preview && this.valuePreview) {
+        if (preview && this.capabilities) {
             const leaf = findSchemaLeaf(dump.metadata.schema_root, preview.column);
             // Native GEOMETRY/GEOGRAPHY logical types, or a GeoParquet WKB column
             // (plain BYTE_ARRAY described in the `geo` metadata, e.g. Overture).
@@ -242,7 +235,7 @@ export class InfoPanelManager {
                 .querySelector('.info-sections')!
                 .appendChild(this.buildValuePreviewSection(preview, isWkb));
         }
-        if (node.kind === 'dictionary_page' && this.dictionaryPreview) {
+        if (node.kind === 'dictionary_page' && this.capabilities) {
             const leaf = findSchemaLeaf(dump.metadata.schema_root, node.path);
             const isWkb = isWkbColumn(leaf, geoparquetColumns(dump)[node.path]);
             this.infoPanel
@@ -284,7 +277,7 @@ export class InfoPanelManager {
         // can't fail. Pager nav leaves the current table in place until the new
         // window swaps in (no blanking flash); only the initial click spins.
         const load = (offset: number): void => {
-            this.valuePreview!(
+            this.capabilities!.valuePreview(
                 target.rowGroup,
                 target.column,
                 target.pageIndex,
@@ -368,7 +361,7 @@ export class InfoPanelManager {
         // `offset` is [offset, offset+PREVIEW_PAGE_SIZE). The dictionary is
         // decoded once worker-side, so later pages are local and can't fail.
         const load = (offset: number): void => {
-            this.dictionaryPreview!(rowGroup, column, offset, PREVIEW_PAGE_SIZE).then(
+            this.capabilities!.dictionaryPreview(rowGroup, column, offset, PREVIEW_PAGE_SIZE).then(
                 res => {
                     button.remove();
                     if (res.error !== undefined) {
