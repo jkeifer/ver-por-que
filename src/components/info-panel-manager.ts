@@ -501,21 +501,13 @@ function pageSummary(dump: AnyDump): Section[] {
             ],
         },
     ];
-    // Trusted html: each key/count is escaped, so a crafted encoding/page-type
-    // name can't inject markup. Rendered as its own card, one item per row.
-    const breakdown = (m: Record<string, number>): string =>
-        `<div class="info-grid">${Object.entries(m)
-            .map(
-                ([k, n]) =>
-                    `<div class="info-item"><span class="info-label">${escapeHtml(k)}:</span>` +
-                    `<span class="info-value">${formatNumber(n)} (${pct(n)}%)</span></div>`
-            )
-            .join('')}</div>`;
+    const breakdown = (m: Record<string, number>): Row[] =>
+        Object.entries(m).map(([k, n]) => [k, `${formatNumber(n)} (${pct(n)}%)`]);
     if (Object.keys(pageTypes).length > 0) {
-        sections.push({ title: 'Page Types', html: breakdown(pageTypes) });
+        sections.push({ title: 'Page Types', rows: breakdown(pageTypes) });
     }
     if (Object.keys(encodings).length > 0) {
-        sections.push({ title: 'Encodings', html: breakdown(encodings) });
+        sections.push({ title: 'Encodings', rows: breakdown(encodings) });
     }
     return sections;
 }
