@@ -13,12 +13,6 @@ import type { Resolution } from '../business/query-model';
 import { describe, findSchemaLeaf, type SegmentNode } from '../business/segment-tree';
 import { base64Bytes } from '../business/stat-values';
 import { wkbToGeoJson } from '../business/wkb';
-import type {
-    BloomDensityResult,
-    BloomProbeResult,
-    DictionaryPreviewResult,
-    PreviewResult,
-} from '../js/worker/pyodide-parquet';
 import type { AnyDump } from '../types';
 import {
     copyButton,
@@ -31,6 +25,13 @@ import {
 import { isIncrementalReadError, reportWorkerError } from './info-panel/recovery';
 import type { RecoveryActions } from './info-panel/recovery';
 import { createBloomProbeWidget, type BloomProbeWidget } from './info-panel/bloom-probe-widget';
+import type {
+    BloomBlocks,
+    BloomDensity,
+    BloomProbe,
+    DictionaryPreview,
+    ValuePreview,
+} from './info-panel/capabilities';
 import {
     renderDictionaryWindow,
     renderPreviewFailure,
@@ -38,70 +39,17 @@ import {
 } from './info-panel/preview-view';
 import { PANEL_KINDS, panelSections } from './info-panel/panels';
 
-// Re-exported so existing importers (visualizers, query panel, tests) keep a
-// single entry point for the panel's public surface.
+// Re-exported so existing importers (visualizers, query panel, main, tests)
+// keep a single entry point for the panel's public surface.
 export { escapeHtml, isIncrementalReadError, PANEL_KINDS };
 export type { RecoveryActions };
+export type { BloomBlocks, BloomDensity, BloomProbe, DictionaryPreview, ValuePreview };
 
 const BLOOM_PROBE_UNAVAILABLE_NOTE =
     'Probing needs the filter bytes — load the original .parquet to test values.';
 
 const VALUE_PREVIEW_UNAVAILABLE_NOTE =
     'Decoding values needs the file bytes — load the original .parquet to preview values.';
-
-/**
- * Tests a value against a column chunk's bloom filter. Only raw-parquet loads
- * have one (the worker holds the file); the value crosses as a string.
- */
-export type BloomProbe = (
-    rowGroup: number,
-    column: string,
-    value: string
-) => Promise<BloomProbeResult>;
-
-/**
- * Reads a column chunk's whole bloom filter and reduces it to a density strip.
- * Only raw-parquet loads have one, same lifecycle as BloomProbe.
- */
-export type BloomDensity = (rowGroup: number, column: string) => Promise<BloomDensityResult>;
-
-/**
- * Reads a contiguous run of `count` 256-bit blocks' raw bytes (base64) from a
- * column chunk's bloom filter, so a window of block bit-grids renders on demand
- * at any filter size in one call. Same lifecycle as BloomDensity.
- */
-export type BloomBlocks = (
-    rowGroup: number,
-    column: string,
-    start: number,
-    count: number
-) => Promise<string>;
-
-/**
- * Decodes a window of a data page in the worker's current file, starting at
- * value `offset`; with `skipNulls` the window is up to `limit` non-null values.
- * Only raw-parquet loads have one, same as BloomProbe.
- */
-export type ValuePreview = (
-    rowGroup: number,
-    column: string,
-    pageIndex: number,
-    offset: number,
-    limit: number,
-    skipNulls: boolean
-) => Promise<PreviewResult>;
-
-/**
- * Decodes a window of a column chunk's dictionary page (its distinct values) in
- * the worker's current file, from entry `offset`. Only raw-parquet loads have
- * one, same lifecycle as ValuePreview.
- */
-export type DictionaryPreview = (
-    rowGroup: number,
-    column: string,
-    offset: number,
-    limit: number
-) => Promise<DictionaryPreviewResult>;
 
 /** Values shown per preview page; the worker decodes the whole page once. */
 const PREVIEW_PAGE_SIZE = 100;
