@@ -1331,22 +1331,29 @@ code {
     color: var(--text-secondary);
 }
 
-/* Reserved slot for the verdict line (now above the strip): always present
- * (empty when not probed) so probing/clearing never changes the card height.
- * Sized to the verdict's typical two-line wrap at 0.85rem so the reveal doesn't
- * push layout. */
-.bloom-verdict-slot {
-    min-height: 2.4rem;
+/* Fixed-height probe status area (above the block strip): the explanatory hint
+ * until a probe lands, then the lineage + verdict. min-height reserves the
+ * verdict's typical wrap so revealing the result never shifts layout. */
+.bloom-probe-status {
+    min-height: 3.5rem;
+    margin-bottom: var(--spacing-sm);
     font-size: 0.85rem;
     color: var(--text-secondary);
 }
 
-.bloom-verdict-slot strong {
+.bloom-probe-status strong {
     color: var(--text-primary);
 }
 
+/* The idle hint: what a probe does and how, filling the reserved space. */
+.bloom-probe-hint {
+    margin: 0;
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
 .bloom-verdict {
-    margin-bottom: var(--spacing-sm);
+    margin-top: var(--spacing-xs);
 }
 
 /* value → hash → block lineage above the bit grid */
@@ -1462,14 +1469,6 @@ code {
 
 .bloom-scroll::-webkit-scrollbar {
     display: none;
-}
-
-/* Reserved slot for the value→hash→block lineage (now above the strip): always
- * present (empty when not probed) so probing/clearing never changes the card
- * height. Sized to the lineage's one-line height (.bloom-lineage font 0.72rem). */
-.bloom-lineage-slot {
-    min-height: 1.1rem;
-    margin-bottom: var(--spacing-xs);
 }
 
 /* Full-width virtual track (its px width = the whole filter); only the visible

@@ -425,10 +425,10 @@ test('parses a raw .parquet through pyodide', { tag: '@slow' }, async ({ page })
 
     // 'Hello' is in the column (footer stats min); the filter can only say maybe.
     // A "maybe" renders the probed block with all eight checked bits set (no
-    // misses). The verdict + lineage sit up top (.bloom-verdict-slot,
-    // .bloom-lineage); the probed block's grid/marks render in the .bloom-scroll
-    // strip.
-    const result = page.locator('.bloom-verdict-slot');
+    // misses). The verdict + lineage sit up top (.bloom-verdict, .bloom-lineage,
+    // replacing the idle hint); the probed block's grid/marks render in the
+    // .bloom-scroll strip.
+    const result = page.locator('.bloom-verdict');
     const strip = page.locator('.bloom-scroll');
     await page.locator('.bloom-probe-value').fill('Hello');
     await page.locator('.bloom-probe-btn').click();
@@ -517,12 +517,18 @@ test(
         await expect.poll(async () => scroll.evaluate(el => el.scrollLeft)).toBeGreaterThan(0);
         await expect.poll(async () => Number(await box.getAttribute('x'))).toBeGreaterThan(0);
 
-        // Probe a value: verdict + hit/miss marks on the probed block's grid,
-        // the probed overview cell marked, its row label flagged, and Clear enabled.
-        const result = page.locator('.bloom-verdict-slot');
+        // Idle state shows the explanatory hint, not a verdict.
+        await expect(panel.locator('.bloom-probe-hint')).toBeVisible();
+        await expect(panel.locator('.bloom-verdict')).toHaveCount(0);
+
+        // Probe a value: the hint is replaced by the verdict + lineage, hit/miss
+        // marks land on the probed block's grid, the probed overview cell is
+        // marked, its row label flagged, and Clear enabled.
+        const result = panel.locator('.bloom-verdict');
         await page.locator('.bloom-probe-value').fill('20.5');
         await page.locator('.bloom-probe-btn').click();
         await expect(result).toContainText('present');
+        await expect(panel.locator('.bloom-probe-hint')).toHaveCount(0);
         await expect(panel.locator('.bloom-lineage')).toContainText('bits set');
         await expect(panel.locator('.bloom-strip-cell.probed')).toHaveCount(1);
         await expect(panel.locator('.bloom-block-label.probed')).toContainText('probed');
@@ -530,11 +536,12 @@ test(
         const marked = await panel.locator('.bloom-bit-hit, .bloom-bit-miss').count();
         expect(marked).toBe(8);
 
-        // Clear: the probe overlay (marks + verdict) is gone and Clear disabled.
+        // Clear: the verdict is gone (hint restored), Clear disabled.
         await page.locator('.bloom-probe-clear').click();
         await expect(page.locator('.bloom-probe-clear')).toBeDisabled();
         await expect(panel.locator('.bloom-strip-cell.probed')).toHaveCount(0);
-        await expect(result).not.toContainText('present');
+        await expect(result).toHaveCount(0);
+        await expect(panel.locator('.bloom-probe-hint')).toBeVisible();
     }
 );
 
