@@ -1349,11 +1349,11 @@ code {
     padding: 0 2px;
 }
 
-/* The probed 256-bit block: 8 words × 32 bits. Scales down on narrow cards. */
+/* One 256-bit block: 8 words × 32 bits, at its intrinsic fixed size — flex
+ * must not stretch or shrink it (see .bloom-block-cell), so cell size is
+ * constant across the window. */
 .bloom-block {
     display: block;
-    max-width: 100%;
-    height: auto;
 }
 
 .bloom-block rect {
@@ -1426,9 +1426,62 @@ code {
     outline-offset: -2px;
 }
 
-/* The selected block's bit-grid, below the strip. */
+/* Window-range bracket: the strip cells whose block is in the current viewport
+ * window, so the map shows where the row of grids below sits. A subtle tint;
+ * the selected/probed outlines still read on top. */
+.bloom-strip-cell.in-window {
+    stroke: var(--outline-on-light);
+    stroke-width: 1;
+    stroke-opacity: 0.6;
+}
+
+/* The viewport: a single non-wrapping row of full-res block grids below the
+ * strip. */
 .bloom-block-wrap {
     margin-bottom: var(--spacing-sm);
+}
+
+.bloom-block-row {
+    display: flex;
+    flex-wrap: nowrap;
+    align-items: flex-start;
+    gap: var(--spacing-md);
+    overflow: hidden;
+}
+
+/* N > 1: distribute the leftover width as gaps across the card. */
+.bloom-block-row-justified {
+    justify-content: space-between;
+}
+
+/* Each grid keeps its intrinsic size — flex never stretches or shrinks it, so
+ * the cell size stays fixed regardless of how many fit. */
+.bloom-block-cell {
+    flex: 0 0 auto;
+}
+
+.bloom-block-cell.selected {
+    outline: 3px solid var(--outline-on-light);
+    outline-offset: 2px;
+    border-radius: var(--border-radius);
+}
+
+.bloom-block-label {
+    font-family: var(--font-mono);
+    font-size: 0.68rem;
+    color: var(--text-muted);
+    margin-bottom: 2px;
+    white-space: nowrap;
+}
+
+/* Same footprint as a block grid (383 × 95 px) while its bytes are in flight,
+ * so the row doesn't reflow when they arrive. */
+.bloom-block-placeholder {
+    width: 383px;
+    height: 95px;
+    background: var(--border-light);
+    border-radius: var(--border-radius);
+    opacity: 0.4;
 }
 
 .bloom-strip-readout {
