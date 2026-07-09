@@ -67,6 +67,13 @@
     --index-region-medium: #f4d03f;
     --index-region-dark: #b7950b;
 
+    /* Index groups (Column Index / Offset Index / Bloom Filters) — a bronze ramp
+       between the gold index region above and the green page blocks below, so
+       the middle level reads as its own thing, not more page green. */
+    --index-group-light: #e8c39e;
+    --index-group-medium: #cd853f;
+    --index-group-dark: #a9691f;
+
     /* Generic */
     --generic-segment-color: #85929e;
 
@@ -1616,4 +1623,44 @@ code {
 .value-preview-null {
     color: var(--text-muted);
     font-style: italic;
+}
+
+/* Per-page index tables (column-index stats, offset-index locations). Same look
+ * as the value-preview table but auto layout — its columns (min/max vs. numeric
+ * gutters) don't match the preview's fixed # / value / def / rep widths. */
+.index-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 0.8rem;
+}
+
+.index-table th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    text-align: left;
+    font-weight: 500;
+    color: var(--text-secondary);
+    background: var(--bg-tertiary);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-bottom: 1px solid var(--border-medium);
+}
+
+.index-table td {
+    padding: var(--spacing-xs) var(--spacing-sm);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.index-table tbody tr:nth-child(even) {
+    background: var(--bg-tertiary);
+}
+
+/* Muted numeric gutter cells (page #, null count, first row, offset, size). */
+.index-table .idx-num {
+    width: 7em;
+    color: var(--text-muted);
+    text-align: right;
 }

@@ -78,10 +78,10 @@ export class VisualizationConfig {
         dictionary_page: ['--dictionary-page-color'],
         data_page: ['--data-page-light', '--data-page-medium', '--data-page-dark'],
         index_page: ['--index-page-light', '--index-page-medium', '--index-page-dark'],
-        // The yellow index_region container disambiguates these green leaves
-        // from the green data pages living under DATA.
+        // Yellow region → bronze groups → green leaf blocks: each nesting level
+        // reads distinctly, and the green leaves stay clearly "pages".
         index_region: ['--index-region-light', '--index-region-medium', '--index-region-dark'],
-        index_group: ['--data-page-light', '--data-page-medium', '--data-page-dark'],
+        index_group: ['--index-group-light', '--index-group-medium', '--index-group-dark'],
         column_index: ['--data-page-light', '--data-page-medium', '--data-page-dark'],
         offset_index: ['--data-page-light', '--data-page-medium', '--data-page-dark'],
         bloom_filter: ['--data-page-light', '--data-page-medium', '--data-page-dark'],
