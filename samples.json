@@ -1,18 +1,8 @@
 [
     {
-        "title": "alltypes_plain",
-        "description": "One column of each primitive Parquet type",
-        "meta": "11 columns · 8 rows · 1 row group · 2 KB",
-        "url": "https://raw.githubusercontent.com/apache/parquet-testing/master/data/alltypes_plain.parquet",
-        "source": {
-            "name": "Apache Parquet Testing ↗",
-            "url": "https://github.com/apache/parquet-testing/blob/master/data/alltypes_plain.parquet"
-        }
-    },
-    {
         "title": "Weather station readings",
         "description": "A day of air-quality & weather sensor readings",
-        "meta": "10 columns · 13 row groups · ZSTD · 147 KB",
+        "meta": "10 columns · 13 row groups · bloom filters · 147 KB",
         "url": "https://data.source.coop/youssef-harby/weather-station-realtime-parquet/1m_avg_daily/station=01/year=2025/month=03/2025_03_20.parquet",
         "source": {
             "name": "youssef-harby · Source Cooperative ↗",
@@ -32,7 +22,7 @@
     {
         "title": "Overture buildings",
         "description": "Global building footprints with height & source attributes",
-        "meta": "42 columns · 4,877,688 rows · 128 row groups · 519 MB · read in place",
+        "meta": "42 columns · 4,877,688 rows · 128 row groups · 519 MB",
         "url": "https://raw.githubusercontent.com/jkeifer/ver-por-que/samples-data/overture-buildings.dump.json",
         "source": {
             "name": "Overture Maps Foundation ↗",
@@ -42,7 +32,7 @@
     {
         "title": "Overture places",
         "description": "Points of interest: names, categories, brands, addresses",
-        "meta": "52 columns · 4,717,270 rows · 256 row groups · 657 MB · read in place",
+        "meta": "52 columns · 4,717,270 rows · 256 row groups · 657 MB",
         "url": "https://raw.githubusercontent.com/jkeifer/ver-por-que/samples-data/overture-places.dump.json",
         "source": {
             "name": "Overture Maps Foundation ↗",
@@ -52,7 +42,7 @@
     {
         "title": "Overture transportation",
         "description": "Road & path segments from the global transportation graph",
-        "meta": "94 columns · 2,753,445 rows · 128 row groups · 478 MB · read in place",
+        "meta": "94 columns · 2,753,445 rows · 128 row groups · 478 MB",
         "url": "https://raw.githubusercontent.com/jkeifer/ver-por-que/samples-data/overture-transportation.dump.json",
         "source": {
             "name": "Overture Maps Foundation ↗",
@@ -62,11 +52,31 @@
     {
         "title": "Overture divisions",
         "description": "Administrative divisions: countries, regions, localities",
-        "meta": "47 columns · 4,632,791 rows · 256 row groups · 573 MB · read in place",
+        "meta": "47 columns · 4,632,791 rows · 256 row groups · 573 MB",
         "url": "https://raw.githubusercontent.com/jkeifer/ver-por-que/samples-data/overture-divisions.dump.json",
         "source": {
             "name": "Overture Maps Foundation ↗",
             "url": "https://overturemaps.org"
+        }
+    },
+    {
+        "title": "alltypes_plain",
+        "description": "One column of each primitive Parquet type",
+        "meta": "11 columns · 8 rows · 1 row group · 2 KB",
+        "url": "https://raw.githubusercontent.com/apache/parquet-testing/master/data/alltypes_plain.parquet",
+        "source": {
+            "name": "Apache Parquet Testing ↗",
+            "url": "https://github.com/apache/parquet-testing/blob/master/data/alltypes_plain.parquet"
+        }
+    },
+    {
+        "title": "data_index_bloom_encoding_stats",
+        "description": "One column of each primitive Parquet type",
+        "meta": "1 columns · 14 rows · column & offset index · 2 KB",
+        "url": "https://raw.githubusercontent.com/apache/parquet-testing/master/data/data_index_bloom_encoding_stats.parquet",
+        "source": {
+            "name": "Apache Parquet Testing ↗",
+            "url": "https://github.com/apache/parquet-testing/blob/master/data/data_index_bloom_encoding_stats.parquet"
         }
     }
 ]
