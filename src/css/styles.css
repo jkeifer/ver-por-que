@@ -205,6 +205,10 @@ body {
     color: var(--text-primary);
     background: var(--bg-secondary);
     min-height: 100vh;
+    /* Smallest-phone floor: the responsive layout adapts down to here, and only
+       below the smallest common device does the page scroll horizontally rather
+       than break (the matrix and byte layout already scroll on their own). */
+    min-width: 320px;
 }
 
 /* Typography */
