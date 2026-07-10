@@ -236,6 +236,17 @@ async def _set_current(pf, reader):
             pass  # a dead old reader must not fail the new parse
     _current = (pf, reader)
 
+def _http_file(url):
+    # Cap in-flight range requests below hctef's default 8: data.source.coop
+    # 500s concurrent range GETs on one HTTP/2 connection, and Safari still
+    # trips that at 8. The 500s arrive CORS-less, so the browser masks them as
+    # generic fetch failures -- which pyodide-on-WebKit crashes converting
+    # (fut.set_exception TypeError), hanging the read past hctef's own retry.
+    # Prevention is the only defense, so stay well under the threshold; the
+    # parse reads at most one range per column chunk, so a lower cap costs
+    # little wall time.
+    return AsyncHttpFile(url, max_concurrency=4)
+
 def _wrap_progress(progress):
     # progress is a pyodide proxy of the JS callback; coerce the StrEnum phase
     # and ints before crossing back into JS.
@@ -253,7 +264,7 @@ async def _dump_url(url, progress):
     # range requests through a block cache, so only the byte ranges the
     # parser touches are downloaded. Opened without a context manager: the
     # reader outlives the parse in the current-file slot.
-    f = await AsyncHttpFile(url).open()
+    f = await _http_file(url).open()
     try:
         pf = await ParquetFile.from_reader(f, url, progress=_wrap_progress(progress))
     except BaseException:
@@ -270,7 +281,7 @@ async def _boot_from_dump(dump_json, url):
     # probes and value previews then range-read only the spans they need -- no
     # footer parse, no whole-file download. Nothing the dump lacks is required.
     pf = ParquetFile.from_json(dump_json)
-    f = await AsyncHttpFile(url).open()
+    f = await _http_file(url).open()
     await _set_current(pf, f)
 
 def _is_binary_leaf(column_chunk):
