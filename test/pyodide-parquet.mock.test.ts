@@ -190,10 +190,23 @@ describe('createParquetParser (mocked pyodide)', () => {
         expect(statuses).toContain('Parsing parquet (HTTP range requests)...');
     });
 
-    it('falls back to a whole-file download on HctefNetworkError', async () => {
+    it('does not fall back on a transient HctefNetworkError', async () => {
+        // hctef retries transient failures itself; only "this server can't
+        // serve ranges" (RangeRequestsUnsupportedError) warrants downloading
+        // the whole file. A plain network error propagates.
+        const py = fakePyodide();
+        py._dumpUrl.mockRejectedValue(new Error('hctef.exceptions.HctefNetworkError: HTTP 503'));
+        const parse = await boot(py, []);
+        await expect(parse({ url: 'https://example.com/f.parquet' }, 'f.parquet')).rejects.toThrow(
+            'HctefNetworkError'
+        );
+        expect(py._dump).not.toHaveBeenCalled();
+    });
+
+    it('falls back to a whole-file download on RangeRequestsUnsupportedError', async () => {
         const py = fakePyodide();
         py._dumpUrl.mockRejectedValue(
-            new Error('hctef.exceptions.HctefNetworkError: no Content-Range for you')
+            new Error('hctef.exceptions.RangeRequestsUnsupportedError: no Content-Range for you')
         );
         const body = new Uint8Array([0x50, 0x41, 0x52, 0x31]);
         const fetchMock = vi.fn().mockResolvedValue({

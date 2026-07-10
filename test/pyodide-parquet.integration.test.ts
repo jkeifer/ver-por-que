@@ -381,6 +381,32 @@ describe.skipIf(!hasWheel)('createParquetParser (real pyodide)', () => {
         expect(page.values.map(v => v.value)).toEqual([6, 7]);
     });
 
+    it('previews a dictionary page of distinct values, with windowing', async () => {
+        expectValidDump(await parse(data, 'alltypes_plain.snappy.parquet'));
+
+        // Column 'id' is dictionary-encoded with two distinct values.
+        const dict = await parse.previewDictionary(0, 'id', 0, 100);
+        if (dict.error !== undefined) {
+            throw new Error(`unexpected codec failure: ${dict.codec}`);
+        }
+        expect(dict.total).toBe(2);
+        expect(dict.values).toEqual([
+            { value: 6, index: 0 },
+            { value: 7, index: 1 },
+        ]);
+        expect(dict.next).toBe(2);
+
+        // A bounded window returns its slice (from the worker's decoded cache)
+        // but still reports the dictionary's whole size.
+        const second = await parse.previewDictionary(0, 'id', 1, 1);
+        if (second.error !== undefined) {
+            throw new Error(`unexpected codec failure: ${second.codec}`);
+        }
+        expect(second.total).toBe(2);
+        expect(second.values).toEqual([{ value: 7, index: 1 }]);
+        expect(second.next).toBe(2);
+    });
+
     it('falls back to a whole-file download when ranges are unsupported', async () => {
         const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
         const server = await serveFixture(data, false);

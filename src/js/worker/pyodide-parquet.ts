@@ -202,7 +202,7 @@ import io
 import json
 import math
 from por_que import AsyncHttpFile, ParquetFile
-from por_que.exceptions import ParquetDataError
+from por_que.exceptions import CodecUnavailableError
 from por_que.statistics import BloomFilter
 from por_que.util.async_adapter import ensure_async_reader
 
@@ -290,9 +290,9 @@ def _coerce_probe_value(value, chunk):
     # Probe values always cross the JS boundary as strings; convert to the
     # python type BloomFilter hashing expects for the column. String BYTE_ARRAY /
     # FIXED_LEN_BYTE_ARRAY take the string as-is (hashed as UTF-8); binary ones
-    # carry base64 of the raw bytes, decoded back to bytes here so _plain_encode
+    # carry base64 of the raw bytes, decoded back to bytes here so explain
     # hashes the raw bytes. Other types (BOOLEAN, INT96) are rejected by
-    # might_contain itself.
+    # explain itself.
     match chunk.type.name:
         case 'INT32' | 'INT64':
             return int(value)
@@ -309,38 +309,26 @@ async def _probe_bloom(row_group, column, value):
     # Return the full split-block derivation, not just the yes/no: the value's
     # hash, the single block it selects, that block's 32 bytes, and the eight
     # bits checked. mightContain is true iff all eight are set; any unset bit is
-    # exact proof of absence. Mirrors BloomFilter._block_check step for step.
-    from por_que.util.xxhash import xxh64
-    from por_que.statistics import SBBF_SALT
+    # exact proof of absence. BloomFilter.explain surfaces every intermediate.
     if _current is None:
         raise RuntimeError('no parquet file is loaded in this worker')
     pf, reader = _current
     chunk = pf.metadata.row_groups[row_group].column_chunks[column]
     # The bytes path keeps a plain (sync) BytesIO in the slot; adapt it.
     bloom = await BloomFilter.from_reader(ensure_async_reader(reader), chunk)
-    # _plain_encode raises for unqueryable physical types (INT96/BOOLEAN), same
-    # as might_contain would -- surfaces as a probe failure, not a bad result.
-    hash_ = xxh64(bloom._plain_encode(_coerce_probe_value(value, chunk)))
-    num_blocks = bloom.num_blocks
-    block_index = ((hash_ >> 32) * num_blocks) >> 32
-    base = block_index * 32  # 256-bit block = 8 words * 4 bytes
-    block = bytes(bloom.bitset[base:base + 32])
-    low = hash_ & 0xffffffff
-    bits = []
-    might = True
-    for i in range(8):
-        word = int.from_bytes(block[i * 4:i * 4 + 4], 'little')
-        bit = ((low * SBBF_SALT[i]) & 0xffffffff) >> 27  # 0..31
-        is_set = bool((word >> bit) & 1)
-        might = might and is_set
-        bits.append({'word': i, 'bit': bit, 'set': is_set})
+    # explain raises for unqueryable physical types (INT96/BOOLEAN) -- surfaces
+    # as a probe failure, not a bad result.
+    probe = bloom.explain(_coerce_probe_value(value, chunk))
     return json.dumps({
-        'mightContain': might,
-        'hash': format(hash_, '016x'),
-        'blockIndex': block_index,
-        'numBlocks': num_blocks,
-        'block': base64.b64encode(block).decode('ascii'),
-        'bits': bits,
+        'mightContain': probe.might_contain,
+        'hash': format(probe.hash, '016x'),
+        'blockIndex': probe.block_index,
+        'numBlocks': probe.num_blocks,
+        'block': base64.b64encode(probe.block_bytes).decode('ascii'),
+        'bits': [
+            {'word': b.word_index, 'bit': b.bit_index, 'set': b.is_set}
+            for b in probe.bits
+        ],
     })
 
 async def _bloom_density(row_group, column):
@@ -470,25 +458,25 @@ async def _preview(row_group, column, page_index, offset, limit, skip_nulls):
         _, _, _, values, nulls = _preview_cache
     else:
         reader, chunk = _find_data_chunk(row_group, column)
-        se = chunk.metadata.schema_element
         # Binary (non-string byte) columns hash base64 of the raw bytes, so the
         # UI copies the base64 physical for the probe. Computed once per page.
         is_binary = _is_binary_leaf(chunk.metadata)
         values = []
         nulls = 0
         try:
-            # Decode physical values once (logical conversion skipped), then apply
-            # the same physical_to_logical_type the data-page parser uses -- so a
-            # single pass yields both the display value and the raw physical value
-            # the bloom probe hashes. They differ only for numeric-backed logical
-            # types (temporal, decimal, ...), where 'physical' is carried so the
-            # user can copy the probe-ready value; byte-array strings decode to
-            # themselves -- exactly what you'd type -- so they get no button.
-            for raw, def_level, rep_level in await chunk.parse_data_page(
-                page_index, reader, excluded_logical_columns=[se.full_path]
-            ):
-                logical = se.physical_to_logical_type(raw) if raw is not None else None
-                entry = {'value': _json_safe(logical), 'def': def_level, 'rep': rep_level}
+            # Each PageValue carries both the display value (.value: logical
+            # when conversion ran, else physical) and the raw physical value
+            # the bloom probe hashes -- one decode yields both. They differ
+            # only for numeric-backed logical types (temporal, decimal, ...),
+            # where 'physical' is carried so the user can copy the probe-ready
+            # value; byte-array strings decode to themselves -- exactly what
+            # you'd type -- so they get no button.
+            for pv in await chunk.parse_data_page(page_index, reader):
+                entry = {
+                    'value': _json_safe(pv.value),
+                    'def': pv.definition_level,
+                    'rep': pv.repetition_level,
+                }
                 # Attach the probe-ready physical when it differs from the display:
                 # numeric-backed logical types (temporal/decimal) carry the int;
                 # binary byte columns carry base64 of the raw bytes (UUID shows hex
@@ -496,6 +484,7 @@ async def _preview(row_group, column, page_index, offset, limit, skip_nulls):
                 # so _json_safe(raw) == value and nothing is attached). String
                 # columns are excluded by is_binary, so their bytes never leak as a
                 # misleading base64 overlay.
+                raw = pv.physical
                 physical = None
                 if isinstance(raw, (int, float)) and not isinstance(raw, bool):
                     physical = _json_safe(raw)
@@ -504,15 +493,12 @@ async def _preview(row_group, column, page_index, offset, limit, skip_nulls):
                 if physical is not None and physical != entry['value']:
                     entry['physical'] = physical
                 values.append(entry)
-                if logical is None:
+                if pv.value is None:
                     nulls += 1
-        except ParquetDataError as error:
-            # compressors.py raises '<Codec> compression requires <pkg> package'
-            # when the codec has no importable module and no pure-python fallback
-            # -- lzo, so this is expected in-browser, not an error state.
-            if 'requires' in str(error) and 'package' in str(error):
-                return json.dumps({'error': 'codec_unavailable', 'codec': chunk.codec.name})
-            raise
+        except CodecUnavailableError as error:
+            # lzo has no importable module and no pure-python fallback, so this
+            # is expected in-browser, not an error state.
+            return json.dumps({'error': 'codec_unavailable', 'codec': error.codec})
         _preview_cache = (row_group, column, page_index, values, nulls)
     total = len(values)
     window = []
@@ -546,20 +532,15 @@ async def _preview_dictionary(row_group, column, offset, limit):
     else:
         reader, chunk = _find_data_chunk(row_group, column)
         try:
-            # _parse_dictionary (unlike parse_data_page) doesn't adapt the
-            # reader itself; the bytes path keeps a sync BytesIO in the slot.
-            decoded = await chunk._parse_dictionary(ensure_async_reader(reader))
-        except ParquetDataError as error:
+            # parse_dictionary adapts sync readers itself and applies logical
+            # types by default, so a UTF8 column reads as text (not base64)
+            # and matches the value preview.
+            decoded = await chunk.parse_dictionary(reader)
+        except CodecUnavailableError as error:
             # Same codec-unavailable (lzo) contract as _preview: a typed result,
             # not a raise.
-            if 'requires' in str(error) and 'package' in str(error):
-                return json.dumps({'error': 'codec_unavailable', 'codec': chunk.codec.name})
-            raise
-        # _parse_dictionary returns raw physical values (BYTE_ARRAY -> bytes);
-        # apply the same logical rendering the data-page parser does, so a UTF8
-        # column reads as text (not base64) and matches the value preview.
-        se = chunk.metadata.schema_element
-        values = [_json_safe(se.physical_to_logical_type(v) if v is not None else v) for v in decoded]
+            return json.dumps({'error': 'codec_unavailable', 'codec': error.codec})
+        values = [_json_safe(v) for v in decoded]
         _dict_cache = (row_group, column, values)
     total = len(values)
     next_index = min(offset + limit, total)
@@ -568,14 +549,17 @@ async def _preview_dictionary(row_group, column, offset, limit):
 `;
 
 /**
- * True when a python error bubbled up from hctef's network layer -- most
- * commonly the range probe failing because the server doesn't support range
- * requests, or CORS hides Content-Range (missing Access-Control-Expose-Headers).
- * Pyodide surfaces python exceptions as JS Errors whose message embeds the
- * python traceback, so match on the exception class name.
+ * True when hctef determined the server can't serve usable range requests --
+ * either it answered 200 to a bounded Range request, or CORS hides
+ * Content-Range (missing Access-Control-Expose-Headers). Pyodide surfaces
+ * python exceptions as JS Errors whose message embeds the python traceback,
+ * so match on the exception class name -- hctef documents its exception names
+ * as stable public API. Transient network failures (DNS, timeouts, 5xx) are
+ * deliberately NOT matched: hctef retries those itself, and a whole-file
+ * download wouldn't fare better.
  */
-function isHctefNetworkError(error: unknown): boolean {
-    return error instanceof Error && error.message.includes('HctefNetworkError');
+function isRangeUnsupportedError(error: unknown): boolean {
+    return error instanceof Error && error.message.includes('RangeRequestsUnsupportedError');
 }
 
 /**
@@ -787,7 +771,7 @@ export async function createParquetParser(deps: ParquetParserDeps): Promise<Parq
         try {
             return await raceUnhandledRejection(dumpUrl(url, parseProgress()));
         } catch (error) {
-            if (!isHctefNetworkError(error) && !(error instanceof OutOfBandParseError)) {
+            if (!isRangeUnsupportedError(error) && !(error instanceof OutOfBandParseError)) {
                 throw error;
             }
             // The user explicitly wants this fallback: range requests need

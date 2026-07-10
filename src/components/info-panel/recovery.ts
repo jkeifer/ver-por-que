@@ -18,14 +18,16 @@ export interface RecoveryActions {
     downloadFullFile: (() => void) | null;
 }
 
-/** True when a byte read failed because the server won't serve range requests. */
+/**
+ * True when a byte read failed because the server won't serve range requests.
+ * Pyodide embeds the python traceback in the JS Error message; hctef documents
+ * its exception class names as stable public API, so the name alone is the
+ * contract -- message wording is free to change. Transient network failures
+ * raise plain HctefNetworkError and deliberately don't match.
+ */
 export function isIncrementalReadError(error: unknown): boolean {
     const message = (error as Error | undefined)?.message ?? '';
-    return (
-        message.includes('HctefNetworkError') ||
-        message.includes('does not support HTTP range') ||
-        message.includes('range request')
-    );
+    return message.includes('RangeRequestsUnsupportedError');
 }
 
 /** Render `message` in `el`, plus a wired recovery button when `action` exists. */

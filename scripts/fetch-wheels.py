@@ -39,14 +39,14 @@ VENDOR = ROOT / 'static' / 'vendor'
 # keep filenames intact.
 WHEELS = {
     'wheel': {
-        'filename': 'por_que-0.4.1-py3-none-any.whl',
-        'url': 'https://files.pythonhosted.org/packages/9c/97/f7e872f7ac8f7c3efea2016651d4fd2ed62bb49a56780632a96a6235cf09/por_que-0.4.1-py3-none-any.whl',
-        'sha256': '542c9325201695ba4be5cccc8d3115f9ce961f2216e5566017804ee587adf6ef',
+        'filename': 'por_que-0.5.0-py3-none-any.whl',
+        'url': 'https://files.pythonhosted.org/packages/d7/67/34289412564dec17c4ccb0bf9ab84d9bb76e93312f20a9ee1c88de0fab0f/por_que-0.5.0-py3-none-any.whl',
+        'sha256': '861adf2b2fb0c82aa2b925b25f636ead98ad81a5435e46ebedfc0d56794b094e',
     },
     'hctef': {
-        'filename': 'hctef-0.3.1-py3-none-any.whl',
-        'url': 'https://files.pythonhosted.org/packages/a3/b9/2bd4c4a29b22c4e8fbfd0e23a975d3e319ee19cb63c10ebd01cbb5e66031/hctef-0.3.1-py3-none-any.whl',
-        'sha256': '08ded822bc850b7be5f3e3fa8ed380818c9a3f4ad3c70ee9f93b9057c01290ac',
+        'filename': 'hctef-0.4.0-py3-none-any.whl',
+        'url': 'https://files.pythonhosted.org/packages/47/0b/b36b12259634a3cbf70a3aa0a8a8d70f3403f8b654825650efc57a9608ab/hctef-0.4.0-py3-none-any.whl',
+        'sha256': 'ac5f6a0cb0b3d4a887108e5916cf2a9340f8927ec5db37d9f840e910d07c5a48',
     },
 }
 
