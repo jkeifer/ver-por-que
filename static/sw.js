@@ -41,12 +41,37 @@ self.addEventListener('fetch', event => {
     if (request.method !== 'GET' || request.headers.has('range')) {
         return;
     }
-    if (!CACHEABLE_ORIGINS.includes(new URL(request.url).origin)) {
+    const url = new URL(request.url);
+    if (!CACHEABLE_ORIGINS.includes(url.origin)) {
         return;
     }
+    // The app shell (navigations) and the wheel manifest are the unhashed URLs
+    // whose content changes across deploys: they MUST be network-first, with
+    // the cache only as the offline fallback. Served cache-first, a client
+    // that warmed the cache once would be pinned to that build forever -- the
+    // cached shell re-registers its own old sw.js?v=<commit>, which keeps
+    // serving the cached shell. Everything else (hashed vite assets, versioned
+    // wheels, pyodide CDN files) is immutable per URL, so cache-first is safe.
+    const networkFirst =
+        request.mode === 'navigate' || url.pathname.endsWith('/vendor/manifest.json');
     event.respondWith(
         (async () => {
             const cache = await self.caches.open(CACHE);
+            if (networkFirst) {
+                try {
+                    const response = await fetch(request);
+                    if (response.ok) {
+                        await cache.put(request, response.clone());
+                    }
+                    return response;
+                } catch (error) {
+                    const cached = await cache.match(request);
+                    if (cached) {
+                        return cached;
+                    }
+                    throw error;
+                }
+            }
             const cached = await cache.match(request);
             if (cached) {
                 return cached;
